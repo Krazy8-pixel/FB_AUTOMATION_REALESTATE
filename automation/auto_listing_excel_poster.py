@@ -1081,7 +1081,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                     print(f"[AutoListing][FIELD FAILED] Vehicle type: combobox JavaScript click failed: {js_exc}", flush=True)
                     raise
             try:
-                WebDriverWait(driver, 5).until(lambda d: bool(_visible_vehicle_type_options()))
+                WebDriverWait(driver, 15).until(lambda d: bool(_visible_vehicle_type_options()))
             except Exception as exc:
                 print(f"[AutoListing][FIELD FAILED] Vehicle type: dropdown opened but no visible option HTML was found: {exc}", flush=True)
                 raise
