@@ -252,13 +252,14 @@ def _extract_visible_listing_candidates(driver, include_image_lookup=True):
                 .map(img => img.currentSrc || img.src || '')
                 .filter(Boolean);
               const rowText = row.innerText || '';
-              results.push({
-                href,
-                title: titleControl ? (titleControl.getAttribute('aria-label') || '') : '',
-                text: rowText,
-                images,
-                element: titleControl || row
-              });
+               results.push({
+                 href,
+                 title: titleControl ? (titleControl.getAttribute('aria-label') || '') : '',
+                 text: rowText,
+                 images,
+                 element: titleControl || row,
+                 source: 'full_row_dom'
+               });
             }
             return results;
             """
@@ -837,7 +838,37 @@ def delete_selected_listings_from_facebook(account, selected_listings, stop_even
             idle_rounds = 0
             previous_height = -1
             while not stop_event.is_set() and idle_rounds < 4 and not found:
-                for candidate in _extract_visible_listing_candidates(driver):
+                candidates = _extract_visible_listing_candidates(driver)
+                match_occurrence = max(1, int(stored.get("_match_occurrence") or 1))
+                if match_occurrence > 1:
+                    # Reposting creates an identical new card above the old
+                    # source. Count only the one-per-checkbox DOM rows so the
+                    # same card discovered by fallback selectors is not
+                    # mistakenly treated as the second listing.
+                    row_matches = []
+                    for candidate in candidates:
+                        if candidate.get("source") != "full_row_dom":
+                            continue
+                        visible = _listing_from_candidate(candidate)
+                        if visible and _same_listing(stored, visible):
+                            row_matches.append(candidate)
+                    # Never accumulate occurrences across scans: Facebook may
+                    # re-render the first/new row with a different Selenium
+                    # element ID, which could otherwise count it twice. Only
+                    # delete when a real second row exists in this same scan.
+                    candidates = (
+                        [row_matches[match_occurrence - 1]]
+                        if len(row_matches) >= match_occurrence
+                        else []
+                    )
+                    if not candidates:
+                        print(
+                            f"[DeleteListings] waiting for matching listing occurrence "
+                            f"{match_occurrence}; visible_matches={len(row_matches)}; "
+                            "first/new listing will not be deleted",
+                            flush=True,
+                        )
+                for candidate in candidates:
                     visible = _listing_from_candidate(candidate)
                     if not visible or not _same_listing(stored, visible):
                         continue

@@ -779,26 +779,36 @@ def _run_reposting_read_job(listing, account, job_id=None):
                     _runtime_log(
                         f"[Reposting] Using Delete Listings flow for original source: title='{delete_name}'"
                     )
+                    repost_delete_listing = dict(listing)
+                    repost_delete_listing["_match_occurrence"] = 2
                     delete_result = delete_selected_listings_from_facebook(
                         account,
-                        [dict(listing)],
+                        [repost_delete_listing],
                     )
-                    if int((delete_result or {}).get("deleted") or 0) != 1:
+                    deleted_count = int((delete_result or {}).get("deleted") or 0)
+                    second_match_not_found = int((delete_result or {}).get("not_found") or 0) >= 1
+                    if deleted_count != 1 and not second_match_not_found:
                         raise Exception(
                             "Repost succeeded, but Delete Listings flow could not delete "
                             f"the original source (result={delete_result})"
                         )
                     listing_id = str((listing or {}).get("id") or "") if isinstance(listing, dict) else ""
-                    if listing_id:
+                    if deleted_count == 1 and listing_id:
                         stored = load_listings(account)
                         remaining = [
                             item for item in (stored.get("listings") or [])
                             if str(item.get("id") or "") != listing_id
                         ]
                         save_listings(account, remaining)
-                    _runtime_log(
-                        f"[Reposting] Repost succeeded and source was deleted: title='{delete_name}'"
-                    )
+                    if deleted_count == 1:
+                        _runtime_log(
+                            f"[Reposting] Repost succeeded and second/old source was deleted: title='{delete_name}'"
+                        )
+                    else:
+                        _runtime_log(
+                            f"[Reposting] Repost succeeded; only one matching listing was found, "
+                            f"so nothing was deleted: title='{delete_name}'"
+                        )
 
                 if not all(post_results):
                     raise Exception("Posting failed for one or more repost payloads")
