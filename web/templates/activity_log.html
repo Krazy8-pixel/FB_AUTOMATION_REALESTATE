@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Activity Log{% endblock %}
+
+{% block extra_css %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/activity_log.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="activity-page">
+  <div class="activity-head">
+    <div>
+      <h1>Activity Log</h1>
+      <p>Successful actions and failures are recorded with references and tracebacks.</p>
+    </div>
+    <div class="activity-actions">
+      <form method="post" action="/activity_log_clear">
+        <input type="hidden" name="mode" value="failed">
+        <button type="submit" class="ghost-btn">Clear Failures</button>
+      </form>
+      <form method="post" action="/activity_log_clear">
+        <input type="hidden" name="mode" value="all">
+        <button type="submit" class="danger-btn">Clear All</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="activity-table">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Account</th>
+            <th>Reference</th>
+            <th>Details</th>
+            <th>Traceback</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in log_items %}
+          <tr>
+            <td>{{ item.timestamp }}</td>
+            <td>{{ item.event_type }}</td>
+            <td>
+              <span class="status-pill status-{{ item.status }}">{{ item.status }}</span>
+            </td>
+            <td>{{ item.account }}</td>
+            <td>{{ item.reference }}</td>
+            <td>{{ item.details }}</td>
+            <td>
+              {% if item.traceback %}
+                <details>
+                  <summary>View</summary>
+                  <pre>{{ item.traceback }}</pre>
+                </details>
+              {% else %}
+                <span class="muted">-</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7" class="empty">No activity recorded yet.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

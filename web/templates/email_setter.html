@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Email Setter{% endblock %}
+
+{% block content %}
+<div class="account-page">
+  <div class="account-hero">
+    <div>
+      <h1>Email Setter</h1>
+      <p class="account-subtitle">
+        Set one receiver email for auto-reply number notifications. Updating this value replaces the old email.
+      </p>
+    </div>
+    <div class="account-badge">
+      <span class="badge-label">Current Receiver</span>
+      <span class="badge-value">{{ current_email or "Not set" }}</span>
+    </div>
+  </div>
+
+  <div class="account-grid">
+    <div class="account-card">
+      <div class="card-head">
+        <h2>Set or Update Email</h2>
+        <p>Only one email is stored. Saving a new one overwrites the previous value.</p>
+      </div>
+      <form method="post" action="{{ url_for('web.email_setter') }}" class="account-form">
+        <input type="hidden" name="action" value="set">
+        <label class="field-label" for="receiver-email">Receiver Email</label>
+        <input
+          id="receiver-email"
+          type="email"
+          name="receiver_email"
+          placeholder="name@example.com"
+          value="{{ current_email or '' }}"
+          required
+        >
+        <button type="submit" class="primary-btn">Save Email</button>
+      </form>
+    </div>
+
+    <div class="account-card">
+      <div class="card-head">
+        <h2>Delete Current Email</h2>
+        <p>If no email is set, auto-reply will skip email sending automatically.</p>
+      </div>
+      <form method="post" action="{{ url_for('web.email_setter') }}" class="account-form">
+        <input type="hidden" name="action" value="delete">
+        <button type="submit" class="delete-btn">Delete Email</button>
+      </form>
+      <a href="/" class="btn-back account-back">Back to Dashboard</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard_simple.css') }}">{% endblock %}
+
+{% block content %}
+<main class="simple-dashboard">
+  <header class="simple-dashboard-head">
+    <div><h1>Dashboard</h1><p>Choose a feature to open it.</p></div>
+    <span class="simple-dashboard-account">Active account: <strong>{{ active_account or "No Account" }}</strong></span>
+  </header>
+
+  <div class="simple-dashboard-groups">
+    <section class="simple-dashboard-section">
+      <div class="simple-section-head"><h2>Listings</h2><span>5 features</span></div>
+      <nav class="simple-feature-list" aria-label="Listing features">
+        <a href="{{ url_for('web.auto_listing_page') }}"><span><strong>Create Listings</strong><small>Create listings manually or through Excel.</small></span><b>Open</b></a>
+        <a href="{{ url_for('web.delete_listings_page') }}"><span><strong>Manage Listings</strong><small>Import, review, delete, or schedule existing listings for reposting.</small></span><b>Open</b></a>
+        <a href="{{ url_for('web.reposting_page') }}"><span><strong>Reposting</strong><small>Check listings currently scheduled for reposting.</small></span><b>Open</b></a>
+        <a href="{{ url_for('web.post_schedular') }}"><span><strong>Scheduled Posts</strong><small>Review upcoming listing jobs and posting times.</small></span><b>Open</b></a>
+        <a href="/website_posting4"><span><strong>Website Posting</strong><small>Manage automatic listings collected from supported websites.</small></span><b>Open</b></a>
+      </nav>
+    </section>
+
+    <section class="simple-dashboard-section">
+      <div class="simple-section-head"><h2>Messages</h2><span>2 features</span></div>
+      <nav class="simple-feature-list" aria-label="Message features">
+        <a href="{{ url_for('web.auto_reply') }}"><span><strong>Auto Reply</strong><small>Set the automatic reply for Marketplace buyers.</small></span><b>Open</b></a>
+        <a href="{{ url_for('web.auto_reply_status') }}"><span><strong>Reply Status</strong><small>Check whether Auto Reply is running and review replied conversations.</small></span><b>Open</b></a>
+      </nav>
+    </section>
+
+    <section class="simple-dashboard-section">
+      <div class="simple-section-head"><h2>Accounts and Groups</h2><span>3 features</span></div>
+      <nav class="simple-feature-list" aria-label="Account and group features">
+        <a href="{{ url_for('web.account_page') }}"><span><strong>Accounts</strong><small>Add Facebook or Instagram accounts and check saved sessions.</small></span><b>Open</b></a>
+        <a href="{{ url_for('web.groups_page') }}"><span><strong>Groups</strong><small>Import and organize Facebook groups for the active account.</small></span><b>Open</b></a>
+        <a href="/posting_in_groups"><span><strong>Group Posting</strong><small>Publish a listing to selected Facebook groups.</small></span><b>Open</b></a>
+      </nav>
+    </section>
+
+    <section class="simple-dashboard-section">
+      <div class="simple-section-head"><h2>Settings and History</h2><span>3 features</span></div>
+      <nav class="simple-feature-list" aria-label="Settings and history features">
+        <a href="{{ url_for('web.email_setter') }}"><span><strong>Email Settings</strong><small>Set the receiver email used for notifications.</small></span><b>Open</b></a>
+        <a href="{{ url_for('web.activity_log_page') }}"><span><strong>Activity Log</strong><small>Review completed work, failures, and error details.</small></span><b>Open</b></a>
+        <a href="{{ url_for('web.info_page') }}"><span><strong>Help and Instructions</strong><small>Read the setup guide and feature instructions.</small></span><b>Open</b></a>
+      </nav>
+    </section>
+  </div>
+</main>
+{% endblock %}

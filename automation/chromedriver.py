@@ -1,0 +1,222 @@
+import os
+import sys
+import re
+import subprocess
+from pathlib import Path
+
+from selenium import webdriver
+from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.selenium_manager import SeleniumManager
+
+from automation.runtime_paths import resource_root
+
+
+def resolve_chromedriver_path():
+    env_path = os.getenv("CHROMEDRIVER_PATH", "").strip()
+    if env_path:
+        candidate = Path(env_path)
+        if candidate.exists():
+            return str(candidate)
+
+    checked = []
+
+    bundled_root = resource_root()
+    p = bundled_root / "drivers" / "chromedriver.exe"
+    checked.append(str(p))
+    if p.exists():
+        return str(p)
+
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        p = exe_dir / "drivers" / "chromedriver.exe"
+        checked.append(str(p))
+        if p.exists():
+            return str(p)
+
+    project_root = Path(__file__).resolve().parent.parent
+    p = project_root / "drivers" / "chromedriver.exe"
+    checked.append(str(p))
+    if p.exists():
+        return str(p)
+
+    raise FileNotFoundError(
+        "chromedriver.exe not found. Put it at drivers/chromedriver.exe. Checked: "
+        + " | ".join(checked)
+    )
+
+
+def build_chrome_service():
+    return Service(resolve_chromedriver_path())
+
+
+def _is_truthy_env(name):
+    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _run_version_cmd(cmd, timeout_s=3):
+    try:
+        creationflags = 0
+        if sys.platform.startswith("win"):
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            check=False,
+            timeout=max(1, int(timeout_s or 3)),
+            creationflags=creationflags,
+        )
+        return ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    except Exception:
+        return ""
+
+
+def _parse_first_major_version(text):
+    m = re.search(r"\b(\d+)\.", str(text or ""))
+    return int(m.group(1)) if m else None
+
+
+def chromedriver_major_version(driver_path):
+    text = _run_version_cmd([str(driver_path), "--version"])
+    return _parse_first_major_version(text)
+
+
+def chrome_major_version():
+    """
+    Best-effort Chrome major version detection (Windows).
+    Returns an int or None.
+    """
+    if not sys.platform.startswith("win"):
+        return None
+
+    # Registry (fastest / most reliable)
+    reg_queries = [
+        r"HKCU\Software\Google\Chrome\BLBeacon",
+        r"HKLM\Software\Google\Chrome\BLBeacon",
+        r"HKLM\Software\WOW6432Node\Google\Chrome\BLBeacon",
+    ]
+    for key in reg_queries:
+        text = _run_version_cmd(["reg", "query", key, "/v", "version"])
+        major = _parse_first_major_version(text)
+        if major:
+            return major
+
+    # Fallback: try chrome.exe file version (do not launch Chrome)
+    candidates = [
+        os.path.join(os.getenv("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.getenv("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.getenv("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            ps = (
+                "(Get-Item -LiteralPath "
+                + repr(p)
+                + ").VersionInfo.ProductVersion"
+            )
+            major = _parse_first_major_version(_run_version_cmd(["powershell", "-NoProfile", "-Command", ps]))
+            if major:
+                return major
+
+    return None
+
+
+def _looks_like_driver_mismatch(exc):
+    text = str(exc or "")
+    return (
+        "only supports chrome version" in text.lower()
+        or "session not created" in text.lower()
+        or isinstance(exc, SessionNotCreatedException)
+    )
+
+
+def build_chrome_driver(options):
+    """
+    Create a Chrome WebDriver with a resilient driver selection strategy:
+
+    - If CHROMEDRIVER_PATH is set, use it.
+    - Else try the bundled drivers/chromedriver.exe if it looks compatible.
+    - If start fails due to version mismatch, retry using Selenium Manager
+      with usage stats disabled.
+
+    Env controls:
+    - FB_AUTOMATION_FORCE_BUNDLED_CHROMEDRIVER=1 -> never use Selenium Manager fallback
+    - FB_AUTOMATION_USE_SELENIUM_MANAGER=1 -> try Selenium Manager first
+    """
+    force_bundled = _is_truthy_env("FB_AUTOMATION_FORCE_BUNDLED_CHROMEDRIVER")
+    prefer_manager = _is_truthy_env("FB_AUTOMATION_USE_SELENIUM_MANAGER")
+
+    env_path = os.getenv("CHROMEDRIVER_PATH", "").strip()
+    bundled_path = None
+    try:
+        bundled_path = resolve_chromedriver_path()
+    except Exception:
+        bundled_path = None
+
+    def _try_with_service(path):
+        return webdriver.Chrome(service=Service(path), options=options)
+
+    def _try_with_manager():
+        manager_error = None
+        try:
+            paths = SeleniumManager().binary_paths(["--browser", "chrome", "--avoid-stats"])
+            driver_path = paths.get("driver_path")
+            if driver_path:
+                return webdriver.Chrome(service=Service(driver_path), options=options)
+        except Exception as e:
+            manager_error = e
+
+        try:
+            return webdriver.Chrome(options=options)
+        except Exception as e:
+            if manager_error is not None:
+                raise RuntimeError(
+                    f"Selenium Manager could not resolve ChromeDriver: {manager_error}"
+                ) from e
+            raise
+
+    attempts = []
+
+    if prefer_manager and not force_bundled:
+        attempts.append(("selenium-manager", None))
+
+    if env_path:
+        attempts.append(("env-chromedriver", env_path))
+    elif bundled_path:
+        # If we can detect mismatch, avoid a guaranteed-fail attempt.
+        chrome_major = chrome_major_version()
+        driver_major = chromedriver_major_version(bundled_path)
+        if chrome_major and driver_major and chrome_major != driver_major and not force_bundled:
+            attempts.append(("selenium-manager", None))
+        else:
+            attempts.append(("bundled-chromedriver", bundled_path))
+
+    if not force_bundled and ("selenium-manager", None) not in attempts:
+        attempts.append(("selenium-manager", None))
+
+    last_exc = None
+    for mode, value in attempts:
+        try:
+            if mode == "selenium-manager":
+                return _try_with_manager()
+            return _try_with_service(value)
+        except (SessionNotCreatedException, WebDriverException) as e:
+            last_exc = e
+            if mode != "selenium-manager" and not force_bundled and _looks_like_driver_mismatch(e):
+                try:
+                    return _try_with_manager()
+                except Exception as e2:
+                    last_exc = e2
+            continue
+        except Exception as e:
+            last_exc = e
+            continue
+
+    raise RuntimeError(
+        "Failed to start Chrome WebDriver. "
+        "If this is a Chrome/ChromeDriver version mismatch, update drivers/chromedriver.exe "
+        "or set CHROMEDRIVER_PATH to a matching chromedriver."
+    ) from last_exc

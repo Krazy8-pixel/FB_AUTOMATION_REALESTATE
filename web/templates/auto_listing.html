@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Auto Listing Generator{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/create_listings.css') }}">{% endblock %}
+
+{% block content %}
+<main class="create-page">
+  <div class="create-page-head">
+    <div>
+      <h1>Create Listings</h1>
+      <p>Choose how you want to add vehicle listings to Facebook Marketplace.</p>
+    </div>
+    <a href="{{ url_for('web.dashboard') }}" class="create-back">Back to Dashboard</a>
+  </div>
+  {% if auto_listing_running %}
+  <div class="create-status">
+    Auto Listing Running for this account. Upload is disabled until all scheduled/ongoing posts finish.
+  </div>
+  {% endif %}
+  <div class="create-methods">
+    <div class="create-method-card {% if auto_listing_running %}is-disabled{% endif %}" tabindex="{% if auto_listing_running %}-1{% else %}0{% endif %}" {% if not auto_listing_running %}onclick="location.href='{{ url_for('web.auto_listing_excel') }}'" onkeydown="if(event.key==='Enter'||event.key===' '){location.href='{{ url_for('web.auto_listing_excel') }}'}"{% endif %}>
+      <span class="create-method-icon">XLS</span>
+      <h2>Excel Posting</h2>
+      <p>
+        {% if auto_listing_running %}
+          Auto Listing Running. Wait for completion to upload a new file.
+        {% else %}
+          Upload a prepared spreadsheet and schedule several listings automatically.
+        {% endif %}
+      </p>
+      <span class="create-method-link">Open Excel Posting &rarr;</span>
+    </div>
+
+    <div class="create-method-card" tabindex="0" onclick="location.href='{{ url_for('web.auto_listing_manual') }}'" onkeydown="if(event.key==='Enter'||event.key===' '){location.href='{{ url_for('web.auto_listing_manual') }}'}">
+      <span class="create-method-icon">+</span>
+      <h2>Manual Posting</h2>
+      <p>Enter the vehicle details, add photos, and schedule one listing.</p>
+      <span class="create-method-link">Open Manual Posting &rarr;</span>
+    </div>
+  </div>
+</main>
+{% endblock %}

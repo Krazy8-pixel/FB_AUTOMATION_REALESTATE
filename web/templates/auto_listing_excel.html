@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Excel{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/create_listings.css') }}">{% endblock %}
+
+{% block content %}
+<main class="create-page create-excel-page">
+  <div class="create-page-head">
+    <div><h1>Excel Posting</h1><p>Upload a spreadsheet and choose how long the bot should wait between listings.</p></div>
+    <a href="{{ url_for('web.auto_listing_page') }}" class="create-back">Back to Create Listings</a>
+  </div>
+  {% if auto_listing_running %}
+  <div class="create-status">
+    Auto Listing Running for this account. New upload is disabled until current scheduled/ongoing posts finish.
+  </div>
+  {% endif %}
+  <p class="create-upload-note">Your file should include the vehicle type, make, model, description, photos, price, and the other required listing details.</p>
+  <div class="form-box create-form-panel">
+    <form method="POST" action="{{ url_for('web.auto_listing_excel') }}" enctype="multipart/form-data">
+      <fieldset {% if auto_listing_running %}disabled{% endif %} style="{% if auto_listing_running %}opacity:0.65;{% endif %}">
+      <label for="excel_file" class="file-label">Excel file</label>
+      <input id="excel_file" type="file" name="excel_file" accept=".xlsx,.xls" required>
+
+      <label for="delay_unit" class="file-label">Delay between posts</label>
+      <select id="delay_unit" name="delay_unit" class="input-field" required>
+        <option value=""  >Select unit</option>
+        <option value="hours" {% if request.form.get('delay_unit') == 'hours' %}selected{% endif %}>Hours</option>
+        <option value="minutes" {% if request.form.get('delay_unit') == 'minutes' %}selected{% endif %}>Minutes</option>
+      </select>
+
+      <label for="delay_value" class="file-label">Delay value</label>
+      <input id="delay_value" type="number" name="delay_value" required min="1" step="1" value="{{ request.form.get('delay_value', '') }}">
+      <button type="submit">Upload and Continue</button>
+      </fieldset>
+    </form>
+  </div>
+</main>
+
+<script>
+  (function () {
+    const unitInput = document.getElementById("delay_unit");
+    const valueInput = document.getElementById("delay_value");
+
+    function applyRange() {
+      const unit = unitInput.value;
+      if (unit === "hours") {
+        valueInput.min = "1";
+        valueInput.removeAttribute("max");
+        valueInput.placeholder = ">= 1";
+      } else if (unit === "minutes") {
+        valueInput.min = "1";
+        valueInput.removeAttribute("max");
+        valueInput.placeholder = ">= 1";
+      } else {
+        valueInput.min = "1";
+        valueInput.removeAttribute("max");
+        valueInput.placeholder = "";
+      }
+
+      const currentValue = Number(valueInput.value);
+      const min = Number(valueInput.min || 1);
+      const max = Number(valueInput.max || Number.MAX_SAFE_INTEGER);
+      if (!Number.isFinite(currentValue) || currentValue < min || currentValue > max) {
+        valueInput.value = "";
+      }
+    }
+
+    unitInput.addEventListener("change", applyRange);
+    applyRange();
+  })();
+</script>
+{% endblock %}

@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}Phone Verification{% endblock %}
+
+{% block content %}
+<div class="phone-verify-page" data-session-id="{{ session_id }}">
+  <div class="phone-verify-shell">
+    <div class="phone-verify-head">
+      <div>
+        <h1>Phone Verification</h1>
+        <p class="phone-verify-subtitle">
+          This page controls the same Facebook login session running on the PC. Complete checkpoint, 2FA, or approval here.
+        </p>
+      </div>
+      <div class="phone-verify-status" id="phone-verify-status" data-status="{{ session_state.status }}">
+        {{ session_state.status|replace('_', ' ')|title }}
+      </div>
+    </div>
+
+    <div class="phone-verify-meta">
+      <span class="phone-verify-chip">Account: {{ session_state.email or "Unknown" }}</span>
+      <span class="phone-verify-chip" id="phone-verify-message">{{ session_state.message }}</span>
+    </div>
+
+    <div class="phone-verify-surface-note">
+      Tap to press. Swipe up or down on the screen to scroll the remote Facebook page.
+    </div>
+
+    <div class="phone-verify-viewer">
+      <div class="phone-verify-frame-wrap">
+        <img id="phone-verify-frame" class="phone-verify-frame" alt="Remote Facebook verification view">
+      </div>
+    </div>
+
+    <a href="{{ url_for('web.account_page') }}" class="btn-back phone-verify-back">Back to Accounts</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  (function() {
+    const root = document.querySelector(".phone-verify-page");
+    if (!root) {
+      return;
+    }
+
+    const sessionId = root.getAttribute("data-session-id");
+    const frame = document.getElementById("phone-verify-frame");
+    const statusEl = document.getElementById("phone-verify-status");
+    const messageEl = document.getElementById("phone-verify-message");
+    let frameNonce = Date.now();
+    let lastTouchTapAt = 0;
+    let touchStartY = null;
+    let touchStartX = null;
+
+    function frameUrl() {
+      return "/account/phone_verify/" + sessionId + "/frame?t=" + frameNonce;
+    }
+
+    function refreshFrame() {
+      frameNonce = Date.now();
+      frame.src = frameUrl();
+    }
+
+    function setStatus(state) {
+      const rawStatus = String(state.status || "unknown");
+      statusEl.textContent = rawStatus.replace(/_/g, " ");
+      statusEl.setAttribute("data-status", rawStatus);
+      messageEl.textContent = state.message || "";
+    }
+
+    async function postAction(payload) {
+      const response = await fetch("/account/phone_verify/" + sessionId + "/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error(data.message || "Action failed");
+      }
+      setStatus(data);
+      window.setTimeout(refreshFrame, 120);
+      return data;
+    }
+
+    async function pollState() {
+      try {
+        const response = await fetch("/account/phone_verify/" + sessionId + "/state?t=" + Date.now());
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.message || "State unavailable");
+        }
+        setStatus(data);
+        if (data.status === "starting" || data.status === "awaiting_verification") {
+          refreshFrame();
+        }
+      } catch (error) {
+        messageEl.textContent = error.message;
+      }
+    }
+
+    function sendTapFromPoint(clientX, clientY) {
+      const rect = frame.getBoundingClientRect();
+      if (!rect.width || !rect.height) {
+        return;
+      }
+      const relX = (clientX - rect.left) / rect.width;
+      const relY = (clientY - rect.top) / rect.height;
+      postAction({ action: "tap", x: relX, y: relY }).catch(function(error) {
+        messageEl.textContent = error.message;
+      });
+    }
+
+    frame.addEventListener("click", function(event) {
+      if (Date.now() - lastTouchTapAt < 500) {
+        return;
+      }
+      sendTapFromPoint(event.clientX, event.clientY);
+    });
+
+    frame.addEventListener("pointerup", function(event) {
+      if (event.pointerType === "touch") {
+        lastTouchTapAt = Date.now();
+        event.preventDefault();
+        sendTapFromPoint(event.clientX, event.clientY);
+      }
+    });
+
+    frame.addEventListener("touchstart", function(event) {
+      const touch = event.touches && event.touches[0];
+      if (!touch) {
+        return;
+      }
+      event.preventDefault();
+      touchStartY = touch.clientY;
+      touchStartX = touch.clientX;
+    }, { passive: false });
+
+    frame.addEventListener("touchend", function(event) {
+      const touch = event.changedTouches && event.changedTouches[0];
+      if (!touch) {
+        return;
+      }
+      const deltaY = touchStartY === null ? 0 : touchStartY - touch.clientY;
+      const deltaX = touchStartX === null ? 0 : touchStartX - touch.clientX;
+      lastTouchTapAt = Date.now();
+      event.preventDefault();
+      touchStartY = null;
+      touchStartX = null;
+
+      if (Math.abs(deltaY) > 26 && Math.abs(deltaY) > Math.abs(deltaX)) {
+        postAction({ action: "scroll", amount: Math.round(deltaY * 2.2) }).catch(function(error) {
+          messageEl.textContent = error.message;
+        });
+        return;
+      }
+
+      sendTapFromPoint(touch.clientX, touch.clientY);
+    }, { passive: false });
+
+    frame.addEventListener("error", function() {
+      window.setTimeout(refreshFrame, 1200);
+    });
+
+    refreshFrame();
+    pollState();
+    window.setInterval(pollState, 2000);
+  })();
+</script>
+{% endblock %}

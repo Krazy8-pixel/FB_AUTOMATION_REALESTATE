@@ -1,0 +1,717 @@
+:root {
+  --app-blue: #0b3d91;
+  --app-blue-dark: #082f70;
+  --app-white: #ffffff;
+  --app-grey-25: #fafafa;
+  --app-grey-50: #f2f2f2;
+  --app-grey-100: #e6e6e6;
+  --app-grey-200: #d0d0d0;
+  --app-grey-400: #8a8a8a;
+  --app-grey-700: #454545;
+  --app-text: #252525;
+  --app-radius: 12px;
+}
+
+body {
+  background: var(--app-grey-50);
+  color: var(--app-text);
+}
+
+.password-input-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.password-input-wrap > input {
+  box-sizing: border-box;
+  padding-right: 48px !important;
+}
+
+.password-input-wrap .password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  min-height: 0;
+  padding: 0;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--app-grey-400);
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.password-input-wrap .password-toggle:hover,
+.password-input-wrap .password-toggle:focus-visible {
+  background: var(--app-grey-50);
+  color: var(--app-blue);
+  outline: none;
+}
+
+.password-toggle svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.password-toggle .password-eye-hide,
+.password-toggle[aria-pressed="true"] .password-eye-show { display: none; }
+.password-toggle[aria-pressed="true"] .password-eye-hide { display: block; }
+
+.cdp-login-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--app-grey-200);
+  border-radius: 8px;
+  background: var(--app-grey-50);
+  color: var(--app-text);
+}
+
+.cdp-login-status > span:last-child { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.cdp-login-status strong { color: var(--app-blue); font-size: 13px; }
+.cdp-login-status small { color: var(--app-grey-700); font-size: 12px; line-height: 1.4; }
+
+.reply-setup-card .password-input-wrap {
+  margin-bottom: 18px;
+}
+
+.reply-setup-card .password-input-wrap .auto-reply-select {
+  margin-bottom: 0 !important;
+}
+
+.content {
+  width: 100%;
+  padding: 118px 30px 30px;
+  background: var(--app-grey-50);
+}
+
+.content h1,
+.content h2,
+.content h3,
+.page-heading {
+  color: var(--app-blue);
+}
+
+.content p,
+.muted,
+.account-subtitle,
+.auto-reply-info,
+.gp-help,
+.table-sub {
+  color: var(--app-grey-700);
+}
+
+/* Shared flat surfaces */
+.dashboard-v2-box,
+.account-hero,
+.account-capacity,
+.account-card,
+.phone-verify-shell,
+.groups-card,
+.gp-block,
+.auto-reply-card,
+.status-card,
+.replied-feed-wrap,
+.schedular-table,
+.activity-table,
+.automation-card,
+.website-posting-page .form-box,
+.reposting-card,
+.repost-card,
+.stat-card,
+.delete-card,
+.delete-operation-card {
+  background: var(--app-white) !important;
+  background-image: none !important;
+  border: 1px solid var(--app-grey-200) !important;
+  border-radius: var(--app-radius) !important;
+  box-shadow: none !important;
+}
+
+/* Shared fields */
+.content input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+.content select,
+.content textarea {
+  background: var(--app-white);
+  color: var(--app-text);
+  border: 1px solid #bdbdbd;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.content input:focus,
+.content select:focus,
+.content textarea:focus {
+  border-color: var(--app-blue);
+  outline: 2px solid rgba(11, 61, 145, .14);
+  outline-offset: 1px;
+}
+
+.content input[type="checkbox"],
+.content input[type="radio"] {
+  accent-color: var(--app-blue);
+}
+
+/* Shared actions */
+.content button:not(.delete-btn):not(.danger-btn):not(.stop-btn):not(.listing-delete-btn),
+.content .primary-btn,
+.content .groups-btn:not(.groups-btn-secondary),
+.content .automation-button:not(.stop),
+.content .start-btn {
+  background: var(--app-blue);
+  background-image: none;
+  border-color: var(--app-blue);
+  color: var(--app-white);
+  box-shadow: none;
+}
+
+.content button:not(.delete-btn):not(.danger-btn):not(.stop-btn):not(.listing-delete-btn):hover,
+.content .primary-btn:hover,
+.content .groups-btn:not(.groups-btn-secondary):hover,
+.content .automation-button:not(.stop):hover,
+.content .start-btn:hover {
+  background: var(--app-blue-dark);
+  border-color: var(--app-blue-dark);
+  transform: none;
+}
+
+.content .ghost-btn,
+.content .groups-btn-secondary,
+.content .manual-action-secondary,
+.content .btn-back {
+  background: var(--app-white);
+  color: var(--app-blue);
+  border: 1px solid var(--app-blue);
+  box-shadow: none;
+}
+
+.content .ghost-btn:hover,
+.content .groups-btn-secondary:hover,
+.content .manual-action-secondary:hover,
+.content .btn-back:hover {
+  background: var(--app-grey-50);
+  color: var(--app-blue);
+}
+
+.content .danger-btn,
+.content .delete-btn,
+.content .stop-btn,
+.content .automation-button.stop,
+.content .listing-delete-btn,
+.content .delete-danger {
+  background: var(--app-grey-700);
+  background-image: none;
+  border-color: var(--app-grey-700);
+  color: var(--app-white);
+  box-shadow: none;
+}
+
+/* Dashboard */
+.dashboard-v2 {
+  width: min(1120px, 100%);
+  min-height: 0;
+  margin: 0 auto;
+  padding: 0;
+  background: transparent;
+}
+
+.dashboard-v2-head {
+  margin-bottom: 22px;
+  padding-bottom: 18px;
+  border-bottom: 2px solid var(--app-blue);
+}
+
+.dashboard-v2-head h1 {
+  margin-bottom: 6px;
+}
+
+.dashboard-v2-grid {
+  gap: 14px;
+}
+
+.dashboard-v2-box {
+  border-top: 4px solid var(--app-blue) !important;
+  transition: border-color .16s ease, transform .16s ease;
+}
+
+.dashboard-v2-box:hover {
+  transform: translateY(-2px);
+  border-color: var(--app-blue) !important;
+}
+
+.dashboard-v2-icon {
+  background: var(--app-blue) !important;
+  color: var(--app-white) !important;
+  border-color: var(--app-blue) !important;
+}
+
+.dashboard-v2-icon svg {
+  stroke: var(--app-white) !important;
+}
+
+.dashboard-v2-title,
+.dashboard-v2-go {
+  color: var(--app-blue) !important;
+}
+
+.dashboard-v2-desc {
+  color: var(--app-grey-700) !important;
+}
+
+/* Accounts and phone verification */
+.account-page,
+.phone-verify-page {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+}
+
+.account-page .account-grid {
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  align-items: start;
+}
+
+.account-login-stack {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.account-page .session-check-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 170px;
+}
+
+.account-page .session-check-btn.is-checking {
+  background: var(--app-blue);
+  border-color: var(--app-blue);
+  color: var(--app-white);
+}
+
+.account-page .session-check-btn .session-check-loader {
+  width: 15px;
+  height: 15px;
+  border-color: rgba(255,255,255,.45);
+  border-top-color: var(--app-white);
+}
+
+.account-hero {
+  border-top: 5px solid var(--app-blue) !important;
+}
+
+.account-badge,
+.capacity-item,
+.phone-verify-chip,
+.phone-verify-status,
+.session-health-badge {
+  background: var(--app-grey-50) !important;
+  background-image: none !important;
+  border: 1px solid var(--app-grey-200) !important;
+  color: var(--app-blue) !important;
+  box-shadow: none !important;
+}
+
+.account-card .card-head,
+.phone-verify-head {
+  background: var(--app-white) !important;
+  border-bottom-color: var(--app-grey-200) !important;
+}
+
+.account-card h2,
+.account-name,
+.capacity-item strong,
+.badge-value {
+  color: var(--app-blue) !important;
+}
+
+.account-row,
+.saved-list {
+  border-color: var(--app-grey-200) !important;
+  background: var(--app-grey-25) !important;
+}
+
+/* Groups and group posting */
+.groups-page,
+.gp-page {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+}
+
+.groups-hero,
+.gp-hero,
+.groups-card-head,
+.gp-head {
+  background: var(--app-white) !important;
+  background-image: none !important;
+  border-color: var(--app-grey-200) !important;
+  box-shadow: none !important;
+}
+
+.groups-card,
+.gp-block {
+  border-top: 4px solid var(--app-blue) !important;
+}
+
+.groups-pill,
+.groups-chip,
+.status-pill {
+  background: var(--app-grey-50) !important;
+  border-color: var(--app-grey-200) !important;
+  color: var(--app-blue) !important;
+}
+
+.groups-name,
+.groups-card-title,
+.gp-label {
+  color: var(--app-blue) !important;
+}
+
+/* Auto reply and reply status */
+.auto-reply-container,
+.auto-reply-status-container {
+  width: min(900px, 100%);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.auto-reply-card,
+.status-card,
+.replied-feed-wrap {
+  border-top: 4px solid var(--app-blue) !important;
+}
+
+.auto-reply-title,
+.status-title,
+.replied-feed-title,
+.status-row .label {
+  color: var(--app-blue) !important;
+}
+
+.status-badge,
+.replied-feed-badge {
+  background: var(--app-blue) !important;
+  color: var(--app-white) !important;
+  border-color: var(--app-blue) !important;
+}
+
+.status-row,
+.replied-feed-item {
+  background: var(--app-grey-25) !important;
+  border-color: var(--app-grey-200) !important;
+}
+
+/* Schedules, activity and data tables */
+.schedular-container,
+.activity-page,
+.reposting-page {
+  width: min(1200px, 100%);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.schedular-head,
+.activity-head,
+.reposting-head {
+  padding-bottom: 18px;
+  border-bottom: 2px solid var(--app-blue);
+}
+
+.schedular-table,
+.activity-table {
+  overflow: hidden;
+}
+
+.content table {
+  border-collapse: collapse;
+  background: var(--app-white);
+}
+
+.content table thead,
+.content table th {
+  background: var(--app-blue) !important;
+  color: var(--app-white) !important;
+  border-color: var(--app-blue-dark) !important;
+}
+
+.content table td {
+  color: var(--app-text);
+  border-color: var(--app-grey-200) !important;
+}
+
+.content table tbody tr:nth-child(even) {
+  background: var(--app-grey-25);
+}
+
+.content table tbody tr:hover {
+  background: var(--app-grey-50);
+}
+
+/* Manage Listings: override its old inline visual theme only */
+.content .delete-page {
+  background: transparent !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+
+.content .delete-header {
+  border-bottom: 2px solid var(--app-blue) !important;
+}
+
+.content .delete-header h1,
+.content .listing-title,
+.content .listing-price {
+  color: var(--app-blue) !important;
+}
+
+.content .delete-account,
+.content .listing-meta {
+  color: var(--app-grey-700) !important;
+}
+
+.content .delete-btn.delete-muted {
+  background: var(--app-grey-100) !important;
+  border-color: var(--app-grey-200) !important;
+  color: var(--app-grey-700) !important;
+}
+
+.content .listing-row,
+.content .listing-card {
+  background: var(--app-white) !important;
+  border-color: var(--app-grey-200) !important;
+  box-shadow: none !important;
+}
+
+.content .listing-repost-btn,
+.content .delete-primary {
+  background: var(--app-blue) !important;
+  border-color: var(--app-blue) !important;
+  color: var(--app-white) !important;
+  box-shadow: none !important;
+}
+
+.content .delete-warning {
+  background: var(--app-grey-50) !important;
+  border-color: var(--app-grey-200) !important;
+  color: var(--app-grey-700) !important;
+}
+
+/* Website posting */
+.website-posting-page {
+  width: min(1050px, 100%);
+  max-width: 1050px;
+  margin: 0 auto;
+  padding: 0;
+  text-align: left;
+}
+
+.website-posting-page > h3 {
+  margin: 0 0 7px;
+  padding-bottom: 14px;
+  border-bottom: 2px solid var(--app-blue);
+  color: var(--app-blue);
+  font-size: 26px;
+}
+
+.website-posting-page .form-box,
+.automation-card {
+  width: 100%;
+  max-width: none;
+  border-top: 4px solid var(--app-blue) !important;
+}
+
+.website-posting-info-item,
+.website-posting-image-card,
+.automation-status {
+  background: var(--app-grey-50) !important;
+  border-color: var(--app-grey-200) !important;
+  color: var(--app-grey-700) !important;
+}
+
+.website-posting-info-label,
+.website-posting-results-title,
+.automation-card h3,
+.automation-status strong {
+  color: var(--app-blue) !important;
+}
+
+.website-posting-info-value {
+  color: var(--app-text) !important;
+}
+
+/* Reposting cards and empty states */
+.reposting-card,
+.repost-card,
+.stat-card {
+  border-top: 4px solid var(--app-blue) !important;
+}
+
+.repost-state,
+.stat-value {
+  color: var(--app-blue) !important;
+}
+
+.empty,
+.stopped-box,
+.manual-group-empty {
+  background: var(--app-grey-50);
+  border: 1px solid var(--app-grey-200);
+  color: var(--app-grey-700);
+}
+
+/* Common dialogs and overlays */
+.manual-group-dialog,
+.loading-box {
+  background: var(--app-white) !important;
+  background-image: none !important;
+  border: 1px solid var(--app-grey-200) !important;
+  box-shadow: none !important;
+}
+
+.manual-group-dialog-head,
+.manual-group-actions {
+  background: var(--app-grey-50) !important;
+  border-color: var(--app-grey-200) !important;
+}
+
+.spinner,
+.delete-spinner {
+  border-color: var(--app-grey-200) !important;
+  border-top-color: var(--app-blue) !important;
+}
+
+.message-success,
+.message-loading,
+.message-failed {
+  background: var(--app-white) !important;
+  border: 1px solid var(--app-blue) !important;
+  color: var(--app-blue) !important;
+  box-shadow: none !important;
+}
+
+/* Portal notifications */
+.message-box {
+  top: 50%;
+  right: auto;
+  left: calc(50% + 122px);
+  width: min(420px, calc(100vw - 48px));
+  min-width: 0;
+  max-width: none;
+  box-sizing: border-box;
+  padding: 0;
+  overflow: hidden;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--app-grey-200);
+  border-bottom: 1px solid var(--app-grey-200);
+  border-radius: 10px;
+  background: var(--app-white);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .14);
+  text-align: left;
+  animation: portalMessageIn .22s ease-out;
+}
+
+.message-box > div {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 58px;
+  box-sizing: border-box;
+  padding: 14px 46px 14px 16px;
+  border: 0 !important;
+  border-left: 4px solid var(--app-blue) !important;
+  color: var(--app-text) !important;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.message-box > div::before {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  place-items: center;
+  border-radius: 50%;
+  background: #e8f0fe;
+  color: var(--app-blue);
+  content: "i";
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.message-box > .message-success { border-left-color: #238636 !important; }
+.message-box > .message-success::before { background: #eaf7ee; color: #238636; content: "\2713"; }
+.message-box > .message-failed { border-left-color: #c73737 !important; }
+.message-box > .message-failed::before { background: #fcecec; color: #c73737; content: "!"; }
+
+.message-box .close-msg {
+  top: 50%;
+  right: 14px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  transform: translateY(-50%);
+  border-radius: 6px;
+  color: var(--app-grey-400);
+  font-size: 20px;
+  transition: background-color .15s ease, color .15s ease;
+}
+
+.message-box .close-msg:hover {
+  background: var(--app-grey-50);
+  color: var(--app-blue);
+}
+
+@keyframes portalMessageIn {
+  from { opacity: 0; transform: translate(-50%, calc(-50% - 10px)); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+@media (max-width: 600px) {
+  .message-box {
+    top: 50%;
+    right: auto;
+    left: 50%;
+    width: calc(100vw - 24px);
+  }
+}
+
+@media (max-width: 900px) {
+  .content {
+    padding: 22px 14px 28px;
+  }
+
+  .dashboard-v2-grid,
+  .account-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .content {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .account-hero,
+  .activity-head,
+  .schedular-head,
+  .reposting-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

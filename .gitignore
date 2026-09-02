@@ -1,0 +1,32 @@
+# Private, account-specific, and machine-specific runtime data
+data/
+config/
+*.pkl
+
+# Browser profiles and sessions wherever they appear
+**/sessions/
+**/cdp_profiles/
+**/browser_profiles/
+
+# Generated images, downloads, caches, and logs
+screenshots/
+downloads/
+__pycache__/
+*.py[cod]
+*.log
+
+# Local Python environments and secrets
+.env
+.venv/
+venv/
+env/
+
+# Large local installers
+python-*.exe
+drivers/*.exe
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

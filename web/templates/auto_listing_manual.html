@@ -1,0 +1,455 @@
+{% extends "base.html" %}
+
+{% block title %}Manual Vehicle Post{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/create_listings.css') }}">{% endblock %}
+
+{% block content %}
+<main class="create-page manual-listing-page">
+  <div class="create-page-head">
+    <div><h1>Manual Posting</h1><p>Add the vehicle information and photos, then choose where you want to post it.</p></div>
+    <a href="{{ url_for('web.auto_listing_page') }}" class="create-back">Back to Create Listings</a>
+  </div>
+  <p class="create-upload-note">Complete all required fields. Mileage must be greater than 300 and at least one photo is required.</p>
+
+  <div class="form-box manual-listing-form-box create-form-panel">
+    <form method="POST" action="{{ url_for('web.auto_listing_manual') }}" enctype="multipart/form-data">
+      <fieldset>
+        {% set prefill_data = prefill if prefill else {} %}
+        {% set prefilled_images = request.form.getlist('prefilled_images') if 'prefilled_images' in request.form else prefill_data.get('prefilled_images', []) %}
+        {% set vehicle_type_value = request.form.get('vehicle_type', prefill_data.get('vehicle_type', 'Car')) %}
+        <label for="vehicle_type" class="file-label">Vehicle type</label>
+        <select id="vehicle_type" name="vehicle_type" class="input-field" required>
+          <option value="Car" {% if vehicle_type_value|lower not in ['other', 'motorcycle', 'motorcycle/bike', 'motorbike', 'bike'] %}selected{% endif %}>Car/Truck/Van</option>
+          <option value="Motorcycle" {% if vehicle_type_value|lower in ['motorcycle', 'motorcycle/bike', 'motorbike', 'bike'] %}selected{% endif %}>Motorcycle/Bike</option>
+          <option value="Other" {% if vehicle_type_value|lower == 'other' %}selected{% endif %}>Other</option>
+        </select>
+
+        <label class="file-label">Images (up to 10)</label>
+        {% if prefilled_images %}
+        <div class="manual-note" style="text-align:left; margin-top:4px;">
+          Selected images from Website Post 1 are included below. Uncheck any to remove.
+        </div>
+        <div class="manual-image-grid" style="margin-top: 10px;">
+          {% for img in prefilled_images %}
+          <div class="manual-image-slot" style="min-height:auto;">
+            <input type="checkbox" name="prefilled_images" value="{{ img }}" checked style="margin-bottom:8px;">
+            <img
+              src="{{ url_for('web.screenshot_file', filename=img) }}"
+              alt="Selected image {{ loop.index }}"
+              style="width:100%; height:120px; object-fit:cover; border-radius:8px;"
+            >
+            <div class="manual-image-name" style="margin-top:6px; font-size:12px;">{{ img }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+        <div class="manual-image-grid">
+          {% for i in range(1, 11) %}
+          <div class="manual-image-slot">
+            <input
+              id="image_slot_{{ i }}"
+              type="file"
+              name="images"
+              accept="image/*"
+              class="manual-image-input"
+              data-slot="{{ i }}"
+              {% if i == 1 and not prefilled_images %}required{% endif %}
+            >
+            <label for="image_slot_{{ i }}" class="manual-image-label">
+              <span class="manual-image-plus">+</span>
+              <span class="manual-image-text">Photo {{ i }}</span>
+            </label>
+            <div class="manual-image-name" id="image_slot_name_{{ i }}">No file chosen</div>
+          </div>
+          {% endfor %}
+        </div>
+
+        <label for="year" class="file-label">Year</label>
+        <input id="year" name="year" type="number" min="1900" max="2100" step="1" class="input-field" required value="{% if 'year' in request.form %}{{ request.form.get('year', '') }}{% else %}{{ prefill_data.get('year', '') }}{% endif %}">
+
+        <label for="make" class="file-label">Make</label>
+        <input id="make" name="make" type="text" class="input-field" maxlength="120" required value="{% if 'make' in request.form %}{{ request.form.get('make', '') }}{% else %}{{ prefill_data.get('make', '') }}{% endif %}">
+
+        <label for="model" class="file-label">Model</label>
+        <input id="model" name="model" type="text" class="input-field" maxlength="120" required value="{% if 'model' in request.form %}{{ request.form.get('model', '') }}{% else %}{{ prefill_data.get('model', '') }}{% endif %}">
+
+        <label for="mileage" class="file-label">Mileage</label>
+        <input id="mileage" name="mileage" type="number" min="301" step="1" class="input-field" required value="{% if 'mileage' in request.form %}{{ request.form.get('mileage', '') }}{% else %}{{ prefill_data.get('mileage', '') }}{% endif %}">
+
+        <label for="price" class="file-label">Price</label>
+        <input id="price" name="price" type="number" min="0" step="1" class="input-field" required value="{{ request.form.get('price', '') }}">
+
+        {% set body_style_value = request.form.get('body_style', prefill_data.get('body_style', 'Other')) %}
+        {% set body_style_lower = body_style_value|lower %}
+        {% set body_style_options = ['Convertible', 'Coupe', 'Hatchback', 'Minivan', 'Pickup truck', 'Sedan', 'Station wagon', 'SUV', 'Van'] %}
+        <div id="body-style-field">
+          <label for="body_style" class="file-label">Body style</label>
+          <select id="body_style" name="body_style" class="input-field" required>
+            {% for option in body_style_options %}
+            <option value="{{ option }}" {% if body_style_lower == option|lower %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+            <option value="Other" {% if body_style_lower not in ['convertible','coupe','hatchback','minivan','pickup truck','sedan','station wagon','suv','van'] %}selected{% endif %}>Other</option>
+          </select>
+        </div>
+
+        {% set marketplace_color_options = ['Black', 'Blue', 'Brown', 'Gold', 'Green', 'Gray', 'Pink', 'Purple', 'Red', 'Silver', 'Orange', 'White', 'Yellow', 'Charcoal', 'Off white', 'Tan', 'Beige', 'Burgundy', 'Turquoise'] %}
+        {% set exterior_color_value = request.form.get('exterior_color', prefill_data.get('exterior_color', '')) %}
+        <label for="exterior_color" class="file-label">Exterior color</label>
+        <select id="exterior_color" name="exterior_color" class="input-field" required>
+          <option value="" disabled {% if not exterior_color_value %}selected{% endif %}>Select exterior color</option>
+          {% for color in marketplace_color_options %}
+          <option value="{{ color }}" {% if exterior_color_value|lower == color|lower %}selected{% endif %}>{{ color }}</option>
+          {% endfor %}
+        </select>
+
+        {% set interior_color_value = request.form.get('interior_color', prefill_data.get('interior_color', '')) %}
+        <label for="interior_color" class="file-label">Interior color</label>
+        <select id="interior_color" name="interior_color" class="input-field" required>
+          <option value="" disabled {% if not interior_color_value %}selected{% endif %}>Select interior color</option>
+          {% for color in marketplace_color_options %}
+          <option value="{{ color }}" {% if interior_color_value|lower == color|lower %}selected{% endif %}>{{ color }}</option>
+          {% endfor %}
+        </select>
+
+        <label for="vehicle_condition" class="file-label">Vehicle condition</label>
+        <input id="vehicle_condition" name="vehicle_condition" type="text" class="input-field" value="Very good" readonly>
+
+        {% set fuel_type_value = request.form.get('fuel_type', prefill_data.get('fuel_type', 'Other')) %}
+        <label for="fuel_type" class="file-label">Fuel type</label>
+        <select id="fuel_type" name="fuel_type" class="input-field">
+          {% for value, label in [('Gasoline','Gasoline'),('Diesel','Diesel'),('Electric','Electric'),('Petrol','Petrol'),('Hybrid','Hybrid'),('Flex','Flex'),('Plug-in hybrid','Plug-in hybrid'),('Other','Other')] %}
+          <option value="{{ value }}" {% if fuel_type_value|lower == value|lower %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+
+        {% set transmission_value = request.form.get('transmission', prefill_data.get('transmission', 'Automatic transmission')) %}
+        {% set transmission_lower = transmission_value|lower %}
+        <label for="transmission" class="file-label">Transmission</label>
+        <select id="transmission" name="transmission" class="input-field">
+          <option value="Manual transmission" {% if transmission_lower[:6] == 'manual' %}selected{% endif %}>Manual transmission</option>
+          <option value="Automatic transmission" {% if transmission_lower[:6] != 'manual' %}selected{% endif %}>Automatic transmission</option>
+        </select>
+
+        <label for="description" class="file-label">Description</label>
+        <textarea id="description" name="description" rows="8" class="input-field">{{ request.form.get('description', '') }}</textarea>
+
+        <label for="delay_unit" class="file-label">Delay unit</label>
+        <select id="delay_unit" name="delay_unit" class="input-field" required>
+          <option value="">Select unit</option>
+          <option value="hours" {% if request.form.get('delay_unit') == 'hours' %}selected{% endif %}>Hours</option>
+          <option value="minutes" {% if request.form.get('delay_unit') == 'minutes' %}selected{% endif %}>Minutes</option>
+        </select>
+
+        <label for="delay_value" class="file-label">Delay value</label>
+        <input id="delay_value" type="number" name="delay_value" class="input-field" required min="1" step="1" value="{{ request.form.get('delay_value', '') }}">
+
+        <div class="manual-actions">
+          <button type="submit" name="post_action" value="simple" class="manual-action-button">Simple Post</button>
+          <button type="button" id="manual-group-trigger" class="manual-action-button">Group Post</button>
+          <button type="button" id="manual-account-trigger" class="manual-action-button">Accounts Post</button>
+          <button type="button" id="manual-instagram-trigger" data-action="{{ url_for('web.auto_listing_manual_instagram') }}" class="manual-action-button">Instagram Post</button>
+        </div>
+        <input type="hidden" id="multi-account-hidden" name="multi_account" value="0">
+        <div id="manual-group-hidden" hidden></div>
+      </fieldset>
+    </form>
+    <div
+      id="manual-group-modal"
+      class="manual-group-modal"
+      data-max="20"
+      data-open="{% if request.form.get('post_action') == 'group' %}1{% else %}0{% endif %}"
+    >
+      <div class="manual-group-backdrop" data-close="1"></div>
+      <div class="manual-group-dialog" role="dialog" aria-modal="true" aria-labelledby="manual-group-title">
+        <div class="manual-group-dialog-head">
+          <div>
+            <h4 id="manual-group-title">Select groups (up to 20)</h4>
+            <p class="manual-note">Only groups for the active account are shown.</p>
+          </div>
+          <div class="manual-group-count">
+            <span id="manual-groups-count">0</span>/20 selected
+          </div>
+          <button type="button" class="manual-group-close" aria-label="Close" data-close="1">X</button>
+        </div>
+        <div class="manual-group-dialog-body">
+          <div id="manual-group-limit" class="manual-group-limit" style="display:none;">
+            You can select up to 20 groups.
+          </div>
+          <div id="manual-groups-list" class="manual-group-list">
+            {% set selected_groups = request.form.getlist('group_ids') %}
+            {% if groups %}
+              {% for g in groups %}
+                <label class="manual-group-item">
+                  <input
+                    type="checkbox"
+                    value="{{ g.id }}"
+                    {% if g.id in selected_groups %}checked{% endif %}
+                  >
+                  <span class="manual-group-text">
+                    <span class="manual-group-name">{{ g.name }}</span>
+                    <span class="manual-group-meta">
+                      {% if g.member_count_label %}{{ g.member_count_label }}{% else %}Members hidden{% endif %}
+                      {% if g.privacy %} · {{ g.privacy }}{% endif %}
+                    </span>
+                  </span>
+                </label>
+              {% endfor %}
+            {% else %}
+              <div class="manual-group-empty">No groups found for this account.</div>
+            {% endif %}
+          </div>
+        </div>
+        <div class="manual-group-actions">
+          <button type="button" id="manual-group-submit" class="manual-action-button">Post to Groups</button>
+          <button type="button" id="manual-group-cancel" class="manual-action-button manual-action-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="manual-account-modal" class="manual-group-modal" hidden>
+      <div class="manual-group-backdrop" data-account-close="1"></div>
+      <div class="manual-group-dialog" role="dialog" aria-modal="true" aria-labelledby="manual-account-title">
+        <div class="manual-group-dialog-head">
+          <div><h4 id="manual-account-title">Select accounts</h4><p class="manual-note">The post will be scheduled separately for each selected account.</p></div>
+          <button type="button" class="manual-group-close" aria-label="Close" data-account-close="1">X</button>
+        </div>
+        <div class="manual-group-dialog-body">
+          <label style="display:block; margin-bottom:8px;"><input id="manual-account-select-all" type="checkbox"> Select all accounts</label>
+          {% for account in accounts %}
+          <label style="display:block; margin:6px 0;"><input class="manual-account-check" type="checkbox" name="target_accounts" value="{{ account }}"> {{ account }}</label>
+          {% endfor %}
+        </div>
+        <div class="manual-group-actions"><button type="button" id="manual-account-submit" class="manual-action-button">Post to Accounts</button><button type="button" class="manual-action-button manual-action-secondary" data-account-close="1">Cancel</button></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  (function () {
+    const unitInput = document.getElementById("delay_unit");
+    const valueInput = document.getElementById("delay_value");
+    const accountTrigger = document.getElementById("manual-account-trigger");
+    const accountModal = document.getElementById("manual-account-modal");
+    const accountSubmit = document.getElementById("manual-account-submit");
+    const accountSelectAll = document.getElementById("manual-account-select-all");
+    const accountChecks = Array.from(document.querySelectorAll(".manual-account-check"));
+    const accountHidden = document.getElementById("multi-account-hidden");
+    const instagramTrigger = document.getElementById("manual-instagram-trigger");
+    const vehicleTypeInput = document.getElementById("vehicle_type");
+    const bodyStyleField = document.getElementById("body-style-field");
+    const bodyStyleInput = document.getElementById("body_style");
+
+    function syncBodyStyleRequirement() {
+      const isCar = vehicleTypeInput && vehicleTypeInput.value.toLowerCase() === "car";
+      if (bodyStyleField) bodyStyleField.style.display = isCar ? "" : "none";
+      if (bodyStyleInput) {
+        bodyStyleInput.disabled = !isCar;
+        bodyStyleInput.required = isCar;
+      }
+    }
+
+    if (vehicleTypeInput) vehicleTypeInput.addEventListener("change", syncBodyStyleRequirement);
+    syncBodyStyleRequirement();
+
+    if (instagramTrigger) {
+      instagramTrigger.addEventListener("click", function () {
+        const form = instagramTrigger.closest("form");
+        if (!form) return;
+        // Use a dedicated action and a hidden value so this cannot submit as
+        // the first Facebook (Simple Post) button.
+        form.action = instagramTrigger.dataset.action;
+        form.querySelectorAll("input[data-instagram-action]").forEach((input) => input.remove());
+        const actionInput = document.createElement("input");
+        actionInput.type = "hidden";
+        actionInput.name = "post_action";
+        actionInput.value = "instagram";
+        actionInput.setAttribute("data-instagram-action", "1");
+        form.appendChild(actionInput);
+        form.submit();
+      });
+    }
+
+    function updateAccountSelectAll() {
+      if (!accountSelectAll) return;
+      accountSelectAll.checked = accountChecks.length > 0 && accountChecks.every((box) => box.checked);
+    }
+    function openAccountModal() {
+      if (accountModal) { accountModal.hidden = false; accountModal.classList.add("is-open"); updateAccountSelectAll(); }
+    }
+    function closeAccountModal() {
+      if (accountModal) { accountModal.classList.remove("is-open"); accountModal.hidden = true; }
+    }
+    if (accountTrigger) {
+      accountTrigger.addEventListener("click", function () {
+        const form = accountTrigger.closest("form");
+        if (form && !form.checkValidity()) { form.reportValidity(); return; }
+        openAccountModal();
+      });
+    }
+    if (accountSelectAll) accountSelectAll.addEventListener("change", function () {
+      accountChecks.forEach((box) => { box.checked = accountSelectAll.checked; });
+    });
+    accountChecks.forEach((box) => box.addEventListener("change", updateAccountSelectAll));
+    if (accountModal) accountModal.addEventListener("click", function (event) {
+      if (event.target && event.target.dataset && event.target.dataset.accountClose === "1") closeAccountModal();
+    });
+    if (accountSubmit) accountSubmit.addEventListener("click", function () {
+      const form = accountTrigger ? accountTrigger.closest("form") : null;
+      const selected = accountChecks.filter((box) => box.checked);
+      if (!selected.length) { alert("Select at least one account."); return; }
+      if (accountHidden) {
+        accountHidden.value = "1";
+        selected.forEach((box) => {
+          const input = document.createElement("input");
+          input.type = "hidden"; input.name = "target_accounts"; input.value = box.value;
+          accountHidden.parentNode.appendChild(input);
+        });
+      }
+      if (form) form.submit();
+    });
+
+    function applyRange() {
+      const unit = unitInput.value;
+      if (unit === "hours") {
+        valueInput.min = "1";
+        valueInput.removeAttribute("max");
+        valueInput.placeholder = ">= 1";
+      } else if (unit === "minutes") {
+        valueInput.min = "1";
+        valueInput.removeAttribute("max");
+        valueInput.placeholder = ">= 1";
+      } else {
+        valueInput.min = "1";
+        valueInput.removeAttribute("max");
+        valueInput.placeholder = "";
+      }
+    }
+
+    unitInput.addEventListener("change", applyRange);
+    applyRange();
+
+    const imageInputs = Array.from(document.querySelectorAll(".manual-image-input"));
+    imageInputs.forEach((input) => {
+      input.addEventListener("change", function () {
+        const slot = this.getAttribute("data-slot");
+        const nameBox = document.getElementById("image_slot_name_" + slot);
+        if (!nameBox) return;
+        const file = this.files && this.files[0] ? this.files[0] : null;
+        nameBox.textContent = file ? file.name : "No file chosen";
+      });
+    });
+
+    const groupTrigger = document.getElementById("manual-group-trigger");
+    const groupModal = document.getElementById("manual-group-modal");
+    const groupList = document.getElementById("manual-groups-list");
+    const groupCount = document.getElementById("manual-groups-count");
+    const groupLimit = document.getElementById("manual-group-limit");
+    const groupCancel = document.getElementById("manual-group-cancel");
+    const groupSubmit = document.getElementById("manual-group-submit");
+    const groupHidden = document.getElementById("manual-group-hidden");
+    const groupMax = groupModal ? parseInt(groupModal.getAttribute("data-max") || "20", 10) : 20;
+
+    function setGroupLimitMessage(show) {
+      if (!groupLimit) return;
+      groupLimit.style.display = show ? "block" : "none";
+    }
+
+    function updateGroupLimit() {
+      if (!groupList || !groupCount) return;
+      const boxes = Array.from(groupList.querySelectorAll("input[type='checkbox']"));
+      const checkedCount = boxes.filter((box) => box.checked).length;
+      groupCount.textContent = String(checkedCount);
+      const limitReached = checkedCount >= groupMax;
+      boxes.forEach((box) => {
+        if (!box.checked) {
+          box.disabled = limitReached;
+        }
+      });
+      setGroupLimitMessage(limitReached);
+    }
+
+    function openGroupModal() {
+      if (!groupModal) return;
+      groupModal.classList.add("is-open");
+      updateGroupLimit();
+    }
+
+    function closeGroupModal() {
+      if (!groupModal) return;
+      groupModal.classList.remove("is-open");
+      setGroupLimitMessage(false);
+    }
+
+    function syncHiddenGroupInputs() {
+      if (!groupHidden) return;
+      groupHidden.innerHTML = "";
+      const actionInput = document.createElement("input");
+      actionInput.type = "hidden";
+      actionInput.name = "post_action";
+      actionInput.value = "group";
+      groupHidden.appendChild(actionInput);
+
+      if (!groupList) return;
+      const checked = Array.from(groupList.querySelectorAll("input[type='checkbox']:checked"));
+      checked.forEach((box) => {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "group_ids";
+        input.value = box.value;
+        groupHidden.appendChild(input);
+      });
+    }
+
+    if (groupTrigger) {
+      groupTrigger.addEventListener("click", function () {
+        const form = groupTrigger.closest("form");
+        if (form && !form.checkValidity()) {
+          form.reportValidity();
+          return;
+        }
+        openGroupModal();
+      });
+    }
+
+    if (groupCancel) {
+      groupCancel.addEventListener("click", function () {
+        closeGroupModal();
+      });
+    }
+
+    if (groupSubmit) {
+      groupSubmit.addEventListener("click", function () {
+        const form = groupTrigger ? groupTrigger.closest("form") : null;
+        if (form && !form.checkValidity()) {
+          form.reportValidity();
+          return;
+        }
+        syncHiddenGroupInputs();
+        if (form) {
+          form.submit();
+        }
+      });
+    }
+
+    if (groupModal) {
+      groupModal.addEventListener("click", function (event) {
+        const target = event.target;
+        if (target && target.dataset && target.dataset.close === "1") {
+          closeGroupModal();
+        }
+      });
+    }
+
+    if (groupModal && groupModal.dataset.open === "1") {
+      openGroupModal();
+    }
+
+    if (groupList) {
+      groupList.querySelectorAll("input[type='checkbox']").forEach((box) => {
+        box.addEventListener("change", updateGroupLimit);
+      });
+      updateGroupLimit();
+    }
+  })();
+</script>
+{% endblock %}

@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+
+{% block title %}Accounts{% endblock %}
+
+{% block content %}
+<div class="account-page">
+  <div class="account-hero">
+    <div>
+      <h1>Accounts</h1>
+      <p class="account-subtitle">
+        Give the account a title, then sign into Facebook yourself in its dedicated Chrome window.
+        The same persistent browser will be reused for posting.
+      </p>
+    </div>
+    <div class="account-badge">
+      <span class="badge-label">Active Account</span>
+      <span class="badge-value">{{ active_account or "No Account" }}</span>
+    </div>
+  </div>
+
+  <div class="account-capacity">
+    <div class="capacity-item">
+      <span class="capacity-label">Saved Accounts</span>
+      <strong>{{ account_count or 0 }} / {{ max_accounts }}</strong>
+    </div>
+    <div class="capacity-item">
+      <span class="capacity-label">Available Slots</span>
+      <strong>{{ account_slots_remaining }}</strong>
+    </div>
+    <div class="capacity-item">
+      <span class="capacity-label">Saved Account Limit</span>
+      <strong>{{ max_accounts }} accounts max</strong>
+    </div>
+  </div>
+
+  <div class="account-grid">
+    <div class="account-login-stack">
+    <div class="account-card">
+      <div class="card-head">
+        <h2>Add Account</h2>
+        <p>
+          Your credentials are entered only on Facebook. The portal never receives or stores the password.
+        </p>
+      </div>
+      <form method="post" action="/account" class="account-form" id="cdp-login-form">
+        <label class="field-label" for="account-title">Account title</label>
+        <input id="account-title" type="text" name="account_title" placeholder="Example: Main dealership account" maxlength="80" required>
+        <p class="form-hint">A dedicated Chrome window will open. Enter your Facebook credentials and complete verification directly in that window.</p>
+        <button type="submit" class="primary-btn">Open Facebook Login</button>
+      </form>
+      {% set waiting_accounts = cdp_accounts|dictsort %}
+      {% for title, cdp in waiting_accounts if cdp.get('status') != 'ready' %}
+        <div class="cdp-login-status" data-cdp-account="{{ title }}">
+          <span class="session-check-loader" aria-hidden="true"></span>
+          <span><strong>{{ title }}</strong><small>{{ cdp.get('message', 'Waiting for Facebook login.') }}</small></span>
+        </div>
+      {% endfor %}
+      <a href="/" class="btn-back account-back">Back to Dashboard</a>
+    </div>
+
+    <div class="account-card">
+      <div class="card-head">
+        <h2>Instagram Account</h2>
+        <p>One Instagram session is supported. A Chrome window opens for login and manual verification.</p>
+      </div>
+      {% if instagram_account %}
+        <div class="saved-list">
+          <div class="account-row">
+            <span class="account-name">{{ instagram_account.get('email', 'Instagram account') }}</span>
+            <span class="session-health-badge valid">Saved</span>
+            <form method="post" action="/instagram_account/delete">
+              <button type="submit" class="delete-btn">Delete Cookies</button>
+            </form>
+          </div>
+        </div>
+      {% else %}
+        <form method="post" action="/account" class="account-form">
+          <input type="hidden" name="account_type" value="instagram">
+          <p class="form-hint">Click below, then enter your Instagram credentials and complete any verification in the browser window.</p>
+          <label class="field-label" for="instagram-email">Account label (optional)</label>
+          <input id="instagram-email" type="text" name="email" placeholder="Email or username">
+          <button type="submit" class="primary-btn">Login Instagram</button>
+        </form>
+      {% endif %}
+    </div>
+    </div>
+
+    <div class="account-card">
+      <div class="card-head">
+        <h2>Saved Accounts</h2>
+        <p>Manage saved sessions for quick switching.</p>
+      </div>
+      {% if accounts %}
+        <div class="session-check-bar" data-running="{{ 'true' if session_check.running else 'false' }}">
+          <button type="button" class="session-check-btn" id="session-check-toggle">
+            <span class="session-check-loader hidden" id="session-check-loader" aria-hidden="true"></span>
+            <span id="session-check-button-text">Check Login Cookies</span>
+          </button>
+          <span class="session-check-text" id="session-check-text"></span>
+        </div>
+      {% endif %}
+      <div class="saved-list">
+        {% if accounts %}
+          <ul id="account-session-list">
+            {% for acc in accounts %}
+              {% set health = account_health.get(acc, {}) %}
+              {% set health_status = health.get("status", "Valid") %}
+              <li>
+                <div class="account-row" data-account="{{ acc }}">
+                  <span class="account-name">{{ acc }}</span>
+                  <span
+                    class="session-health-badge {{ 'expired' if health_status == 'Expired' else 'valid' }}"
+                    data-account-status="{{ acc }}"
+                  >
+                    {{ health_status }}
+                  </span>
+                  <form method="post" action="/delete_account">
+                    <input type="hidden" name="account" value="{{ acc }}">
+                    <button type="submit" class="delete-btn">Delete</button>
+                  </form>
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="empty-state">
+            <h3>No accounts saved</h3>
+            <p>Add your first account to get started.</p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  (function() {
+    const pendingLogins = document.querySelectorAll("[data-cdp-account]");
+    pendingLogins.forEach(function(item) {
+      const account = item.dataset.cdpAccount;
+      const message = item.querySelector("small");
+      const poll = async function() {
+        try {
+          const response = await fetch("/account/cdp_status?account=" + encodeURIComponent(account), {cache: "no-store"});
+          const data = await response.json();
+          if (message) message.textContent = data.message || "Waiting for Facebook login.";
+          if (data.ready) {
+            window.location.reload();
+            return;
+          }
+          if (data.status !== "failed") window.setTimeout(poll, 2000);
+        } catch (error) {
+          window.setTimeout(poll, 3000);
+        }
+      };
+      poll();
+    });
+
+    const toggleBtn = document.getElementById("session-check-toggle");
+    const loader = document.getElementById("session-check-loader");
+    const buttonText = document.getElementById("session-check-button-text");
+    const statusText = document.getElementById("session-check-text");
+    const checkBar = document.querySelector(".session-check-bar");
+    let pollTimer = null;
+
+    if (!toggleBtn) {
+      return;
+    }
+
+    function setRunning(snapshot) {
+      const running = Boolean(snapshot && snapshot.running);
+      loader.classList.toggle("hidden", !running);
+      toggleBtn.disabled = running;
+      toggleBtn.classList.toggle("is-checking", running);
+
+      if (running) {
+        const completed = Number(snapshot.completed || 0);
+        const total = Number(snapshot.total || 0);
+        buttonText.textContent = total ? ("Checking... " + completed + "/" + total) : "Checking...";
+        statusText.textContent = "";
+      } else if (snapshot && snapshot.total) {
+        buttonText.textContent = "Check Login Cookies";
+        statusText.textContent = "Checked " + Number(snapshot.completed || 0) + " account(s).";
+      } else {
+        buttonText.textContent = "Check Login Cookies";
+      }
+    }
+
+    function applyHealth(health) {
+      Object.keys(health || {}).forEach(function(account) {
+        const badge = document.querySelector('[data-account-status="' + CSS.escape(account) + '"]');
+        if (!badge) {
+          return;
+        }
+        const status = (health[account] && health[account].status) || "Valid";
+        badge.textContent = status;
+        badge.classList.toggle("valid", status === "Valid");
+        badge.classList.toggle("expired", status === "Expired");
+      });
+    }
+
+    async function refreshStatus() {
+      try {
+        const resp = await fetch("/account/session_check/status", { cache: "no-store" });
+        const data = await resp.json();
+        applyHealth(data.account_health || {});
+        setRunning(data.session_check || {});
+        if (data.session_check && data.session_check.running) {
+          if (!pollTimer) {
+            pollTimer = setInterval(refreshStatus, 1500);
+          }
+        } else if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      } catch (error) {
+        setRunning({running: false});
+        statusText.textContent = "Status check failed.";
+      }
+    }
+
+    toggleBtn.addEventListener("click", async function() {
+      const accounts = Array.from(document.querySelectorAll(".account-row[data-account]"))
+        .map(function(row) { return row.dataset.account || ""; })
+        .filter(Boolean);
+      if (!accounts.length) {
+        statusText.textContent = "No saved accounts.";
+        return;
+      }
+      setRunning({running: true, completed: 0, total: accounts.length});
+      try {
+        const resp = await fetch("/account/session_check/start", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({accounts: accounts})
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          setRunning({running: false});
+          statusText.textContent = data.message || "Could not start check.";
+          return;
+        }
+        applyHealth(data.account_health || {});
+        setRunning(data.session_check || {});
+        if (!pollTimer) {
+          pollTimer = setInterval(refreshStatus, 1500);
+        }
+      } catch (error) {
+        setRunning({running: false});
+        statusText.textContent = "Could not start check.";
+      }
+    });
+
+    if (checkBar && checkBar.dataset.running === "true") {
+      refreshStatus();
+    }
+  })();
+</script>
+{% endblock %}

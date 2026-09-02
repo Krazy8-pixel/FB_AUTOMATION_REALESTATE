@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block title %}Scheduled Posts{% endblock %}
+
+{% block extra_css %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/post_schedular.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="schedular-page" data-account="{{ active_account or '' }}">
+  <div class="schedular-head">
+    <div>
+      <h1>Scheduled Posts</h1>
+      <p>Facebook jobs for the selected account and Instagram jobs share this queue.</p>
+    </div>
+    <div class="schedular-meta">
+      <span class="meta-label">Active Account</span>
+      <span class="meta-value">{{ active_account or "No Account" }}</span>
+    </div>
+  </div>
+
+  <div class="schedular-stats">
+    <div class="stat-card">
+      <span class="stat-label">Pending</span>
+      <span class="stat-value" id="stat-pending">{{ pending_count or 0 }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Posted</span>
+      <span class="stat-value" id="stat-posted">{{ posted_count or 0 }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Next Run</span>
+      <span class="stat-value" id="stat-next">-</span>
+    </div>
+  </div>
+
+  <div class="schedular-table" style="margin-bottom:18px;">
+    <div class="table-head">
+      <div>
+        <h2>California Auto Finance Automation</h2>
+        <span class="table-sub" id="california-automation-info">
+          {% if california_automation.enabled %}
+          Active · {{ california_automation.post_count }} post(s) daily · {{ california_automation.delay_value }} {{ california_automation.delay_unit }} between posts · Next scan: {{ california_automation.next_scan_at.strftime('%Y-%m-%d %H:%M:%S') if california_automation.next_scan_at else 'Preparing' }}{% if california_automation.scan_running %} · Extracting now{% endif %}
+          {% else %}Stopped{% endif %}
+        </span>
+      </div>
+    </div>
+  </div>
+  <div class="schedular-table" style="margin-bottom:18px;">
+    <div class="table-head"><div><h2>CarsForSale Automation</h2><span class="table-sub" id="carsforsale-automation-info">{{ 'Active' if carsforsale_automation.enabled else 'Stopped' }}{% if carsforsale_automation.scan_running %} · Extracting now{% endif %}</span></div></div>
+  </div>
+
+  <div class="schedular-table">
+    <div class="table-head">
+      <h2>Queue</h2>
+      <span class="table-sub">Auto refreshes every 5 seconds.</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Vehicle</th>
+            <th>Status</th>
+            <th>Scheduled For</th>
+            <th>Time Remaining</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="schedular-rows">
+          {% for item in scheduled_items %}
+          <tr>
+            <td>
+              {% if item.platform == "instagram" %}<span class="platform-badge platform-instagram">Instagram</span>{% endif %}
+              {% if item.source == "California Auto Finance" %}<span class="platform-badge">California Auto Finance</span>{% endif %}
+              {% if item.source == "CarsForSale" %}<span class="platform-badge">CarsForSale</span>{% endif %}
+              {{ item.title if item.title is defined and item.title and item.platform != "instagram" else "" }}
+            </td>
+            <td><span class="status-pill status-{{ item.status }}">{{ item.status }}</span></td>
+            <td>{{ item.run_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+            <td data-remaining="{{ item.remaining_seconds }}"></td>
+            <td>
+              {% if item.status == "pending" %}
+              <button class="delete-btn delete-job" data-job="{{ item.job_id }}">Delete</button>
+              {% else %}
+              <span class="muted">-</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="5" class="empty">No scheduled posts in the queue for this account.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const schedularRows = document.getElementById("schedular-rows");
+  const statPending = document.getElementById("stat-pending");
+  const statPosted = document.getElementById("stat-posted");
+  const statNext = document.getElementById("stat-next");
+  const californiaAutomationInfo = document.getElementById("california-automation-info");
+  const carsforsaleAutomationInfo = document.getElementById("carsforsale-automation-info");
+
+  function formatRemaining(seconds) {
+    if (seconds <= 0) return "Posting now";
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    const parts = [];
+    if (hrs) parts.push(`${hrs}h`);
+    if (mins) parts.push(`${mins}m`);
+    parts.push(`${secs}s`);
+    return parts.join(" ");
+  }
+
+  function updateRemainingCells() {
+    document.querySelectorAll("[data-remaining]").forEach((cell) => {
+      const remaining = parseInt(cell.getAttribute("data-remaining"), 10) || 0;
+      cell.textContent = formatRemaining(remaining);
+    });
+  }
+
+  async function refreshSchedule() {
+    const response = await fetch("/post_schedular_data");
+    if (!response.ok) return;
+    const data = await response.json();
+    if (!data.ok) return;
+
+    statPending.textContent = data.pending_count;
+    statPosted.textContent = data.posted_count;
+    const automation = data.california_automation || {};
+    californiaAutomationInfo.textContent = automation.enabled
+      ? `Active · ${automation.post_count} post(s) daily · ${automation.delay_value} ${automation.delay_unit} between posts · Next scan: ${automation.next_scan_at || "Preparing"}${automation.scan_running ? " · Extracting now" : ""}`
+      : "Stopped";
+    const carsforsale = data.carsforsale_automation || {};
+    carsforsaleAutomationInfo.textContent = carsforsale.enabled ? `Active${carsforsale.scan_running ? " · Extracting now" : ""}` : "Stopped";
+
+    if (!data.items.length) {
+      statNext.textContent = "-";
+      schedularRows.innerHTML = '<tr><td colspan="5" class="empty">No scheduled posts in the queue for this account.</td></tr>';
+    } else {
+      statNext.textContent = data.items[0].run_at;
+
+      const rows = data.items.map((item) => {
+        const action = item.status === "pending"
+          ? `<button class="delete-btn delete-job" data-job="${item.job_id}">Delete</button>`
+          : '<span class="muted">-</span>';
+        const sourceBadge = item.source === "California Auto Finance" ? '<span class="platform-badge">California Auto Finance</span>' : item.source === "CarsForSale" ? '<span class="platform-badge">CarsForSale</span>' : '';
+      return `
+        <tr>
+          <td>${item.platform === "instagram" ? '<span class="platform-badge platform-instagram">Instagram</span>' : sourceBadge + (item.title || item.make || "-")}</td>
+            <td><span class="status-pill status-${item.status}">${item.status}</span></td>
+            <td>${item.run_at}</td>
+            <td data-remaining="${item.remaining_seconds}"></td>
+            <td>${action}</td>
+          </tr>
+        `;
+      }).join("");
+
+      schedularRows.innerHTML = rows;
+    }
+
+    updateRemainingCells();
+  }
+
+  async function deleteJob(jobId) {
+    const response = await fetch("/post_schedular_delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: jobId })
+    });
+    if (!response.ok) return;
+    await refreshSchedule();
+  }
+
+  document.addEventListener("click", (event) => {
+    const btn = event.target.closest(".delete-job");
+    if (!btn) return;
+    deleteJob(btn.getAttribute("data-job"));
+  });
+
+  updateRemainingCells();
+  refreshSchedule();
+  setInterval(refreshSchedule, 5000);
+</script>
+{% endblock %}

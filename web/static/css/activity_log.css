@@ -1,0 +1,147 @@
+.activity-page {
+  max-width: 1200px;
+  margin: 24px auto;
+  padding: 0 18px 30px;
+  color: #1e272e;
+}
+
+.activity-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-end;
+  margin-bottom: 18px;
+}
+
+.activity-head h1 {
+  font-size: 28px;
+  margin-bottom: 6px;
+}
+
+.activity-head p {
+  color: #5f6368;
+  font-size: 14px;
+}
+
+.activity-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.ghost-btn {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #2f3740;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.ghost-btn:hover {
+  background: #f1f5f9;
+  border-color: #b6c2d1;
+}
+
+.activity-table {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 16px 18px 22px;
+  border: 1px solid #e6ebf2;
+  box-shadow: 0 8px 24px rgba(17, 40, 68, 0.08);
+}
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 980px;
+}
+
+thead th {
+  text-align: left;
+  padding: 10px 8px;
+  font-size: 12px;
+  color: #55606b;
+  border-bottom: 1px solid #e5ebf1;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+tbody td {
+  padding: 12px 8px;
+  border-bottom: 1px solid #eef2f6;
+  font-size: 13px;
+  vertical-align: top;
+}
+
+tbody tr:hover {
+  background: #f7fbff;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.status-success {
+  background: #e9fbf0;
+  color: #1a7f4b;
+  border: 1px solid #b7eccf;
+}
+
+.status-failed {
+  background: #fdecea;
+  color: #8f2e2e;
+  border: 1px solid #f3c0bc;
+}
+
+.muted {
+  color: #9aa4ae;
+  font-size: 12px;
+}
+
+.empty {
+  text-align: center;
+  padding: 20px 12px;
+  color: #7a8590;
+}
+
+details summary {
+  cursor: pointer;
+  color: #0b5f75;
+  font-weight: 600;
+}
+
+details pre {
+  margin-top: 8px;
+  padding: 10px;
+  background: #0b1220;
+  color: #e2e8f0;
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  .activity-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .activity-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Auto Reply{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/auto_reply_ui.css') }}">{% endblock %}
+
+{% block content %}
+<main class="auto-reply-container reply-page">
+  <div class="reply-page-head">
+    <div>
+      <h1 class="auto-reply-title">Auto Reply</h1>
+      <p>Set the message the bot should send to new Marketplace buyers.</p>
+    </div>
+    <a href="{{ url_for('web.auto_reply_status') }}" class="reply-page-link">View Reply Status</a>
+  </div>
+  {% if auto_reply_running %}
+  <div class="message-success reply-running-note">
+    Auto Reply Running for this account. Stop it from Auto Reply Status to edit settings.
+  </div>
+  {% endif %}
+  <div class="auto-reply-card reply-setup-card">
+    <div class="reply-card-title">
+      <h2>Reply settings</h2>
+      <p>Enter your automatic reply and Messenger PIN, then save the settings.</p>
+    </div>
+
+    <form method="post" action="/auto_reply">
+      <fieldset {% if auto_reply_running %}disabled{% endif %} style="{% if auto_reply_running %}opacity:0.65;{% endif %}">
+ 
+
+      <!-- Reply Message -->
+      <label class="auto-reply-label">Reply Message</label>
+      <textarea
+        name="reply_message"
+        placeholder="Type your auto-reply message..."
+        rows="4"
+        class="auto-reply-textarea"
+      >{{ request.form.get("reply_message", "") }}</textarea>
+
+      {# <!-- Delay -->
+      <label class="auto-reply-label">Enter Delay</label>
+      <input
+        type="number"
+        name="limit"
+        id="delay_input"
+        placeholder="Delay in seconds (e.g. 5)"
+        min="1"
+        class="auto-reply-select"
+        style="margin-top:10px;"
+      > #}
+
+      <!-- Messenger PIN -->
+      <label class="auto-reply-label">Messenger PIN</label>
+      <div class="password-input-wrap">
+        <input
+          type="password"
+          name="messenger_pin"
+          id="messenger_pin_input"
+          placeholder="Enter Messenger PIN"
+          class="auto-reply-select"
+          autocomplete="off"
+          required
+        >
+        <button class="password-toggle" type="button" aria-label="Show Messenger PIN" aria-pressed="false" data-password-toggle="messenger_pin_input">
+          <svg class="password-eye-show" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.7"></circle></svg>
+          <svg class="password-eye-hide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"></path><path d="M10.6 6.1A9.9 9.9 0 0 1 12 6c6 0 9.5 6 9.5 6a16 16 0 0 1-2.1 2.8M6.2 6.2C3.8 8 2.5 12 2.5 12s3.5 6 9.5 6a9.8 9.8 0 0 0 3.2-.5M9.9 9.9a3 3 0 0 0 4.2 4.2"></path></svg>
+        </button>
+      </div>
+
+      <!-- Confirmation -->
+      <label class="auto-reply-confirm">
+        <input type="checkbox" required>
+        I confirm these auto-replies are correct
+      </label>
+
+      <button type="submit" class="auto-reply-btn">
+        Save and Start Auto Reply
+      </button>
+      </fieldset>
+
+    </form>
+  </div>
+
+ </main>
+{% endblock %}

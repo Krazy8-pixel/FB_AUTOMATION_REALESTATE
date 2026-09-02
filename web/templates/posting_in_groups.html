@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block title %}Posting in Groups{% endblock %}
+
+{% block extra_css %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/posting_in_groups.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="group-posting-page">
+  <div class="gp-shell">
+    <header class="gp-header">
+      <div class="gp-header-text">
+        <span class="gp-eyebrow">Group Posting</span>
+        <h1>Post once, share everywhere</h1>
+        <p>Upload your images, add the message, and schedule the delay between group posts.</p>
+      </div>
+      <div class="gp-account-card">
+        <span class="gp-account-label">Active account</span>
+        <div class="gp-account-value">{{ active_account or "No active account selected" }}</div>
+      </div>
+    </header>
+
+    <form class="gp-card" method="POST" action="/posting_in_groups" enctype="multipart/form-data">
+      <div class="gp-card-head">
+        <div>
+          <h2>Create a group post</h2>
+          <p>Each link will be processed in order with your selected delay.</p>
+        </div>
+        <div class="gp-card-chip">Up to 10 photos</div>
+      </div>
+
+      <div class="gp-form-grid">
+        <div class="gp-block">
+          <label for="description" class="gp-label">Description</label>
+          <textarea
+            id="description"
+            name="description"
+            rows="7"
+            class="gp-control gp-textarea"
+            placeholder="Write your post description..."
+            required
+          >{{ request.form.get('description', '') }}</textarea>
+          <div class="gp-help">Keep it clear and direct. This will be used for every group.</div>
+        </div>
+
+        <div class="gp-block">
+          <label for="group_links" class="gp-label">Group links</label>
+          <textarea
+            id="group_links"
+            name="group_links"
+            rows="7"
+            class="gp-control gp-textarea gp-links"
+            placeholder="https://facebook.com/groups/...\nhttps://facebook.com/groups/..."
+            required
+          >{{ request.form.get('group_links', '') }}</textarea>
+          <div class="gp-help">One link per line. Blank lines are ignored.</div>
+        </div>
+
+        <div class="gp-block gp-block-full">
+          <div class="gp-block-head">
+            <div>
+              <h3>Images</h3>
+              <p>Pick up to 10 images from your computer.</p>
+            </div>
+            <div class="gp-block-note">First image is required</div>
+          </div>
+          <div class="gp-image-grid">
+            {% for i in range(1, 11) %}
+            <div class="gp-image-slot">
+              <input
+                id="image_slot_{{ i }}"
+                type="file"
+                name="images"
+                accept="image/*"
+                class="gp-upload"
+                data-slot="{{ i }}"
+                {% if i == 1 %}required{% endif %}
+              >
+              <label for="image_slot_{{ i }}" class="gp-upload-label" data-slot="{{ i }}">
+                <span class="gp-upload-plus">+</span>
+                <span class="gp-upload-text">Photo {{ i }}</span>
+              </label>
+              <div class="gp-file-name" id="image_slot_name_{{ i }}">No file chosen</div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="gp-block gp-block-full">
+          <div class="gp-delay">
+            <div class="gp-field">
+              <label for="delay_unit" class="gp-label">Delay unit</label>
+              <select id="delay_unit" name="delay_unit" class="gp-control" required>
+                <option value="">Select unit</option>
+                <option value="seconds" {% if request.form.get('delay_unit') == 'seconds' %}selected{% endif %}>Seconds</option>
+                <option value="minutes" {% if request.form.get('delay_unit') == 'minutes' %}selected{% endif %}>Minutes</option>
+                <option value="hours" {% if request.form.get('delay_unit') == 'hours' %}selected{% endif %}>Hours</option>
+              </select>
+            </div>
+            <div class="gp-field">
+              <label for="delay_value" class="gp-label">Delay value</label>
+              <input
+                id="delay_value"
+                type="number"
+                name="delay_value"
+                class="gp-control"
+                min="1"
+                step="1"
+                required
+                value="{{ request.form.get('delay_value', '') }}"
+              >
+            </div>
+          </div>
+          <div class="gp-help">Example: 2 minutes between posts.</div>
+        </div>
+      </div>
+
+      <div class="gp-actions">
+        <button type="submit" class="gp-btn">Schedule Group Posting</button>
+        <a href="{{ url_for('web.dashboard') }}" class="gp-link">Back to Dashboard</a>
+      </div>
+    </form>
+  </div>
+</section>
+
+<script>
+  (function () {
+    const imageInputs = Array.from(document.querySelectorAll(".gp-upload"));
+    imageInputs.forEach(function (input) {
+      input.addEventListener("change", function () {
+        const slot = this.getAttribute("data-slot");
+        const nameBox = document.getElementById("image_slot_name_" + slot);
+        const label = document.querySelector(".gp-upload-label[data-slot='" + slot + "']");
+        if (!nameBox) return;
+        const file = this.files && this.files[0] ? this.files[0] : null;
+        nameBox.textContent = file ? file.name : "No file chosen";
+        if (label) {
+          label.classList.toggle("is-filled", !!file);
+        }
+      });
+    });
+
+    const unitInput = document.getElementById("delay_unit");
+    const valueInput = document.getElementById("delay_value");
+
+    function applyRange() {
+      if (!unitInput || !valueInput) return;
+      const unit = unitInput.value;
+      if (unit === "hours") {
+        valueInput.min = "1";
+        valueInput.placeholder = ">= 1";
+      } else if (unit === "minutes") {
+        valueInput.min = "1";
+        valueInput.placeholder = ">= 1";
+      } else if (unit === "seconds") {
+        valueInput.min = "1";
+        valueInput.placeholder = ">= 1";
+      } else {
+        valueInput.min = "1";
+        valueInput.placeholder = "";
+      }
+    }
+
+    if (unitInput) {
+      unitInput.addEventListener("change", applyRange);
+      applyRange();
+    }
+  })();
+</script>
+{% endblock %}

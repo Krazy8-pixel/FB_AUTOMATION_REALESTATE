@@ -1,0 +1,15 @@
+flask
+selenium
+beautifulsoup4
+apscheduler
+requests
+python-dotenv
+pyinstaller
+pandas
+openpyxl
+Pillow
+waitress
+google-genai
+pyautogui
+ 
+ 

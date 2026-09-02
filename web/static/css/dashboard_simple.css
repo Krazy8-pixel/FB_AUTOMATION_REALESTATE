@@ -1,0 +1,25 @@
+.simple-dashboard { width:min(1120px,100%); margin:0 auto; color:#252525; }
+.simple-dashboard-head { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; margin-bottom:22px; padding-bottom:18px; border-bottom:2px solid #0b3d91; }
+.simple-dashboard-head h1 { margin:0 0 5px; color:#0b3d91; font-size:clamp(27px,3vw,36px); }
+.simple-dashboard-head p { margin:0; color:#555; font-size:14px; }
+.simple-dashboard-account { padding:9px 12px; border:1px solid #d0d0d0; border-radius:7px; background:#fff; color:#555; font-size:12px; }
+.simple-dashboard-account strong { color:#0b3d91; }
+.simple-dashboard-groups { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; align-items:start; }
+.simple-dashboard-section { overflow:hidden; border:1px solid #d0d0d0; border-radius:10px; background:#fff; }
+.simple-section-head { display:flex; align-items:center; justify-content:space-between; gap:15px; padding:15px 17px; border-bottom:1px solid #d0d0d0; }
+.simple-section-head h2 { margin:0; color:#0b3d91; font-size:17px; }
+.simple-section-head span { color:#777; font-size:11px; font-weight:700; }
+.simple-feature-list { display:flex; flex-direction:column; }
+.simple-feature-list a { display:flex; align-items:center; justify-content:space-between; gap:18px; min-height:75px; padding:14px 17px; border-bottom:1px solid #e6e6e6; color:#252525; text-decoration:none; transition:background-color .15s ease; }
+.simple-feature-list a:last-child { border-bottom:0; }
+.simple-feature-list a:hover,.simple-feature-list a:focus-visible { background:#f2f2f2; outline:none; }
+.simple-feature-list a > span { display:flex; min-width:0; flex-direction:column; gap:4px; }
+.simple-feature-list strong { color:#0b3d91; font-size:14px; }
+.simple-feature-list small { color:#555; font-size:12px; line-height:1.45; }
+.simple-feature-list b { flex:0 0 auto; padding:7px 11px; border:1px solid #0b3d91; border-radius:7px; background:#fff; color:#0b3d91; font-size:11px; line-height:1; text-transform:uppercase; transition:background-color .15s ease,color .15s ease,border-color .15s ease; }
+.simple-feature-list a:hover b,.simple-feature-list a:focus-visible b { border-color:#0b3d91; background:#0b3d91; color:#fff; }
+@media (max-width:850px) { .simple-dashboard-groups { grid-template-columns:1fr; } }
+@media (max-width:560px) {
+  .simple-dashboard-head { align-items:flex-start; flex-direction:column; }
+  .simple-feature-list a { align-items:flex-start; }
+}

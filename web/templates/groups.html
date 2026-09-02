@@ -1,0 +1,550 @@
+{% extends "base.html" %}
+
+{% block title %}Groups{% endblock %}
+
+{% block extra_css %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/groups.css') }}">
+{% endblock %}
+
+{% block content %}
+{% set import_running = import_status and import_status.get('running') %}
+  <div class="groups-page">
+    <div class="groups-header">
+      <div class="groups-title">
+        <h1>Facebook Groups</h1>
+        <p>Import and manage the groups for the active Facebook account.</p>
+        {% if active_account %}
+          <p class="groups-active">Active account: <strong>{{ active_account }}</strong></p>
+        {% else %}
+          <p class="groups-active">No active account selected.</p>
+        {% endif %}
+      </div>
+
+      <div class="groups-header-actions">
+        <form
+          id="groups-import-form"
+          method="post"
+          action="{{ url_for('web.groups_import') }}"
+          data-ajax="true"
+          data-overlay-text="Importing groups from Facebook..."
+          data-keep-overlay="true"
+        >
+          <button
+            type="submit"
+            class="groups-btn groups-btn-primary"
+            id="groups-import-btn"
+            {% if import_running %}disabled{% endif %}
+          >Import Buy and Sell Groups</button>
+        </form>
+
+        <form
+          id="groups-add-form"
+          method="post"
+          action="{{ url_for('web.groups_add_by_link') }}"
+          data-ajax="true"
+        >
+          <input
+            type="url"
+            name="group_link"
+            id="groups-add-link"
+            class="groups-input"
+            placeholder="Paste group link"
+            {% if not active_account %}disabled{% endif %}
+            required
+          >
+          <button
+            type="submit"
+            class="groups-btn groups-btn-secondary"
+            id="groups-add-btn"
+            {% if not active_account %}disabled{% endif %}
+          >Add by Link</button>
+        </form>
+
+        <form
+          id="groups-stop-form"
+          method="post"
+          action="{{ url_for('web.groups_import_stop') }}"
+          data-ajax="true"
+          data-overlay-text="Stopping import..."
+        >
+          <button
+            type="submit"
+            class="groups-btn groups-btn-warning"
+            id="groups-stop-btn"
+            {% if not import_running %}disabled{% endif %}
+          >Stop import</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="groups-statusbar">
+      <div class="groups-status" id="groups-status">
+        {% if import_running %}
+          <span class="groups-chip groups-chip-running">Import running</span>
+        {% else %}
+          <span class="groups-chip">Idle</span>
+        {% endif %}
+        <span class="groups-status-text" id="groups-status-text">
+          {% if import_running and import_status and import_status.get('message') %}
+            {{ import_status.get('message') }}
+          {% elif message %}
+            {{ message }}
+          {% elif import_status and import_status.get('message') %}
+            {{ import_status.get('message') }}
+          {% endif %}
+        </span>
+        <div class="groups-status-right">
+          <span class="groups-status-live" id="groups-status-live">
+            {% if import_running %}
+              Importing...
+            {% endif %}
+          </span>
+          <span
+            class="groups-spinner{% if import_running %} is-active{% endif %}"
+            id="groups-status-spinner"
+            aria-hidden="true"
+          ></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="groups-layout">
+      <section class="groups-panel groups-panel-wide">
+        <div class="groups-panel-head">
+          <h2>Groups</h2>
+          <span class="groups-muted" id="groups-count">{{ groups|length }} imported</span>
+        </div>
+
+        <div class="groups-toolbar">
+          <div class="groups-search">
+            <input
+              type="search"
+              id="groups-search"
+              placeholder="Search groups..."
+              {% if not active_account %}disabled{% endif %}
+            >
+          </div>
+          <div class="groups-bulk">
+            <label class="groups-select-all groups-hidden" id="groups-select-all-wrap">
+              <input type="checkbox" id="groups-select-all" {% if not active_account %}disabled{% endif %}>
+              <span>Select all</span>
+            </label>
+            <button
+              type="button"
+              class="groups-btn groups-btn-danger"
+              id="groups-bulk-delete"
+              {% if not active_account %}disabled{% endif %}
+            >Delete</button>
+            <button
+              type="button"
+              class="groups-btn groups-hidden"
+              id="groups-bulk-cancel"
+              {% if not active_account %}disabled{% endif %}
+            >Cancel</button>
+          </div>
+        </div>
+
+        {% if not active_account %}
+          <div class="groups-empty">
+            <h3>No active account</h3>
+            <p>Add or select an account first, then import groups.</p>
+            <a class="groups-btn groups-btn-secondary" href="{{ url_for('web.account_page') }}">Open Accounts</a>
+          </div>
+        {% else %}
+          <div class="groups-empty{% if groups %} groups-hidden{% endif %}" id="groups-empty">
+            <h3 id="groups-empty-title">No groups imported yet</h3>
+            <p id="groups-empty-text">Click "Import from Facebook" to fetch joined groups for <strong>{{ active_account }}</strong>.</p>
+          </div>
+
+          <div class="groups-grid{% if not groups %} groups-hidden{% endif %}" id="groups-grid">
+            {% for g in groups %}
+              <article class="groups-card">
+                <div class="groups-card-head">
+                  <label class="groups-select">
+                    <input type="checkbox" class="groups-check" value="{{ g.id }}">
+                  </label>
+                  <div class="groups-card-title">
+                    <div class="groups-name">{{ g.name }}</div>
+                    <div class="groups-meta">
+                      <span class="groups-pill">
+                        {{ (g.member_count_label or g.member_count or "Unknown") }} members
+                      </span>
+                      {% if g.privacy %}
+                        <span class="groups-pill">{{ g.privacy|title }}</span>
+                      {% endif %}
+                    </div>
+                  </div>
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  (function() {
+    const importForm = document.getElementById("groups-import-form");
+    const stopForm = document.getElementById("groups-stop-form");
+    const importBtn = document.getElementById("groups-import-btn");
+    const stopBtn = document.getElementById("groups-stop-btn");
+    const statusWrap = document.getElementById("groups-status");
+    const statusText = document.getElementById("groups-status-text");
+    const statusLive = document.getElementById("groups-status-live");
+    const statusSpinner = document.getElementById("groups-status-spinner");
+    const grid = document.getElementById("groups-grid");
+    const emptyState = document.getElementById("groups-empty");
+    const countEl = document.getElementById("groups-count");
+    const emptyTitle = document.getElementById("groups-empty-title");
+    const emptyText = document.getElementById("groups-empty-text");
+    const searchInput = document.getElementById("groups-search");
+    const bulkDeleteBtn = document.getElementById("groups-bulk-delete");
+    const bulkCancelBtn = document.getElementById("groups-bulk-cancel");
+    const selectAllWrap = document.getElementById("groups-select-all-wrap");
+    const selectAllInput = document.getElementById("groups-select-all");
+    const overlay = document.getElementById("loading-overlay");
+    const overlayText = document.getElementById("loading-text");
+
+    let pollTimer = null;
+    let selectionMode = false;
+    let activeBulkAction = null;
+    let searchQuery = "";
+    const initialGroups = {{ groups|tojson }};
+    let lastGroups = Array.isArray(initialGroups) ? initialGroups : [];
+    const selectedIds = new Set();
+    let currentMode = "idle";
+    let anyRunning = false;
+
+    function showOverlay(text) {
+      if (!overlay) return;
+      overlay.style.display = "flex";
+      if (overlayText) {
+        overlayText.textContent = text || "";
+        overlayText.style.display = text ? "block" : "none";
+      }
+    }
+
+    function hideOverlay() {
+      if (!overlay) return;
+      overlay.style.display = "none";
+    }
+
+    function setStatus(running, message, stopRequested, mode) {
+      currentMode = mode || "idle";
+      anyRunning = !!running;
+      if (!statusWrap) return;
+      const chip = statusWrap.querySelector(".groups-chip");
+      if (chip) {
+        chip.classList.toggle("groups-chip-running", !!running);
+        if (running) {
+          chip.textContent = "Import running";
+        } else {
+          chip.textContent = "Idle";
+        }
+      }
+      if (statusText) statusText.textContent = message || "";
+      if (importBtn) importBtn.disabled = !!running;
+      if (stopBtn) stopBtn.disabled = !(running && currentMode === "import") || !!stopRequested;
+      if (statusSpinner) statusSpinner.classList.toggle("is-active", !!running);
+      if (statusLive) {
+        if (running) {
+          statusLive.textContent = "Importing...";
+        } else {
+          statusLive.textContent = "";
+        }
+      }
+      if (bulkDeleteBtn) bulkDeleteBtn.disabled = !!running;
+      updateSelectionUI();
+    }
+
+    function setStatusMessage(message) {
+      if (statusText) statusText.textContent = message || "";
+    }
+
+    function updateSelectionUI() {
+      if (grid) grid.classList.toggle("is-selecting", selectionMode);
+      if (selectAllWrap) selectAllWrap.classList.toggle("groups-hidden", !selectionMode);
+      if (bulkCancelBtn) bulkCancelBtn.classList.toggle("groups-hidden", !selectionMode);
+      if (bulkDeleteBtn) {
+        bulkDeleteBtn.classList.toggle("is-active", selectionMode && activeBulkAction === "delete");
+        bulkDeleteBtn.textContent = selectionMode && activeBulkAction === "delete" ? "Confirm delete" : "Delete";
+      }
+      if (!selectionMode) {
+        if (selectAllInput) {
+          selectAllInput.checked = false;
+          selectAllInput.indeterminate = false;
+        }
+      }
+      if (bulkCancelBtn) bulkCancelBtn.textContent = "Cancel";
+    }
+
+    function setSelectionMode(on, action) {
+      selectionMode = !!on;
+      activeBulkAction = on ? action : null;
+      if (!selectionMode) {
+        selectedIds.clear();
+      }
+      updateSelectionUI();
+      renderGroups(lastGroups);
+    }
+
+    function updateSelectAllState() {
+      if (!selectAllInput || !grid) return;
+      const boxes = Array.from(grid.querySelectorAll(".groups-check"));
+      const checkedCount = boxes.filter((b) => b.checked).length;
+      selectAllInput.checked = boxes.length > 0 && checkedCount === boxes.length;
+      selectAllInput.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+    }
+
+    function renderGroups(groups) {
+      const safe = Array.isArray(groups) ? groups : [];
+      lastGroups = safe;
+      if (countEl) countEl.textContent = safe.length + " imported";
+      if (!grid) return;
+
+      const query = searchQuery.trim().toLowerCase();
+      const filtered = query
+        ? safe.filter((g) => String((g && g.name) || "").toLowerCase().includes(query))
+        : safe;
+
+      if (!filtered.length) {
+        if (emptyState) emptyState.classList.remove("groups-hidden");
+        grid.classList.add("groups-hidden");
+        grid.innerHTML = "";
+        if (emptyTitle && emptyText) {
+          if (query) {
+            emptyTitle.textContent = "No matching groups";
+            emptyText.textContent = "Try a different search term.";
+          } else {
+            emptyTitle.textContent = "No groups imported yet";
+            emptyText.textContent = "Click \"Import from Facebook\" to fetch joined groups for the active account.";
+          }
+        }
+        return;
+      }
+
+      if (emptyState) emptyState.classList.add("groups-hidden");
+      grid.classList.remove("groups-hidden");
+      grid.innerHTML = filtered.map(function(g) {
+        const name = (g && g.name) ? String(g.name) : "Unnamed group";
+        const members = (g && (g.member_count_label || g.member_count)) ? String(g.member_count_label || g.member_count) : "Unknown";
+        const privacy = (g && g.privacy) ? String(g.privacy) : "";
+        const id = (g && g.id) ? String(g.id) : "";
+        const checked = selectedIds.has(id) ? "checked" : "";
+        return `
+          <article class="groups-card">
+            <div class="groups-card-head">
+              <label class="groups-select">
+                <input type="checkbox" class="groups-check" value="${escapeAttr(id)}" ${checked}>
+              </label>
+              <div class="groups-card-title">
+                <div class="groups-name">${escapeHtml(name)}</div>
+                <div class="groups-meta">
+                  <span class="groups-pill">${escapeHtml(members)} members</span>
+                  ${privacy ? `<span class="groups-pill">${escapeHtml(capitalize(privacy))}</span>` : ""}
+                </div>
+              </div>
+            </div>
+          </article>
+        `;
+      }).join("");
+
+      document.querySelectorAll("#groups-grid .groups-check").forEach(function(box) {
+        box.addEventListener("change", function() {
+          const id = box.value;
+          if (box.checked) {
+            selectedIds.add(id);
+          } else {
+            selectedIds.delete(id);
+          }
+          updateSelectAllState();
+        });
+      });
+
+      updateSelectAllState();
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function(ch) {
+        return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[ch];
+      });
+    }
+    function escapeAttr(s) {
+      return escapeHtml(s).replace(/`/g, "&#96;");
+    }
+    function capitalize(s) {
+      const t = String(s || "");
+      return t ? t.charAt(0).toUpperCase() + t.slice(1) : "";
+    }
+
+    async function pollOnce() {
+      try {
+        const res = await fetch("{{ url_for('web.groups_data') }}", { credentials: "same-origin" });
+        const data = await res.json();
+        if (data && data.status) setStatus(!!data.status.running, data.status.message || "", !!data.status.stop_requested, data.status.mode || "idle");
+        if (data && data.groups) renderGroups(data.groups);
+
+        if (data && data.status && !data.status.running) {
+          stopPolling();
+        }
+      } catch (e) {
+        // keep polling; transient failure
+      }
+    }
+
+    async function runBulkAction(action) {
+      if (anyRunning) {
+        setStatusMessage("Import is running. Stop it before bulk actions.");
+        return;
+      }
+      if (!selectionMode || activeBulkAction !== action) {
+        setSelectionMode(true, action);
+        setStatusMessage("Select groups to delete.");
+        return;
+      }
+
+      if (selectedIds.size === 0) {
+        setStatusMessage("Select at least one group first.");
+        return;
+      }
+
+      const endpoint = "{{ url_for('web.groups_delete') }}";
+
+      const body = new URLSearchParams();
+      selectedIds.forEach(function(id) { body.append("group_id", id); });
+
+      showOverlay("Deleting groups...");
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+          body
+        });
+        const data = await res.json();
+        hideOverlay();
+        if (res.ok && data && data.ok) {
+          setStatusMessage(data.message || "Action completed.");
+          setSelectionMode(false);
+          startPolling();
+        } else {
+          setStatusMessage((data && data.message) ? data.message : "Action failed.");
+        }
+      } catch (err) {
+        hideOverlay();
+        setStatusMessage("Action failed.");
+      }
+    }
+
+    function startPolling() {
+      if (pollTimer) return;
+      pollOnce();
+      pollTimer = setInterval(pollOnce, 2000);
+    }
+
+    function stopPolling() {
+      if (!pollTimer) return;
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    if (importForm) {
+      importForm.addEventListener("submit", async function(e) {
+        e.preventDefault();
+        if (importBtn) importBtn.disabled = true;
+        if (stopBtn) stopBtn.disabled = false;
+        showOverlay("Starting import...");
+        try {
+          const res = await fetch(importForm.action, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "X-Requested-With": "XMLHttpRequest" }
+          });
+          const data = await res.json();
+          hideOverlay();
+          if (res.ok && data && data.ok) {
+            setStatus(true, (data && data.message) ? data.message : "Import started.", false, "import");
+            startPolling();
+          } else {
+            setStatus(false, (data && data.message) ? data.message : "Failed to start import.", false, "idle");
+          }
+        } catch (err) {
+          hideOverlay();
+          setStatus(false, "Failed to start import.", false, "idle");
+        }
+      });
+    }
+
+    if (stopForm) {
+      stopForm.addEventListener("submit", async function(e) {
+        e.preventDefault();
+        if (stopBtn) stopBtn.disabled = true;
+        showOverlay("Stopping import...");
+        try {
+          const res = await fetch(stopForm.action, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "X-Requested-With": "XMLHttpRequest" }
+          });
+          const data = await res.json();
+          hideOverlay();
+          if (res.ok && data && data.ok) {
+            setStatus(true, (data && data.message) ? data.message : "Stop requested.", true, "import");
+            startPolling();
+          } else {
+            setStatus(false, (data && data.message) ? data.message : "Failed to request stop.", false, "idle");
+          }
+        } catch (err) {
+          hideOverlay();
+          if (stopBtn) stopBtn.disabled = false;
+          setStatus(false, "Failed to request stop.", false, "idle");
+        }
+      });
+    }
+
+    if (bulkDeleteBtn) {
+      bulkDeleteBtn.addEventListener("click", function() {
+        runBulkAction("delete");
+      });
+    }
+
+    if (bulkCancelBtn) {
+      bulkCancelBtn.addEventListener("click", async function() {
+        setSelectionMode(false);
+      });
+    }
+
+    if (selectAllInput) {
+      selectAllInput.addEventListener("change", function() {
+        if (!grid) return;
+        const boxes = grid.querySelectorAll(".groups-check");
+        boxes.forEach(function(box) {
+          box.checked = selectAllInput.checked;
+          if (box.checked) {
+            selectedIds.add(box.value);
+          } else {
+            selectedIds.delete(box.value);
+          }
+        });
+        updateSelectAllState();
+      });
+    }
+
+    if (searchInput) {
+      searchInput.addEventListener("input", function() {
+        searchQuery = searchInput.value || "";
+        renderGroups(lastGroups);
+      });
+    }
+
+    renderGroups(lastGroups);
+
+    {% if import_running %}
+      startPolling();
+    {% endif %}
+  })();
+</script>
+{% endblock %}
