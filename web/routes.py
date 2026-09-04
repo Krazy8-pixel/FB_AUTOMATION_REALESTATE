@@ -2,7 +2,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, sessio
 import copy
 import hashlib
 from automation.fb_login import MAX_ACCOUNTS
-from automation.cdp_login import cleanup_orphaned_cdp_accounts, close_cdp_browser, delete_cdp_account, get_cdp_account, list_cdp_accounts, start_cdp_login
+from automation.cdp_login import cleanup_expired_cdp_logins, cleanup_orphaned_cdp_accounts, close_cdp_browser, delete_cdp_account, get_cdp_account, list_cdp_accounts, start_cdp_login
 from automation.remote_login import (
     cleanup_finished_remote_login_sessions,
     create_remote_login_session,
@@ -2152,6 +2152,7 @@ def email_setter():
 @web_bp.route("/account", methods=["GET", "POST"])
 def account_page():
     cleanup_finished_remote_login_sessions()
+    cleanup_expired_cdp_logins()
     cleanup_orphaned_cdp_accounts()
     accounts = get_all_accounts()
     is_phone_client = _is_probable_phone_request(request)
@@ -2205,6 +2206,7 @@ def account_page():
 @web_bp.route("/account/cdp_status", methods=["GET"])
 def account_cdp_status():
     account_title = (request.args.get("account") or "").strip()
+    cleanup_expired_cdp_logins()
     meta = get_cdp_account(account_title)
     if not meta:
         return jsonify({"ok": False, "status": "missing", "message": "Account login was not found."}), 404

@@ -271,7 +271,11 @@ def _capture_when_logged_in(account):
                     _detach(driver)
                     driver = None
             time.sleep(2)
-        _update_account(account, status="failed", message="Login was not completed within 40 minutes. Open login again to retry.")
+        print(f"[CDP Login] {account}: login timed out after 40 minutes; closing Chrome and removing the attempt.", flush=True)
+        if driver is not None:
+            _close_dedicated_browser(driver)
+            driver = None
+        delete_cdp_account(account)
     finally:
         if driver is not None:
             _detach(driver)
@@ -300,7 +304,11 @@ def start_cdp_login(account):
                 "port": _next_port(accounts),
                 "profile_dir": str(_profiles_root() / f"{_safe_slug(account)}_{uuid4().hex[:10]}"),
             }
-        meta.update(status="waiting", message="Complete the Facebook login in the Chrome window.")
+        meta.update(
+            status="waiting",
+            message="Complete the Facebook login in the Chrome window.",
+            login_started_at=int(time.time()),
+        )
         accounts[account] = meta
         _save_config(accounts)
     proc = _launch_profile(meta, background=False)
@@ -396,6 +404,28 @@ def cleanup_orphaned_cdp_accounts():
         if meta.get("status") == "ready" and not os.path.isfile(session_path):
             if delete_cdp_account(account):
                 removed.append(account)
+    return removed
+
+
+def cleanup_expired_cdp_logins():
+    """Close and remove unfinished CDP login attempts older than 40 minutes."""
+    removed = []
+    cutoff = int(time.time()) - LOGIN_WAIT_SECONDS
+    for account, meta in list_cdp_accounts().items():
+        if meta.get("status") == "ready":
+            continue
+        try:
+            started_at = int(meta.get("login_started_at") or 0)
+        except (TypeError, ValueError):
+            started_at = 0
+        # Non-ready records created by older versions have no start time and
+        # are the permanently stuck attempts this cleanup is intended to fix.
+        if (not started_at or started_at <= cutoff) and delete_cdp_account(account):
+            removed.append(account)
+            print(
+                f"[CDP Login] {account}: removed expired unfinished login attempt.",
+                flush=True,
+            )
     return removed
 
 

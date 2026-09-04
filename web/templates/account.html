@@ -145,12 +145,18 @@
         try {
           const response = await fetch("/account/cdp_status?account=" + encodeURIComponent(account), {cache: "no-store"});
           const data = await response.json();
+          if (response.status === 404 || data.status === "missing") {
+            item.remove();
+            return;
+          }
           if (message) message.textContent = data.message || "Waiting for Facebook login.";
           if (data.ready) {
             window.location.reload();
             return;
           }
-          if (data.status !== "failed") window.setTimeout(poll, 2000);
+          // Keep polling failed as well as waiting attempts so the backend's
+          // 40-minute cleanup can remove the notice without a page reload.
+          window.setTimeout(poll, 2000);
         } catch (error) {
           window.setTimeout(poll, 3000);
         }
