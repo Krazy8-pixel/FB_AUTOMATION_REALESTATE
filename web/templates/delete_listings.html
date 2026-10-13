@@ -5,61 +5,61 @@
 
 {% block extra_css %}
 <style>
-  .content .delete-page { display:block; position:relative; width:100%; max-width:none; min-height:520px; box-sizing:border-box; padding:28px 34px; background:#f8fafc; border-radius:14px; justify-items:stretch; }
+  .content .delete-page { display:block; position:relative; width:100%; max-width:none; min-height:520px; box-sizing:border-box; padding:28px 34px; background:#f8fafc; border-radius:0; justify-items:stretch; }
   .delete-header { display:flex; width:100%; box-sizing:border-box; justify-content:space-between; gap:28px; align-items:flex-start; margin:0 0 24px; padding-bottom:20px; border-bottom:1px solid #e2e8f0; }
   .delete-heading { min-width:0; }
   .content .delete-header h1 { margin:0; color:#0f172a; font-size:30px; line-height:1.15; letter-spacing:-.025em; text-align:left; }
   .delete-secondary-row { display:flex; align-items:stretch; justify-content:flex-end; gap:9px; width:100%; margin:-8px 0 22px; }
-  .delete-account { display:flex; flex-direction:column; justify-content:center; gap:3px; width:220px; box-sizing:border-box; margin:0; padding:8px 12px; border:1px solid #d0d0d0; border-radius:8px; background:#fff; color:#0b3d91; }
+  .delete-account { display:flex; flex-direction:column; justify-content:center; gap:3px; width:220px; box-sizing:border-box; margin:0; padding:8px 12px; border:1px solid #d0d0d0; border-radius:0; background:#fff; color:#0b3d91; }
   .delete-account-label { color:#666; font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
   .delete-account-value { display:flex; align-items:center; gap:8px; min-width:0; color:#0b3d91; font-size:13px; font-weight:800; }
   .delete-account-value-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .delete-account-dot { width:7px; height:7px; border-radius:50%; background:#22c55e; box-shadow:0 0 0 3px #dcfce7; }
+  .delete-account-dot { width:7px; height:7px; border-radius:0; background:#22c55e; box-shadow:0 0 0 3px #dcfce7; }
   .delete-actions { display:flex; justify-content:flex-end; gap:9px; flex-wrap:wrap; }
   .delete-header-side { width:220px; flex:0 0 220px; }
   .delete-header-actions { width:100%; flex-direction:column; align-items:stretch; flex-wrap:nowrap; }
   .delete-header-actions form { width:100%; margin:0; }
   .delete-header-actions .delete-btn { width:100%; }
-  .delete-btn { min-height:38px; border:0; border-radius:8px; padding:9px 13px; cursor:pointer; font-size:13px; font-weight:700; transition:background .15s,box-shadow .15s; }
+  .delete-btn { min-height:38px; border:0; border-radius:0; padding:9px 13px; cursor:pointer; font-size:13px; font-weight:700; transition:background .15s,box-shadow .15s; }
   .delete-btn:not(:disabled):hover { transform:translateY(-1px); box-shadow:0 5px 14px rgba(15,23,42,.13); }
   .delete-btn:disabled { opacity:.55; cursor:not-allowed; }
-  .click-refresh-spinner { display:inline-block; width:13px; height:13px; margin-right:7px; vertical-align:-2px; border:2px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:50%; animation:delete-spin .75s linear infinite; }
-  .button-operation-spinner { display:inline-block; width:13px; height:13px; margin-right:7px; vertical-align:-2px; border:2px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:50%; animation:delete-spin .75s linear infinite; }
+  .click-refresh-spinner { display:inline-block; width:13px; height:13px; margin-right:7px; vertical-align:-2px; border:2px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:0; animation:delete-spin .75s linear infinite; }
+  .button-operation-spinner { display:inline-block; width:13px; height:13px; margin-right:7px; vertical-align:-2px; border:2px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:0; animation:delete-spin .75s linear infinite; }
   .delete-primary { background:#2563eb; color:white; }
   .delete-warning { background:#f59e0b; color:#111827; }
   .delete-danger { background:#dc2626; color:white; }
   .delete-muted { background:#e2e8f0; color:#1e293b; }
   .delete-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
   .delete-toolbar-title h2 { margin:0; color:#0f172a; font-size:18px; }
-  .delete-select-wrap { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:8px; background:#fff7ed; color:#9a3412; font-size:13px; font-weight:700; }
+  .delete-select-wrap { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:0; background:#fff7ed; color:#9a3412; font-size:13px; font-weight:700; }
   .delete-toolbar-controls { display:flex; align-items:center; justify-content:flex-end; gap:9px; flex-wrap:wrap; }
-  .delete-clear-storage { width:auto; min-width:150px; min-height:38px; margin:0; border:1px solid #555; border-radius:8px; padding:9px 13px; background:#fff; color:#454545; cursor:pointer; font-size:13px; font-weight:700; }
+  .delete-clear-storage { width:auto; min-width:150px; min-height:38px; margin:0; border:1px solid #555; border-radius:0; padding:9px 13px; background:#fff; color:#454545; cursor:pointer; font-size:13px; font-weight:700; }
   .delete-clear-storage:not(:disabled):hover { border-color:#0b3d91; background:#f2f2f2; color:#0b3d91; }
   .delete-clear-storage:disabled { opacity:.5; cursor:not-allowed; }
   .delete-grid { display:grid; width:calc(100% - 80px); max-width:1080px; margin:0 auto; grid-template-columns:minmax(0,1fr); gap:14px; }
-  .delete-card { display:grid; width:100%; grid-template-columns:132px minmax(0,1fr) 132px; gap:22px; align-items:center; min-height:158px; box-sizing:border-box; padding:13px 22px 13px 13px; border:1px solid #e2e8f0; border-radius:13px; background:#fff; }
+  .delete-card { display:grid; width:100%; grid-template-columns:132px minmax(0,1fr) 132px; gap:22px; align-items:center; min-height:158px; box-sizing:border-box; padding:13px 22px 13px 13px; border:1px solid #e2e8f0; border-radius:0; background:#fff; }
   .content .delete-page .delete-card { transition:background .18s,border-color .18s,box-shadow .18s,transform .18s; }
   .content .delete-page .delete-card:hover,.content .delete-page .delete-card:focus-within { background:#f8faff !important; border-color:var(--app-blue) !important; box-shadow:0 5px 16px rgba(11,61,145,.09) !important; transform:translateY(-2px); }
   .delete-card input { position:absolute; margin:0 0 112px 5px; z-index:2; display:none; }
   .delete-grid.selection-mode .delete-card input { display:block; }
-  .listing-photo { width:132px; height:132px; border-radius:11px; object-fit:cover; background:#e2e8f0; }
+  .listing-photo { width:132px; height:132px; border-radius:0; object-fit:cover; background:#e2e8f0; }
   .listing-photo-placeholder { display:flex; align-items:center; justify-content:center; color:#94a3b8; font-size:11px; text-align:center; }
   .listing-details { min-width:0; }
   .content .delete-page .listing-title,.content .delete-page .listing-title:hover { display:block; margin-bottom:7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--app-text) !important; font-size:17px; font-weight:600; text-decoration:none; }
   .listing-price { display:block; color:#0f172a; font-size:16px; font-weight:700; }
   .listing-meta { display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:11px; color:#64748b; font-size:14px; }
   .listing-actions { display:flex; flex-direction:column; align-items:flex-end; justify-content:center; gap:10px; }
-  .listing-view-btn { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:124px; min-height:40px; border:0; border-radius:8px; background:var(--app-blue); color:#fff; text-decoration:none; font-size:14px; font-weight:700; }
-  .listing-state { font-size:12px; font-weight:600; color:var(--app-blue); background:var(--app-grey-50); border-radius:5px; padding:5px 8px; }
+  .listing-view-btn { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:124px; min-height:40px; border:0; border-radius:0; background:var(--app-blue); color:#fff; text-decoration:none; font-size:14px; font-weight:700; }
+  .listing-state { font-size:12px; font-weight:600; color:var(--app-blue); background:var(--app-grey-50); border-radius:0; padding:5px 8px; }
   .repost-modal-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:18px 0; text-align:left; }
   .repost-modal-fields label { color:#475569; font-size:13px; font-weight:700; }
-  .repost-modal-fields input,.repost-modal-fields select { width:100%; box-sizing:border-box; margin-top:6px; padding:10px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; }
+  .repost-modal-fields input,.repost-modal-fields select { width:100%; box-sizing:border-box; margin-top:6px; padding:10px; border:1px solid #cbd5e1; border-radius:0; background:#fff; }
   .repost-modal-error { min-height:18px; margin:0 0 10px; color:#b91c1c; font-size:13px; }
-  .delete-empty { padding:50px 24px; text-align:center; color:#64748b; border:1px dashed #cbd5e1; border-radius:12px; background:rgba(255,255,255,.75); }
+  .delete-empty { padding:50px 24px; text-align:center; color:#64748b; border:1px dashed #cbd5e1; border-radius:0; background:rgba(255,255,255,.75); }
   .delete-hidden { display:none !important; }
   .delete-operation-overlay { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; box-sizing:border-box; padding:20px; overflow-y:auto; background:rgba(15,23,42,.58); backdrop-filter:blur(2px); }
-  .delete-operation-card { width:min(420px,calc(100% - 32px)); padding:28px; border-radius:14px; background:#fff; box-shadow:0 24px 60px rgba(15,23,42,.3); text-align:center; }
-  .delete-spinner { width:42px; height:42px; margin:0 auto 16px; border:4px solid #dbeafe; border-top-color:#2563eb; border-radius:50%; animation:delete-spin .8s linear infinite; }
+  .delete-operation-card { width:min(420px,calc(100% - 32px)); padding:28px; border-radius:0; background:#fff; box-shadow:0 24px 60px rgba(15,23,42,.3); text-align:center; }
+  .delete-spinner { width:42px; height:42px; margin:0 auto 16px; border:4px solid #dbeafe; border-top-color:#2563eb; border-radius:0; animation:delete-spin .8s linear infinite; }
   .delete-operation-card h2 { margin:0 0 8px; }
   .delete-operation-card p { margin:0 0 18px; color:#64748b; }
   @keyframes delete-spin { to { transform:rotate(360deg); } }
@@ -71,7 +71,7 @@
     .listing-actions { grid-column:1 / -1; }
     .listing-view-btn { width:100%; }
     .delete-operation-overlay { align-items:flex-start; padding:16px 12px; }
-    .delete-operation-card { width:100%; max-width:420px; margin:auto 0; padding:22px 16px; border-radius:12px; }
+    .delete-operation-card { width:100%; max-width:420px; margin:auto 0; padding:22px 16px; border-radius:0; }
     .repost-modal-fields { grid-template-columns:1fr; gap:14px; margin:16px 0; }
     .repost-modal-fields input,.repost-modal-fields select { min-height:46px; font-size:16px; }
     #repost-delay-modal .delete-actions { display:grid; width:100%; grid-template-columns:1fr; gap:10px; }
@@ -127,7 +127,7 @@
       {% else %}<span class="listing-photo listing-photo-placeholder">No image</span>{% endif %}
       <span class="listing-details">
         <a class="listing-title" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">{{ listing.year }} {{ listing.make }} {{ listing.model }}</a>
-        <span class="listing-price">{{ listing.price or "Price unavailable" }}</span>
+        <span class="listing-price">{{ (listing.details or {}).get('price') or listing.price or "Price unavailable" }}</span>
         <span class="listing-meta">
           <span>{{ listing.clicks|default(0, true) }} clicks</span>
           <span>{{ ('Listed on ' ~ listing.listed_date) if listing.listed_date else 'Date unavailable' }}</span>
@@ -209,7 +209,7 @@
     }
     grid.innerHTML = items.map(item => {
       const title = escapeHtml([item.year,item.make,item.model].filter(Boolean).join(' '));
-      const price = escapeHtml(item.price || 'Price unavailable');
+      const price = escapeHtml((item.details || {}).price || item.price || 'Price unavailable');
       const date = escapeHtml(item.listed_date ? `Listed on ${item.listed_date}` : 'Date unavailable');
       const clicks = Number.isFinite(Number(item.clicks)) ? Number(item.clicks) : 0;
       const clickLabel = item.clicks_confirmed === false

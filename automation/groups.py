@@ -1,4 +1,5 @@
 import json
+from automation.task_control import cancellable, cancellable_sleep
 import os
 import pickle
 import random
@@ -265,6 +266,7 @@ def _extract_group_page_info(driver, fallback_name: str = "", fallback_link: str
     return result
 
 
+@cancellable
 def import_groups_from_facebook(
     account_email: str,
     progress_callback=None,
@@ -324,7 +326,7 @@ def import_groups_from_facebook(
         end = time.time() + float(seconds or 0)
         while time.time() < end:
             _check_stop()
-            time.sleep(0.2)
+            cancellable_sleep(0.2)
 
     def _is_base_group_link(link: str) -> bool:
         url = _normalize_group_link(link)
@@ -340,7 +342,7 @@ def import_groups_from_facebook(
         _check_stop()
         _progress({"event": "status", "message": "Opening Facebook..."})
         driver.get("https://www.facebook.com/")
-        time.sleep(random.uniform(0.6, 1.0))
+        cancellable_sleep(random.uniform(0.6, 1.0))
 
         for cookie in cookies:
             _check_stop()
@@ -353,7 +355,7 @@ def import_groups_from_facebook(
 
         _check_stop()
         driver.refresh()
-        time.sleep(random.uniform(0.6, 1.0))
+        cancellable_sleep(random.uniform(0.6, 1.0))
 
         joins_url = "https://www.facebook.com/groups/joins"
         _progress({"event": "status", "message": "Loading joined groups..."})
@@ -521,6 +523,7 @@ def import_groups_from_facebook(
         _cleanup()
 
 
+@cancellable
 def add_buy_sell_group_by_link(
     account_email: str,
     group_link: str,
@@ -568,7 +571,7 @@ def add_buy_sell_group_by_link(
 
     try:
         driver.get("https://www.facebook.com/")
-        time.sleep(random.uniform(0.6, 1.0))
+        cancellable_sleep(random.uniform(0.6, 1.0))
 
         for cookie in cookies:
             if isinstance(cookie, dict) and "sameSite" not in cookie:
@@ -579,10 +582,10 @@ def add_buy_sell_group_by_link(
                 continue
 
         driver.refresh()
-        time.sleep(random.uniform(0.6, 1.0))
+        cancellable_sleep(random.uniform(0.6, 1.0))
 
         driver.get(link)
-        time.sleep(random.uniform(0.6, 0.9))
+        cancellable_sleep(random.uniform(0.6, 0.9))
 
         page_info = _extract_group_page_info(driver, fallback_link=link)
         header_name = page_info.get("name") or ""
@@ -627,6 +630,7 @@ def add_buy_sell_group_by_link(
     finally:
         _cleanup()
 
+@cancellable
 def post_anonymous_group_posts(
     account_email: str,
     group_links: list[str],
@@ -721,7 +725,7 @@ def post_anonymous_group_posts(
         except Exception:
             pass
         file_input.send_keys("\n".join(upload_paths))
-        time.sleep(2)
+        cancellable_sleep(2)
 
     def _turn_off_anonymous_toggle():
         try:
@@ -761,14 +765,14 @@ def post_anonymous_group_posts(
                     toggle.click()
                 except Exception:
                     return
-            time.sleep(0.6)
+            cancellable_sleep(0.6)
 
     results = []
     posted = 0
 
     try:
         driver.get("https://www.facebook.com/")
-        time.sleep(random.uniform(0.6, 1.0))
+        cancellable_sleep(random.uniform(0.6, 1.0))
 
         for cookie in cookies:
             if isinstance(cookie, dict) and "sameSite" not in cookie:
@@ -779,7 +783,7 @@ def post_anonymous_group_posts(
                 continue
 
         driver.refresh()
-        time.sleep(random.uniform(0.8, 1.2))
+        cancellable_sleep(random.uniform(0.8, 1.2))
 
         upload_paths = []
         for p in image_paths or []:
@@ -835,7 +839,7 @@ def post_anonymous_group_posts(
                 )
                 submit_btn.click()
 
-                time.sleep(10)
+                cancellable_sleep(10)
                 posted += 1
                 results.append({"link": link, "ok": True})
                 _log(f"[GroupPosting] Posted to group: {link}")
@@ -844,7 +848,7 @@ def post_anonymous_group_posts(
                 _log(f"[GroupPosting] Failed for {link}: {exc}")
 
             if index < len(links) and delay_seconds and delay_seconds > 0:
-                time.sleep(float(delay_seconds))
+                cancellable_sleep(float(delay_seconds))
 
         return {
             "ok": posted > 0,

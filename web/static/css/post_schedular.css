@@ -27,7 +27,7 @@
   background: linear-gradient(135deg, #f4fbff, #eaf6ff);
   border: 1px solid #cfe9f6;
   padding: 12px 16px;
-  border-radius: 10px;
+  border-radius: 0;
   text-align: right;
   min-width: 220px;
 }
@@ -56,7 +56,7 @@
 
 .stat-card {
   background: #ffffff;
-  border-radius: 12px;
+  border-radius: 0;
   padding: 18px;
   border: 1px solid #e6ebf2;
   box-shadow: 0 8px 20px rgba(17, 40, 68, 0.08);
@@ -81,7 +81,7 @@
 
 .schedular-table {
   background: #ffffff;
-  border-radius: 14px;
+  border-radius: 0;
   padding: 18px 20px 22px;
   border: 1px solid #e6ebf2;
   box-shadow: 0 8px 24px rgba(17, 40, 68, 0.08);
@@ -136,7 +136,7 @@ tbody tr:hover {
   display: inline-flex;
   align-items: center;
   padding: 4px 10px;
-  border-radius: 999px;
+  border-radius: 0;
   font-size: 12px;
   font-weight: 700;
   text-transform: capitalize;
@@ -147,7 +147,7 @@ tbody tr:hover {
   align-items: center;
   margin-right: 6px;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: 0;
   font-size: 11px;
   font-weight: 700;
 }
@@ -186,7 +186,7 @@ tbody tr:hover {
   background: #e74c3c;
   color: #fff;
   border: none;
-  border-radius: 8px;
+  border-radius: 0;
   padding: 6px 12px;
   font-size: 12px;
   font-weight: 600;

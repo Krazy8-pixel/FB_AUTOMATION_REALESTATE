@@ -156,6 +156,12 @@ def _looks_like_driver_mismatch(exc):
 
 
 def build_chrome_driver(options):
+    from automation.task_control import check_cancelled, guard_driver
+    check_cancelled()
+    return guard_driver(_build_chrome_driver(options))
+
+
+def _build_chrome_driver(options):
     """
     Create a Chrome WebDriver with a resilient driver selection strategy:
 

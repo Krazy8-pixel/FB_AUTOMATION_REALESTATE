@@ -1,6 +1,5 @@
-﻿ 
- 
 import base64
+from automation.task_control import cancellable, cancellable_sleep
 import builtins as _builtins
 import requests
 import sys
@@ -999,7 +998,7 @@ def _select_groups_for_listing(driver, group_names):
                             driver.execute_script("arguments[0].click();", checkbox)
                         except Exception:
                             pass
-                    time.sleep(0.2)
+                    cancellable_sleep(0.2)
                 matched.add(target)
                 break
 
@@ -1016,7 +1015,7 @@ def _select_groups_for_listing(driver, group_names):
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             except Exception:
                 pass
-        time.sleep(0.6)
+        cancellable_sleep(0.6)
 
     return list(matched)
 
@@ -1039,6 +1038,7 @@ def _marketplace_publish_confirmed(driver):
     """))
 
 
+@cancellable
 def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
     print("post_to_fb_marketplace : Starting Facebook Marketplace posting process...")
     indicator=False
@@ -1053,7 +1053,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             f"[AutoListing] Waiting {delay_seconds} seconds after {field_name}...",
             flush=True,
         )
-        time.sleep(delay_seconds)
+        cancellable_sleep(delay_seconds)
 
     def debug_field_failure(field_name, error):
         print(f"[AutoListing][FIELD FAILED] {field_name}: {error}", flush=True)
@@ -1290,7 +1290,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 )
                 if duplicate_removed:
                     print(f"Removed duplicate preview image(s): {duplicate_removed}")
-                    time.sleep(1)
+                    cancellable_sleep(1)
         except Exception:
             pass
 
@@ -1546,11 +1546,11 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 year_combo.click()
             except Exception:
                 driver.execute_script("arguments[0].click();", year_combo)
-            time.sleep(0.3)
+            cancellable_sleep(0.3)
             year_combo.send_keys(year_value)
             year_combo.send_keys(Keys.ENTER)
             debug_field_success("Year", year_value)
-        time.sleep(1)
+        cancellable_sleep(1)
 
         active_field = "Make"
         make_value = _norm_text(data.get("make"))
@@ -1585,7 +1585,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                         make_combo.click()
                     except Exception:
                         driver.execute_script("arguments[0].click();", make_combo)
-                    time.sleep(0.3)
+                    cancellable_sleep(0.3)
                     try:
                         driver.execute_script("arguments[0].focus();", make_combo)
                     except Exception:
@@ -1609,7 +1609,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                         try:
                             actions.move_to_element(make_combo).click().send_keys(make_value).send_keys(Keys.ENTER).perform()
                             typed = True
-                            time.sleep(0.8)
+                            cancellable_sleep(0.8)
                         except Exception:
                             typed = False
 
@@ -1630,7 +1630,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                             driver.execute_script("arguments[0].click();", make_option)
                         debug_field_success("Make (combobox option fallback)", make_value)
                         make_selected = True
-                    time.sleep(1)
+                    cancellable_sleep(1)
                 except Exception as exc:
                     debug_field_failure("Make fallback", f"value={make_value!r}; error={exc}")
             if not make_selected:
@@ -1763,9 +1763,9 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         try:
             active_field = "Description"
             driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1.5)
+            cancellable_sleep(1.5)
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1.5)
+            cancellable_sleep(1.5)
         except Exception:
             pass
 
@@ -1828,7 +1828,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                             description_input,
                             description_value,
                         )
-                        time.sleep(0.2)
+                        cancellable_sleep(0.2)
                     except Exception:
                         pass
 
@@ -1857,7 +1857,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         except Exception as exc:
             debug_field_failure("Description", exc)
 
-        time.sleep(1)
+        cancellable_sleep(1)
         try:
             # Next step (click if present)
             try:
@@ -1871,7 +1871,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 except Exception:
                     driver.execute_script("arguments[0].click();", next_btn)
                 print("Clicked Next")
-                time.sleep(2)
+                cancellable_sleep(2)
             except Exception:
                 print("Next button not found; proceeding to Publish.")
 
@@ -1949,7 +1949,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             debug_field_failure("Publish", exc)
             indicator = False
 
-        time.sleep(1)
+        cancellable_sleep(1)
     except Exception as e:
         debug_field_failure(active_field, e)
         print(f"❌ Vehicle details step failed: {e}", flush=True)
@@ -1961,7 +1961,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         posting_error = RuntimeError(f'{active_field}: {e}')
     finally:
         close_posting_tab(driver, posting_handle, original_handles, posting_lock)
-        time.sleep(1)
+        cancellable_sleep(1)
           
        
          

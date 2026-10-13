@@ -45,13 +45,19 @@ def read_edit_form_snapshot(driver):
                 [...el.querySelectorAll('span')].some(span => norm(span.textContent) === target));
             const controlLabel = el => el.getAttribute('aria-label') || (el.getAttribute('aria-labelledby') || '').split(/\\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ') || [...(el.labels || [])].map(label => label.textContent).join(' ');
             let control = controls.find(el => norm(controlLabel(el)) === target);
+            if (!control && key === 'clean_title') {
+                control = controls.find(el => el.type === 'checkbox' &&
+                    norm(el.closest('label')?.textContent || el.parentElement?.parentElement?.textContent).includes(target));
+                if (!control) control = [...root.querySelectorAll('[role="checkbox"]')].find(el =>
+                    norm(controlLabel(el) || el.parentElement?.parentElement?.textContent).includes(target));
+            }
             if (!container && control) container = control.closest('label') || control;
             if (!control && container) control = container.querySelector('input:not([type="hidden"]),textarea,[contenteditable="true"]');
             if (!control && key === 'description') control = root.querySelector('textarea');
             if (!container && control) container = control.closest('label') || control;
             if (!container && !control) { result[key] = {value:'',state:'unavailable'}; continue; }
             let value = '';
-            if (control) value = control.type === 'checkbox' ? (control.checked || control.getAttribute('aria-checked') === 'true' ? 'Yes' : 'No') : (control.value ?? control.innerText ?? '');
+            if (control) value = control.type === 'checkbox' || control.getAttribute('role') === 'checkbox' ? (control.checked || control.getAttribute('aria-checked') === 'true' ? 'Yes' : 'No') : (control.value ?? control.innerText ?? '');
             else {
                 const clone = container.cloneNode(true);
                 for (const span of [...clone.querySelectorAll('span')]) {
@@ -1023,7 +1029,40 @@ def _print_reposting_read_summary(post_data, edit_url=""):
             print(f"[Reposting]   image_{index}={image_url!r}", flush=True)
 
 
-def read_listing_from_manage(account, listing, driver=None):
+def recover_unreadable_fields(driver, post, fallback):
+    """Run one fallback pass, preserving every successful or empty primary field."""
+    states = post.setdefault('field_states', {})
+    protected = {'read', 'empty', 'disabled'}
+    optional = {'exterior_color', 'interior_color'}
+    missing = [key for key in EDIT_FIELDS if states.get(key) not in protected
+               and (not post.get(key) or states.get(key) in {'unavailable', 'unreadable', 'conflict'})]
+    post['field_sources'] = {key: 'primary' for key in EDIT_FIELDS if key not in missing}
+    if not fallback or not any(key not in optional for key in missing):
+        return
+    try:
+        result = fallback(driver)
+        recovered = result['posts'][0]
+        recovered_states = recovered.get('field_states', {})
+        for key in missing:
+            state = recovered_states.get(key, 'unreadable')
+            if state not in {'read', 'empty', 'disabled', 'needs_review'}:
+                continue
+            if state == 'needs_review' and not recovered.get(key):
+                continue
+            post[key] = recovered.get(key, '')
+            states[key] = state
+            post['field_sources'][key] = 'visual_fallback'
+        for key in ('visual_read_report', 'visual_read_requires_review'):
+            if key in recovered:
+                post[key] = recovered[key]
+        post['fallback_warnings'] = result.get('warnings', [])
+    except Exception as exc:
+        # A failed optional recovery must never discard the primary read.
+        post['fallback_error'] = str(exc)
+        print(f'[ListingImport] Visual fallback failed; primary values kept: {exc}', flush=True)
+
+
+def read_listing_from_manage(account, listing, driver=None, field_reader=None, visual_fallback=None):
     """Read one stored listing through Manage Listings -> Edit listing."""
     if not account:
         raise ValueError("Account is required")
@@ -1109,6 +1148,13 @@ def read_listing_from_manage(account, listing, driver=None):
             lambda current: "/marketplace/edit/" in str(current.current_url or "")
             or bool(current.find_elements(By.XPATH, "//*[@aria-label='Price']"))
         )
+        if field_reader is not None:
+            WebDriverWait(driver, 30).until(lambda current: current.execute_script(
+                "return document.readyState === 'complete' && !!document.querySelector('input,textarea');"))
+            result = field_reader(driver)
+            post = result['posts'][0]
+            post['title'] = ' '.join(str(post.get(key) or '').strip() for key in ('year', 'make', 'model')).strip() or listing_name
+            return result
         snapshot = wait_for_edit_form_ready(driver)
         print('[ListingImport] Edit form ready; reading saved vehicle fields on the edit page.', flush=True)
         _scroll_down_page(driver, steps=3)
@@ -1156,6 +1202,10 @@ def read_listing_from_manage(account, listing, driver=None):
             "clean_title": read_value("clean_title", lambda: ''),
         }
         post_data['field_states'] = {key: value.get('state', 'unavailable') for key, value in snapshot.items()}
+        if heading_model:
+            post_data['field_states']['model'] = 'read'
+        if visual_fallback is not None:
+            recover_unreadable_fields(driver, post_data, visual_fallback)
         _print_reposting_read_summary(post_data, edit_url=edit_href)
         post_data["title"] = " ".join(
             str(post_data.get(field) or "").strip()
@@ -1169,6 +1219,16 @@ def read_listing_from_manage(account, listing, driver=None):
             "listing": dict(listing),
             "posts": [post_data],
         }
+    except Exception:
+        if visual_fallback is not None and driver is not None and '/marketplace/edit/' in str(driver.current_url or ''):
+            result = visual_fallback(driver)
+            if not result.get('ok'):
+                raise RuntimeError('Primary and visual listing readers failed; saved details were not replaced.')
+            post = result['posts'][0]
+            post['field_sources'] = {key: 'visual_fallback' for key in EDIT_FIELDS}
+            post['title'] = ' '.join(str(post.get(key) or '').strip() for key in ('year', 'make', 'model')).strip() or listing_name
+            return result
+        raise
     finally:
         if driver and not owns_driver:
             # Return the shared import browser to inventory after each listing,

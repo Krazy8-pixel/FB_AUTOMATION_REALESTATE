@@ -1,5 +1,6 @@
 from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify, send_from_directory
 import copy
+import sys
 from automation.fb_login import MAX_ACCOUNTS
 from automation.cdp_login import cleanup_expired_cdp_logins, cleanup_orphaned_cdp_accounts, close_cdp_browser, delete_cdp_account, get_cdp_account, list_cdp_accounts, start_cdp_login
 from automation.remote_login import (
@@ -29,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 import json
 import threading
+from automation.task_control import cancellable
 from urllib.parse import urlparse
 from uuid import uuid4
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -596,8 +598,9 @@ def _collect_repost_history(account):
         ]
 
 
+@cancellable
 def _run_saved_listing_repost(listing, account, job_id=None):
-    if DESKTOP_MODE and job_id:
+    if job_id:
         with repost_jobs_lock:
             meta = repost_jobs.get(job_id)
             if not meta or meta.get("status") != "pending":
@@ -831,9 +834,10 @@ def _run_delete_job(account, limit, status_filter):
         _mark_delete_job_done(account)
 
 
+@cancellable
 def _post_single_listing(post_data, account, job_id=None):
     account_post_lock = _get_post_lock(account)
-    if DESKTOP_MODE and job_id:
+    if job_id:
         with scheduled_posts_lock:
             meta = scheduled_posts.get(job_id)
             if not meta or meta.get("status") != "pending":
@@ -1276,6 +1280,9 @@ def groups_page():
 
 
 def _start_groups_import_job(account_email: str) -> tuple[bool, str]:
+    if DESKTOP_MODE:
+        from automation.maintenance import pause_groups
+        pause_groups(account_email, False)
     if not account_email:
         return False, "No active account selected."
 
@@ -1330,6 +1337,9 @@ def _start_groups_import_job(account_email: str) -> tuple[bool, str]:
             with groups_jobs_lock:
                 cancel_event = groups_cancel_events.get(account_email)
             import_groups_from_facebook(account_email, progress_callback=_progress, stop_event=cancel_event)
+            if DESKTOP_MODE:
+                from automation.maintenance import record
+                record(account_email, 'groups', True)
             with groups_jobs_lock:
                 job = groups_jobs.get(account_email) or {}
                 job["running"] = False
@@ -1401,6 +1411,10 @@ def groups_import_stop():
         ev = groups_cancel_events.get(active_account)
         if ev is not None:
             ev.set()
+
+    if DESKTOP_MODE:
+        from automation.maintenance import pause_groups
+        pause_groups(active_account)
 
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return jsonify({"ok": True, "message": "Stop requested."})
@@ -1689,6 +1703,51 @@ def reposting_data():
         "items": items_payload,
         "history": _collect_repost_history(active_account),
     })
+
+
+@web_bp.route('/tasks/active')
+def active_browser_tasks():
+    from automation.task_control import active_tasks
+    return jsonify(tasks=active_tasks(get_active_account()))
+
+
+@web_bp.route('/tasks/cancel', methods=['POST'])
+def cancel_browser_task():
+    from automation.task_control import cancel, active_tasks
+    data = request.get_json(silent=True) or {}
+    task = next((item for item in active_tasks(get_active_account()) if item['id'] == str(data.get('id') or '')), None)
+    if not cancel(str(data.get('id') or ''), get_active_account()):
+        return jsonify(ok=False, message='Task has finished or belongs to another account.'), 404
+    if DESKTOP_MODE and task and task['action'] == 'import_groups_from_facebook':
+        from automation.maintenance import pause_groups
+        pause_groups(get_active_account())
+    return jsonify(ok=True, message='Cancellation requested. Completed Facebook actions cannot be undone; review Facebook before retrying.')
+
+
+@web_bp.route('/reposting/cancel', methods=['POST'])
+def cancel_repost():
+    from automation.task_control import cancel_job
+    account = get_active_account()
+    job_id = str((request.get_json(silent=True) or {}).get('job_id') or '')
+    with repost_jobs_lock:
+        meta = repost_jobs.get(job_id)
+        if not account or not meta or meta.get('account') != account:
+            return jsonify(ok=False, message='Repost not found for this account.'), 404
+        if meta.get('status') == 'pending':
+            meta.update(status='cancelled', finished_at=datetime.now())
+            try:
+                scheduler.remove_job(job_id)
+            except Exception:
+                pass
+        elif meta.get('status') in {'reading', 'deleting', 'posting'}:
+            if not cancel_job(job_id, account):
+                return jsonify(ok=False, message='Repost already finished; refresh the page.'), 409
+        else:
+            return jsonify(ok=False, message='Repost is no longer active.'), 409
+    if DESKTOP_MODE:
+        from automation.desktop_state import checkpoint
+        checkpoint()
+    return jsonify(ok=True, message='Cancellation requested. Already completed actions cannot be undone.')
 
 
 @web_bp.route("/reposting_history/clear", methods=["POST"])
@@ -2583,6 +2642,12 @@ def post_schedular_delete():
     if not job_meta or active_account not in {job_meta.get("account"), job_meta.get("source_account")}:
         return jsonify({"ok": False, "message": "Job not found for this account"}), 404
 
+    if job_meta.get('status') == 'posting':
+        from automation.task_control import cancel_job
+        if cancel_job(job_id, job_meta.get('account')):
+            return jsonify(ok=True, message='Cancellation requested. Completed Facebook actions cannot be undone.')
+        return jsonify(ok=False, message='Posting already finished; refresh the schedule.'), 409
+
     cancellable = {'pending', 'waiting'} if job_meta.get('source') == 'Cross posting' else {'pending'}
     if job_meta.get("status") not in cancellable:
         return jsonify({"ok": False, "message": "Only pending jobs can be deleted"}), 400
@@ -2698,6 +2763,7 @@ def _start_listing_import_job(account, automatic=False):
                     progress_callback=_progress,
                     replace_existing=False,
                     only_new=(automatic and not DESKTOP_MODE),
+                    use_visual_reader=not automatic,
                 )
             if stop_event.is_set():
                 raise ListingImportCancelled()
@@ -3027,6 +3093,11 @@ def _save_confirmed_cross_post(meta):
     add_at_top(meta['account'], record)
 
 
+@cancellable
+def _cross_post_payload(payload, account, job_id):
+    return post_to_fb_marketplace(payload, account)
+
+
 def _run_cross_post_batch(job_ids):
     # One global queue also prevents two cross-post batches overlapping.
     with cross_post_queue_lock:
@@ -3052,7 +3123,7 @@ def _run_cross_post_batch(job_ids):
                         checkpoint()
                     if account not in get_all_accounts():
                         raise RuntimeError('Target account is no longer saved.')
-                    if not post_to_fb_marketplace(payload, account):
+                    if not _cross_post_payload(payload, account, job_id):
                         raise RuntimeError('Facebook did not confirm posting.')
                     with scheduled_posts_lock:
                         meta['status'] = 'posted'

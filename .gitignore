@@ -41,6 +41,8 @@ automation/domain_checker_pending.json
 
 # Desktop build artifacts and private release signing material
 .desktop_deps/
+.ocr_runtime/
+.ocr_downloads/
 .release_keys/
 packaging/browser/
 packaging/prerequisites/

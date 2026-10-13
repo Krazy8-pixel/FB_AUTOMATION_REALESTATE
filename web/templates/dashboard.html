@@ -5,11 +5,24 @@
 {% block content %}
 <main class="simple-dashboard">
   <header class="simple-dashboard-head">
-    <div><h1>Dashboard</h1><p>Choose a feature to open it.</p></div>
-    <span class="simple-dashboard-account">Active account: <strong>{{ active_account or "No Account" }}</strong></span>
+    <div><span class="dashboard-eyebrow">Your workspace</span><h1>Ready for your next listing?</h1><p>Create, manage, and schedule your work from one place.</p></div>
+    <a class="simple-dashboard-account" href="{{ url_for('web.account_page') }}">Active account: <strong>{{ active_account or "Choose an account" }}</strong><span>Manage accounts →</span></a>
   </header>
 
-  <div class="simple-dashboard-groups">
+  <section class="dashboard-start" aria-labelledby="dashboard-start-title">
+    <div><span class="dashboard-eyebrow">{% if active_account %}Start here{% else %}Get started{% endif %}</span><h2 id="dashboard-start-title">{% if active_account %}Turn your next vehicle into a listing.{% else %}Connect your Facebook account.{% endif %}</h2><p>{% if active_account %}Add the details yourself or upload an Excel file. Review your saved listings before scheduling the next post.{% else %}Add an account and complete Facebook login, then create your first listing.{% endif %}</p></div>
+    <div class="dashboard-actions"><a class="dashboard-primary" href="{{ url_for('web.auto_listing_page') if active_account else url_for('web.account_page') }}">{% if active_account %}＋ Create a listing{% else %}＋ Add an account{% endif %}</a><a class="dashboard-secondary" href="{{ url_for('web.delete_listings_page') }}">Browse saved listings →</a></div>
+  </section>
+
+  <nav class="dashboard-shortcuts" aria-label="Quick access">
+    <a href="{{ url_for('web.post_schedular') }}"><span class="shortcut-number">01</span><span><strong>Check your schedule</strong><small>See upcoming posts and timings</small></span><b aria-hidden="true">↗</b></a>
+    <a href="{{ url_for('web.account_page') }}"><span class="shortcut-number">02</span><span><strong>{{ accounts|length }} saved account{{ 's' if accounts|length != 1 else '' }}</strong><small>Manage logins and session health</small></span><b aria-hidden="true">↗</b></a>
+    <a href="{{ url_for('web.activity_log_page') }}"><span class="shortcut-number">03</span><span><strong>Review recent activity</strong><small>Check results and resolve errors</small></span><b aria-hidden="true">↗</b></a>
+  </nav>
+
+  <div class="dashboard-tools-head"><div><h2>Explore your tools</h2><p>Find the next step for your workflow.</p></div><label class="dashboard-search"><span>Find a tool</span><input id="dashboard-tool-search" type="search" placeholder="Search listings, groups, help…" autocomplete="off" aria-controls="dashboard-tools"></label></div>
+
+  <div class="simple-dashboard-groups" id="dashboard-tools">
     <section class="simple-dashboard-section">
       <div class="simple-section-head"><h2>Listings</h2><span>3 features</span></div>
       <nav class="simple-feature-list" aria-label="Listing features">
@@ -38,5 +51,29 @@
       </nav>
     </section>
   </div>
+  <p id="dashboard-no-results" class="dashboard-no-results" role="status" hidden>No tools match your search. Try “listings”, “accounts”, or “groups”.</p>
 </main>
+{% endblock %}
+{% block extra_js %}
+<script>
+(() => {
+  const search = document.getElementById('dashboard-tool-search');
+  const sections = [...document.querySelectorAll('.simple-dashboard-section')];
+  search.addEventListener('input', () => {
+    const query = search.value.trim().toLowerCase();
+    let matches = 0;
+    sections.forEach(section => {
+      let visible = 0;
+      section.querySelectorAll('.simple-feature-list a').forEach(link => {
+        const match = link.textContent.toLowerCase().includes(query);
+        link.hidden = !match;
+        if (match) visible++;
+      });
+      section.hidden = !visible;
+      matches += visible;
+    });
+    document.getElementById('dashboard-no-results').hidden = matches > 0;
+  });
+})();
+</script>
 {% endblock %}

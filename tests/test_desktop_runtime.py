@@ -64,12 +64,27 @@ class DesktopRuntimeTests(unittest.TestCase):
         lock.release()
         self.assertFalse(maintenance.busy(routes))
 
+    def test_group_fetch_starts_once_after_success(self):
+        calls = []
+        routes = SimpleNamespace(post_locks_by_account={}, listing_import_jobs={}, listing_click_jobs={},
+            facebook_delete_jobs={}, groups_jobs={}, scheduled_posts={}, repost_jobs={},
+            scheduler=SimpleNamespace(get_jobs=lambda: []), _get_post_lock=lambda account: threading.Lock(),
+            get_all_accounts=lambda: ['account'], _listing_snapshot_is_due=lambda account: False,
+            _start_groups_import_job=lambda account: (calls.append(account) or (True, 'Started')))
+        with tempfile.TemporaryDirectory() as folder, patch.dict('sys.modules', {'web': SimpleNamespace(routes=routes)}), patch.object(desktop_state, 'checkpoint'), patch('automation.desktop_preferences.load', return_value={'background_sync': True}), patch.object(maintenance, 'data_dir', return_value=Path(folder)):
+            maintenance.record('account', 'clicks', True)
+            maintenance.tick()
+            maintenance.record('account', 'groups', True)
+            maintenance.tick()
+        self.assertEqual(calls, ['account'])
+
     def test_two_days_off_runs_overdue_maintenance_once_per_account(self):
         calls = []
         routes = SimpleNamespace(post_locks_by_account={}, listing_import_jobs={}, listing_click_jobs={}, facebook_delete_jobs={}, groups_jobs={}, scheduled_posts={}, repost_jobs={}, scheduler=SimpleNamespace(get_jobs=lambda: []), _get_post_lock=lambda account: threading.Lock(), _listing_snapshot_is_due=lambda account: True, get_all_accounts=lambda: ['first', 'second'])
         routes._start_listing_import_job = lambda account, automatic: (calls.append(('import', account)) or (True, 'Started'))
         routes._start_listing_click_refresh_job = lambda account: (calls.append(('clicks', account)) or (True, 'Started'))
         with tempfile.TemporaryDirectory() as folder, patch.dict('sys.modules', {'web': SimpleNamespace(routes=routes)}), patch.object(desktop_state, 'checkpoint'), patch('automation.desktop_preferences.load', return_value={'background_sync': True}), patch.object(maintenance, 'data_dir', return_value=Path(folder)), patch.object(maintenance.time, 'time', return_value=172800):
+            (Path(folder) / 'maintenance.json').write_text(json.dumps({name: {'groups': {'last_success': 1}} for name in ['first', 'second']}))
             for _ in range(6):
                 maintenance.tick()
         self.assertEqual(calls, [('import', 'first'), ('clicks', 'first'), ('import', 'second'), ('clicks', 'second')])

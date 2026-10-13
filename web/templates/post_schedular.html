@@ -7,6 +7,7 @@
 {% endblock %}
 
 {% block content %}
+{% include '_active_tasks.html' %}
 <div class="schedular-page" data-account="{{ active_account or '' }}">
   <div class="schedular-head">
     <div>
@@ -63,8 +64,8 @@
             <td>{{ item.run_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
             <td data-remaining="{{ item.remaining_seconds }}" data-status="{{ item.status }}"></td>
             <td>
-              {% if item.status in ["pending", "waiting"] %}
-              <button class="delete-btn delete-job" data-job="{{ item.job_id }}">Delete</button>
+              {% if item.status in ["pending", "waiting", "posting"] %}
+              <button class="delete-btn delete-job" data-job="{{ item.job_id }}">Cancel</button>
               {% else %}
               <span class="muted">-</span>
               {% endif %}
@@ -114,6 +115,9 @@
 
   async function refreshSchedule() {
     const response = await fetch("/post_schedular_data");
+    const result = await response.json();
+    const message = document.querySelector('[data-active-task-message]');
+    if (message) message.textContent = result.message || (result.ok ? 'Scheduled post cancelled.' : 'Could not cancel this post.');
     if (!response.ok) return;
     const data = await response.json();
     if (!data.ok) return;
@@ -128,8 +132,8 @@
       statNext.textContent = next ? next.run_at : '-';
 
       const rows = data.items.map((item) => {
-        const action = ["pending", "waiting"].includes(item.status)
-          ? `<button class="delete-btn delete-job" data-job="${item.job_id}">Delete</button>`
+        const action = ["pending", "waiting", "posting"].includes(item.status)
+          ? `<button class="delete-btn delete-job" data-job="${item.job_id}">Cancel</button>`
           : '<span class="muted">-</span>';
       return `
         <tr>

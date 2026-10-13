@@ -1,6 +1,7 @@
 """Import a user's Marketplace listings for the Delete Listings page."""
 
 import hashlib
+from automation.task_control import cancellable
 import json
 import os
 import re
@@ -487,7 +488,8 @@ def _click_manage_listings(driver, settle_seconds=5):
     return False
 
 
-def import_listings_from_facebook(account, stop_event=None, progress_callback=None, replace_existing=False, only_new=False):
+@cancellable
+def import_listings_from_facebook(account, stop_event=None, progress_callback=None, replace_existing=False, only_new=False, use_visual_reader=None):
     """Merge live listings into saved backups; never discard absent listings."""
     if not account:
         raise ValueError("Account is required")
@@ -646,7 +648,13 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
             if progress_callback:
                 progress_callback({'total_count': len(by_key), 'message': f'Reading full details and photos {index}/{len(by_key)}...'})
             try:
-                result = read_listing_from_manage(account, record, driver=driver)
+                import sys
+                visual = not getattr(sys, 'frozen', False) if use_visual_reader is None else use_visual_reader
+                if visual:
+                    from automation.visual_listing_reader import read_import_fallback_page
+                    result = read_listing_from_manage(account, record, driver=driver, visual_fallback=read_import_fallback_page)
+                else:
+                    result = read_listing_from_manage(account, record, driver=driver)
                 details = result['posts'][0]
                 photos, errors = download_listing_images(driver, account, record['id'], details.get('image_urls') or [], stop_event)
                 if (errors or not photos) and record.get('downloaded_images'):
@@ -708,6 +716,7 @@ def _confirmed_click_count(candidate):
     return _parse_click_count(candidate.get("click_text"), combined)
 
 
+@cancellable
 def refresh_listing_clicks_from_facebook(account, progress_callback=None):
     """Refresh only confirmed click counts and persist every listing immediately."""
     if not account:
@@ -945,6 +954,7 @@ def _complete_facebook_delete_dialog(driver):
     WebDriverWait(driver, 15).until(EC.invisibility_of_element(confirm_button))
 
 
+@cancellable
 def delete_selected_listings_from_facebook(account, selected_listings, stop_event=None, progress_callback=None):
     """Find each selected source, verify its ID and complete Facebook deletion."""
     if not account:

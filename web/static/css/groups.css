@@ -21,7 +21,7 @@
   padding: 22px;
   background: var(--groups-surface);
   border: 1px solid var(--groups-border);
-  border-radius: var(--groups-radius);
+  border-radius: 0;
   box-shadow: 0 8px 22px rgba(22, 45, 62, 0.08);
   color: var(--groups-text);
 }
@@ -73,14 +73,14 @@
   padding: 10px 12px;
   background: var(--groups-surface-soft);
   border: 1px solid var(--groups-border);
-  border-radius: 12px;
+  border-radius: 0;
   flex-wrap: wrap;
 }
 
 .groups-chip {
   font-size: 12px;
   padding: 6px 10px;
-  border-radius: 999px;
+  border-radius: 0;
   background: #ffffff;
   border: 1px solid var(--groups-border-strong);
   color: #2f4b5b;
@@ -117,7 +117,7 @@
   height: 12px;
   border: 2px solid var(--groups-border-strong);
   border-top-color: var(--groups-accent);
-  border-radius: 50%;
+  border-radius: 0;
   display: none;
   animation: groups-spin 0.8s linear infinite;
 }
@@ -144,7 +144,7 @@
 .groups-panel {
   background: var(--groups-surface);
   border: 1px solid var(--groups-border);
-  border-radius: 14px;
+  border-radius: 0;
   box-shadow: 0 6px 18px rgba(17, 40, 68, 0.08);
   overflow: hidden;
 }
@@ -195,7 +195,7 @@
 .groups-search input {
   width: 100%;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: 0;
   border: 1px solid var(--groups-border-strong);
   background: #ffffff;
   font-size: 13px;
@@ -205,7 +205,7 @@
 .groups-input {
   width: 240px;
   padding: 9px 12px;
-  border-radius: 10px;
+  border-radius: 0;
   border: 1px solid var(--groups-border-strong);
   background: #ffffff;
   font-size: 12px;
@@ -238,7 +238,7 @@
   font-size: 12px;
   color: #4b6170;
   padding: 6px 8px;
-  border-radius: 10px;
+  border-radius: 0;
   border: 1px solid var(--groups-border-strong);
   background: #ffffff;
 }
@@ -263,7 +263,7 @@
 .groups-card {
   position: relative;
   border: 1px solid var(--groups-border);
-  border-radius: 12px;
+  border-radius: 0;
   background: #ffffff;
   box-shadow: 0 6px 16px rgba(13, 36, 51, 0.08);
   transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
@@ -301,7 +301,7 @@
 .groups-pill {
   font-size: 11px;
   padding: 5px 9px;
-  border-radius: 999px;
+  border-radius: 0;
   background: #f0fbff;
   border: 1px solid #cfe9f6;
   color: #0b5f75;
@@ -317,7 +317,7 @@
   justify-content: center;
   background: #ffffff;
   border: 1px solid var(--groups-border-strong);
-  border-radius: 8px;
+  border-radius: 0;
   padding: 4px;
   box-shadow: 0 4px 12px rgba(13, 36, 51, 0.12);
 }
@@ -339,7 +339,7 @@
   background: #ffffff;
   color: var(--groups-text);
   padding: 9px 12px;
-  border-radius: 10px;
+  border-radius: 0;
   font-weight: 600;
   font-size: 12px;
   cursor: pointer;

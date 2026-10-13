@@ -8,6 +8,7 @@
   {% block extra_css %}{% endblock %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app_theme.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/branding.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/header.css') }}">
 <link rel="icon" href="{{ url_for('static', filename='app-logo.png') }}">
 </head>
 <body>
@@ -85,7 +86,7 @@
     <header class="topbar">
       <div class="topbar-inner">
         <div class="topbar-brand">
-          <span class="tayyara-wordmark" aria-label="Tayyara Motors"><span>TAYYARA</span> <span>MOTORS</span></span>
+          <a class="header-brand-link" href="{{ url_for('web.dashboard') }}" aria-label="Tayyara Motors dashboard"><span class="tayyara-wordmark" aria-label="Tayyara Motors"><span>TAYYARA</span> <span>MOTORS</span></span><span class="header-brand-caption">Marketplace workspace</span></a>
           <button
             type="button"
             class="mobile-header-toggle"
@@ -104,7 +105,8 @@
           <div class="header-account-box">
             <span class="header-account-label">Active Account</span>
             <form method="post" action="{{ url_for('web.set_active_account') }}" class="header-account-form">
-              <select name="account" class="header-account-select" onchange="this.form.submit()">
+              <select name="account" class="header-account-select" aria-label="Active Facebook account" onchange="this.form.submit()">
+                {% if not accounts %}<option value="" disabled selected>No saved accounts</option>{% endif %}
                 {% for acc in accounts %}
                   <option value="{{ acc }}" {% if acc == active_account %}selected{% endif %}>
                     {{ acc }}
@@ -114,7 +116,7 @@
             </form>
           </div>
 
-          <div class="header-utility-group">
+          <div class="header-utility-group" role="group" aria-label="Browser mode and saved file storage">
             <div class="header-mode-box" title="When this is on, automation runs in invisible Chrome headless mode.">
               <form
                 method="post"
@@ -122,13 +124,14 @@
                 class="header-mode-form"
                 data-ajax="true"
               >
-                <span class="header-mode-title">Background</span>
+                <span class="header-mode-title">Browser mode</span>
                 <label class="background-toggle">
                   <input
                     type="checkbox"
                     name="run_in_background"
                     value="1"
                     class="background-toggle-input"
+                    aria-label="Run automation in the background"
                     {% if run_in_background_enabled %}checked{% endif %}
                     onchange="this.form.submit()"
                   >
@@ -136,9 +139,9 @@
                   <span class="background-toggle-copy">
                     <span class="background-toggle-state">
                       {% if run_in_background_enabled %}
-                        Hidden
+                        Background
                       {% else %}
-                        Visible
+                        Visible browser
                       {% endif %}
                     </span>
                   </span>
@@ -147,11 +150,11 @@
             </div>
 
             <div class="junk-pill" title="Total size of screenshot images saved by the app">
-              <span class="junk-label">Temp:</span>
+              <span class="junk-label">Screenshots</span>
               <span class="junk-value">{{ junk_files_size_label or "0 MB" }}</span>
             </div>
             <div class="junk-pill" title="Total size of manual uploaded images saved by the app">
-              <span class="junk-label">Uploads:</span>
+              <span class="junk-label">Uploads</span>
               <span class="junk-value">{{ manual_pics_size_label or "0 MB" }}</span>
             </div>
 
@@ -159,11 +162,8 @@
         </div>
 
         <div class="topbar-identity">
-          <div class="top-link-wrap" onclick="window.location.href='{{ url_for('web.portal_logout') }}'">
-            <a href="{{ url_for('web.portal_logout') }}" class="add-account" title="Sign out of the portal">Logout</a>
-          </div>
-
-          <span class="account-pill">{{ active_account or "No Account" }}</span>
+          <a class="header-settings-link" href="{{ url_for('web.settings_page') }}" aria-label="Open settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><rect x="7" y="4" width="4" height="6"/><rect x="13" y="14" width="4" height="6"/></svg></a>
+          <a href="{{ url_for('web.portal_logout') }}" class="header-signout" title="Sign out of the portal"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H4v16h6M10 12h10M16 8l4 4-4 4"/></svg><span>Sign out</span></a>
         </div>
       </div>
     </header>
@@ -292,5 +292,42 @@
   });
 </script>
 {% block extra_js %}{% endblock %}
+<script>
+(() => {
+  const list = document.querySelector('[data-active-task-list]');
+  if (!list) return;
+  const message = document.querySelector('[data-active-task-message]');
+  async function refreshTasks() {
+    try {
+      const response = await fetch('{{ url_for("web.active_browser_tasks") }}');
+      if (!response.ok) throw new Error('Could not load running actions.');
+      const data = await response.json();
+      list.replaceChildren();
+      if (!data.tasks.length) list.textContent = 'No running actions for this account.';
+      data.tasks.forEach(task => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #edf0f5';
+        const label = document.createElement('span');
+        label.textContent = task.action.replace(/^_/, '').replaceAll('_', ' ');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = task.cancel_requested ? 'Stopping…' : 'Cancel';
+        button.disabled = task.cancel_requested;
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            const response = await fetch('{{ url_for("web.cancel_browser_task") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:task.id})});
+            const result = await response.json();
+            message.textContent = result.message;
+          } catch (error) { message.textContent = 'Cancellation could not be requested. Try again.'; }
+          refreshTasks();
+        });
+        row.append(label, button); list.append(row);
+      });
+    } catch (error) { message.textContent = error.message; }
+  }
+  refreshTasks(); setInterval(refreshTasks, 2000);
+})();
+</script>
 </body>
 </html>

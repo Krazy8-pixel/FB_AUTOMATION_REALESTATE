@@ -10,6 +10,22 @@ from automation import listing_store
 
 
 class ListingRouteTests(unittest.TestCase):
+    def test_cancel_pending_repost_is_account_scoped(self):
+        self.routes.repost_jobs['cancel-me'] = {'job_id': 'cancel-me', 'account': 'test-account', 'status': 'pending'}
+        response = self.client.post('/reposting/cancel', json={'job_id': 'cancel-me'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.routes.repost_jobs['cancel-me']['status'], 'cancelled')
+        self.routes.repost_jobs['other'] = {'account': 'other-account', 'status': 'pending'}
+        response = self.client.post('/reposting/cancel', json={'job_id': 'other'})
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.routes.repost_jobs['other']['status'], 'pending')
+
+    def test_listing_cards_use_imported_detail_price(self):
+        response = self.client.get('/delete_listings')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'<span class="listing-price">100</span>', response.data)
+        self.assertIn(b'(item.details || {}).price || item.price', response.data)
+
     @classmethod
     def setUpClass(cls):
         # Never start background account work while exercising HTTP handlers.

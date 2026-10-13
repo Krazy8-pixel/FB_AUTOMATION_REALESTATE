@@ -1,0 +1,55 @@
+/* Shared, angular header. Loaded after the application theme. */
+/* Header and sidebar controls may be rounded; page content stays sharp. */
+.topbar .header-account-select,.topbar .header-settings-link,.topbar .header-signout,.topbar .mobile-header-toggle { border-radius:8px; }
+.topbar .background-toggle-slider { border-radius:20px; }
+.topbar .background-toggle-slider::before { border-radius:50%; }
+.sidebar .menu li,.sidebar .menu-link-wrap,.sidebar .menu-icon { border-radius:8px; }
+.sidebar .sidebar-tip { border-radius:10px; }
+.sidebar .sidebar-tip > span { border-radius:6px; }
+.topbar { background:#fff; border-bottom:1px solid #dbe3ee; box-shadow:0 3px 14px rgba(21,44,80,.04); }
+.topbar .topbar-inner { min-height:84px; padding:12px 26px; gap:24px; align-items:center; }
+.topbar .topbar-brand { padding:0; border:0; box-shadow:none; background:transparent; }
+.header-brand-link { display:flex; flex-direction:column; gap:5px; text-decoration:none; }
+.topbar .tayyara-wordmark { padding:0; background:transparent; font-size:22px; gap:6px; letter-spacing:.3px; }
+.topbar .tayyara-wordmark > span:last-child { color:#123d83; }
+.header-brand-caption { font-size:10px; color:#6b7d95; letter-spacing:1.35px; text-transform:uppercase; }
+.topbar .accounts { display:flex; align-items:center; gap:20px; margin-left:auto; flex:0 1 auto; }
+.topbar .header-account-box { width:210px; min-width:150px; padding:0; border:0; box-shadow:none; background:transparent; }
+.topbar .header-account-label { font-size:9px; font-weight:700; letter-spacing:1.3px; color:#687b96; margin-bottom:5px; }
+.topbar .header-account-select { width:100%; height:36px; padding:6px 30px 6px 10px; border:1px solid #d4deec; background:#f6f9fd; color:#143b73; font-size:12px; font-weight:600; }
+.topbar .header-utility-group { display:flex; align-items:center; gap:0; padding:0 0 0 18px; border:0; border-left:1px solid #e3e9f1; background:transparent; box-shadow:none; }
+.topbar .header-mode-box { padding:0 14px 0 0; border:0; background:transparent; box-shadow:none; }
+.topbar .header-mode-form { gap:6px; display:flex; align-items:center; flex-wrap:wrap; }
+.topbar .header-mode-title { font-size:9px; letter-spacing:1px; color:#687b96; }
+.topbar .background-toggle { gap:6px; }
+.topbar .background-toggle-state { font-size:10px; color:#36537a; }
+.topbar .junk-pill { min-width:65px; padding:0 10px; border:0; background:transparent; display:flex; flex-direction:column; align-items:flex-start; gap:4px; box-shadow:none; }
+.topbar .junk-pill .junk-label { color:#687b96; font-size:9px; font-weight:500; }
+.topbar .junk-pill .junk-value { color:#173b73; font-size:11px; font-weight:700; }
+.topbar .topbar-identity { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-left:0; width:auto; flex:0 0 auto; }
+.header-settings-link,.header-signout { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:36px; padding:0 10px; color:#36537a; text-decoration:none; border:1px solid #dbe3ee; background:#fff; font-size:11px; }
+.header-settings-link svg,.header-signout svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.6; }
+.header-settings-link:hover,.header-signout:hover { background:#edf3fc; color:#0b3d91; border-color:#b2c6e4; }
+.topbar a:focus-visible,.topbar select:focus-visible,.topbar input:focus-visible + span { outline:2px solid #db6b3b; outline-offset:3px; }
+.topbar .header-utility-group { padding:9px 12px; border:1px solid #dbe4f1; border-radius:10px; background:#f6f9fd; gap:12px; }
+.topbar .header-mode-box { padding:0 12px 0 0; border-right:1px solid #dbe4f1; }
+.topbar .header-mode-form { flex-direction:column; align-items:flex-start; gap:5px; }
+.topbar .header-mode-title { text-transform:none; letter-spacing:0; font-size:10px; font-weight:600; }
+.topbar .background-toggle-state { font-size:11px; font-weight:600; white-space:nowrap; }
+.topbar .junk-pill { min-width:58px; padding:0; gap:5px; }
+.topbar .junk-pill .junk-label { font-size:10px; }
+.topbar .junk-pill .junk-value { font-size:12px; }
+@media(min-width:901px) and (max-width:1200px) { .topbar .topbar-inner { padding:12px 18px; gap:16px; }.topbar .accounts { gap:12px; }.topbar .header-account-box { width:170px; }.topbar .header-utility-group { padding-left:12px; }.topbar .junk-pill { min-width:48px; padding:0 6px; }.topbar .tayyara-wordmark { font-size:19px; } }
+@media(max-width:900px) {
+  .topbar .topbar-inner { display:flex; flex-wrap:wrap; min-height:0; padding:14px 16px; gap:14px; }
+  .topbar .topbar-brand { width:100%; flex:1 1 100%; justify-content:space-between; }
+  .topbar .accounts { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; width:100%; flex:1 1 100%; margin:0; }
+  .topbar .header-account-box { width:100%; min-width:0; }
+  .topbar .header-utility-group { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:10px; padding:12px; border:1px solid #dbe4f1; align-items:center; }
+  .topbar .header-utility-group > * { grid-column:auto; grid-row:auto; width:auto; }
+  .topbar .header-mode-title { display:block; width:100%; }
+  .topbar .header-mode-form { flex-direction:column; }
+  .topbar .junk-pill { align-items:flex-start; min-width:0; padding:0; }
+  .topbar .topbar-identity { width:100%; justify-content:flex-end; gap:8px; }
+  body.mobile-header-collapsed .topbar .accounts,body.mobile-header-collapsed .topbar .topbar-identity { display:none; }
+}

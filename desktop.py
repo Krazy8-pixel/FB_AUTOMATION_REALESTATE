@@ -77,6 +77,11 @@ def main():
 
     def monitor():
         while not shutting_down.wait(1):
+            uninstall_signal = folder / 'exit-for-uninstall'
+            if uninstall_signal.exists():
+                uninstall_signal.unlink(missing_ok=True)
+                quit_app(updating=True)
+                return
             signal = folder / 'show-window'
             if signal.exists():
                 signal.unlink(missing_ok=True)

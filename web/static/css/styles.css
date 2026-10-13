@@ -50,7 +50,7 @@ body {
   bottom: 0;
   overflow-y: auto;
   z-index: 940;
-  border-top-right-radius: 18px;
+  border-top-right-radius: 0;
   box-shadow: 10px 18px 30px rgba(0, 0, 0, 0.18);
 }
 
@@ -94,7 +94,7 @@ body {
 
 .menu-link-wrap {
   padding: 12px 14px;
-  border-radius: 8px;
+  border-radius: 0;
   transition: background 0.2s ease;
   background: #ffffff;
   color: #000000;
@@ -108,7 +108,7 @@ body {
 .menu-icon {
   width: 36px;
   height: 36px;
-  border-radius: 8px;
+  border-radius: 0;
   border: 1px solid #0abde3;
   background: #0abde3;
   display: inline-flex;
@@ -227,7 +227,7 @@ body {
   min-width: 196px;
   padding: 8px 12px 8px 8px;
   border: 1px solid #d8e8f1;
-  border-radius: 16px;
+  border-radius: 0;
   background: linear-gradient(135deg, #ffffff 0%, #f4fbff 55%, #edf7ff 100%);
   box-shadow: 0 10px 24px rgba(14, 58, 82, 0.07);
   flex: 0 0 208px;
@@ -238,7 +238,7 @@ body {
   margin-left: auto;
   width: 38px;
   height: 38px;
-  border-radius: 12px;
+  border-radius: 0;
   border: 1px solid #cfe3ee;
   background: linear-gradient(135deg, #ffffff, #edf9ff);
   color: #0b6c89;
@@ -274,7 +274,7 @@ body {
 .topbar-brand-mark {
   width: 42px;
   height: 42px;
-  border-radius: 14px;
+  border-radius: 0;
   background: linear-gradient(135deg, #0abde3, #117ca1);
   color: #ffffff;
   display: inline-flex;
@@ -322,7 +322,7 @@ body {
 .header-account-box {
   background: linear-gradient(135deg, #f4fbff, #eaf6ff);
   border: 1px solid #cfe9f6;
-  border-radius: 14px;
+  border-radius: 0;
   padding: 8px 10px;
   min-width: 200px;
   max-width: 212px;
@@ -337,7 +337,7 @@ body {
   flex: 0 0 auto;
   padding: 4px;
   border: 1px solid #dbe8f0;
-  border-radius: 14px;
+  border-radius: 0;
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 8px 20px rgba(15, 64, 91, 0.05);
 }
@@ -350,7 +350,7 @@ body {
   min-width: 0;
   padding: 4px 5px;
   border: 1px solid #dbe8f0;
-  border-radius: 14px;
+  border-radius: 0;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 8px 20px rgba(15, 64, 91, 0.05);
 }
@@ -358,7 +358,7 @@ body {
 .header-mode-box {
   background: linear-gradient(135deg, #fff9ee, #fff1d3);
   border: 1px solid #ead4a1;
-  border-radius: 12px;
+  border-radius: 0;
   padding: 6px 8px;
   flex: 0 0 auto;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
@@ -387,7 +387,7 @@ body {
 .header-account-select {
   width: 100%;
   border: 1px solid #b9d9e9;
-  border-radius: 9px;
+  border-radius: 0;
   padding: 7px 9px;
   background: #ffffff;
   color: #0b5f75;
@@ -424,7 +424,7 @@ body {
   position: relative;
   width: 42px;
   height: 24px;
-  border-radius: 999px;
+  border-radius: 0;
   background: #c5d0d8;
   border: 1px solid #aebbc5;
   transition: background 0.2s ease, border-color 0.2s ease;
@@ -438,7 +438,7 @@ body {
   left: 3px;
   width: 16px;
   height: 16px;
-  border-radius: 50%;
+  border-radius: 0;
   background: #ffffff;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
   transition: transform 0.2s ease;
@@ -485,7 +485,7 @@ body {
   border: none;
   background: transparent;
   color: #114f67;
-  border-radius: 10px;
+  border-radius: 0;
   cursor: pointer;
   text-decoration: none;
   font-size: 11px;
@@ -522,7 +522,7 @@ body {
   align-items: center;
   gap: 5px;
   padding: 7px 8px;
-  border-radius: 12px;
+  border-radius: 0;
   border: 1px solid #cfe3ee;
   background: linear-gradient(135deg, #f9fbff, #eef6ff);
   color: #2f4b5b;
@@ -545,7 +545,7 @@ body {
 .account-pill {
   display: inline-block;
   padding: 8px 11px;
-  border-radius: 12px;
+  border-radius: 0;
   border: 1px solid #d0e4ef;
   background: linear-gradient(135deg, #f8fcff, #ebf6ff);
   color: #224457;
@@ -565,7 +565,7 @@ body {
 
 .clear-junk-form .delete-btn {
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: 0;
   font-size: 11px;
   font-weight: 700;
   box-shadow: none;
@@ -574,7 +574,7 @@ body {
 .info-icon-link {
   width: 30px;
   height: 30px;
-  border-radius: 10px;
+  border-radius: 0;
   border: 1px solid #cfe4ef;
   color: #0b6c89;
   display: inline-flex;
@@ -612,7 +612,7 @@ body {
   width: 100%;
   max-width: 1040px;
   border: 1px solid #dce9f2;
-  border-radius: 14px;
+  border-radius: 0;
   background: linear-gradient(135deg, #f7fcff 0%, #eef7fc 55%, #f6fbff 100%);
   padding: 22px 22px 18px;
   box-shadow: 0 8px 22px rgba(25, 60, 90, 0.08);
@@ -622,7 +622,7 @@ body {
   margin: 0 0 8px;
   display: inline-block;
   padding: 4px 10px;
-  border-radius: 99px;
+  border-radius: 0;
   border: 1px solid #b5d8ea;
   background: #ffffff;
   color: #4080a3;
@@ -643,7 +643,7 @@ body {
   display: inline-flex;
   align-items: center;
   padding: 7px 10px;
-  border-radius: 8px;
+  border-radius: 0;
   border: 1px solid #cfe3ee;
   background: #ffffff;
   color: #355668;
@@ -668,7 +668,7 @@ body {
   background: #ffffff;
   border: 1px solid #dfe8ef;
   border-left: 5px solid #0abde3;
-  border-radius: 12px;
+  border-radius: 0;
   padding: 14px 16px;
   display: grid;
   grid-template-columns: 230px 1fr;
@@ -686,7 +686,7 @@ body {
 .module-no {
   width: 34px;
   height: 34px;
-  border-radius: 8px;
+  border-radius: 0;
   background: #e8f7fc;
   border: 1px solid #c2e4f1;
   color: #0d7897;
@@ -727,7 +727,7 @@ body {
 .card {
   background: white;
   padding: 20px;
-  border-radius: 10px;
+  border-radius: 0;
   box-shadow: 0 2px 6px rgba(0,0,0,0.1);
   text-align: center;
   cursor: pointer;
@@ -746,7 +746,7 @@ body {
 .dashboard-v2 {
   width: 100%;
   min-height: calc(100vh - 110px);
-  border-radius: 18px;
+  border-radius: 0;
   padding: 28px;
   background: radial-gradient(circle at top right, #e8f8ff 0%, #f6fbff 45%, #ffffff 100%);
 }
@@ -782,7 +782,7 @@ body {
   text-align: left;
   color: #153447;
   border: 1px solid #d7e7f2;
-  border-radius: 16px;
+  border-radius: 0;
   background: #ffffff;
   box-shadow: 0 6px 18px rgba(14, 61, 88, 0.08);
   transition: transform 0.2s ease, box-shadow 0.25s ease, border-color 0.25s ease, background 0.25s ease, color 0.25s ease;
@@ -791,7 +791,7 @@ body {
 .dashboard-v2-icon {
   width: 54px;
   height: 54px;
-  border-radius: 14px;
+  border-radius: 0;
   border: 1px solid #c8deed;
   background: linear-gradient(140deg, #eef8ff, #e3f2ff);
   display: inline-flex;
@@ -837,7 +837,7 @@ body {
   color: #1f6b8e;
   background: #edf7ff;
   border: 1px solid #cae2f1;
-  border-radius: 999px;
+  border-radius: 0;
   padding: 5px 10px;
 }
 
@@ -946,7 +946,7 @@ body {
   width: 46px;
   height: 46px;
   margin-bottom: 14px;
-  border-radius: 12px;
+  border-radius: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -994,7 +994,7 @@ body {
 .form-box {
   background: #fff;
   padding: 25px 30px;
-  border-radius: 12px;
+  border-radius: 0;
   box-shadow: 0 4px 15px rgba(0,0,0,0.1);
   margin-bottom: 0;
   width: 100%;
@@ -1010,7 +1010,7 @@ body {
   padding: 12px 15px;
   margin: 10px 0;
   border: 1px solid #ccc;
-  border-radius: 8px;
+  border-radius: 0;
   font-size: 16px;
 }
 
@@ -1021,7 +1021,7 @@ body {
   background: #0abde3;
   color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: 0;
   font-size: 16px;
   cursor: pointer;
   transition: 0.2s;
@@ -1048,7 +1048,7 @@ body {
   background-color: #484747;
   color: white;
  
-  border-radius: 6px;        /* rounded corners */
+  border-radius: 0;        /* rounded corners */
   text-decoration: none;
   font-size: 14px;
   transition: background-color 0.2s, color 0.2s; /* smooth hover */
@@ -1066,7 +1066,7 @@ body {
   width: 100%;
   max-width: 400px;
   justify-self: end;
-  border-radius: 12px;
+  border-radius: 0;
   box-shadow: 0 4px 10px rgba(0,0,0,0.05);
 }
 
@@ -1139,7 +1139,7 @@ body {
   background: #e74c3c;
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: 0;
   font-size: 13px;
   cursor: pointer;
   transition: 0.2s;
@@ -1172,7 +1172,7 @@ body {
   left: calc(50% + 120px); /* shifts right to avoid sidebar */
   transform: translate(-50%, -50%);
   background: #ffffff;
-  border-radius: 10px;
+  border-radius: 0;
   padding: 28px 45px;
   min-width: 420px;
   max-width: 600px;
@@ -1223,7 +1223,7 @@ body {
   padding: 8px 15px;
   background-color: #484747;  /* dark grey */
   color: white;
-  border-radius: 5px;
+  border-radius: 0;
   text-decoration: none;
   font-size: 14px;
   transition: background-color 0.2s;
@@ -1297,7 +1297,7 @@ body {
   width: 72px;
   height: 72px;
   border: 2px solid #ffffff;
-  border-radius: 14px;
+  border-radius: 0;
   background: rgba(255, 255, 255, 0.08);
   display: flex;
   flex-direction: column;
@@ -1310,7 +1310,7 @@ body {
 #loading-overlay .spinner {
   border: 3px solid rgba(255, 255, 255, 0.35);
   border-top: 3px solid #ffffff;
-  border-radius: 50%;
+  border-radius: 0;
   width: 28px;
   height: 28px;
   animation: spin 0.8s linear infinite;
@@ -1343,7 +1343,7 @@ select.input-field,
   padding: 12px 15px;
   margin: 10px 0;
   border: 1px solid #ccc;
-  border-radius: 8px;
+  border-radius: 0;
   font-size: 16px;
 }
 
@@ -1355,7 +1355,7 @@ select.input-field,
   background: #e74c3c;
   color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: 0;
   font-size: 16px;
   cursor: pointer;
   transition: 0.2s;
@@ -1404,7 +1404,7 @@ select.input-field,
 .excel-page-container .form-box {
   background: #ffffff;
   padding: 30px 35px;
-  border-radius: 14px;
+  border-radius: 0;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
   border-top: 5px solid #0abde3;
   width: 100%;
@@ -1427,7 +1427,7 @@ select.input-field,
   width: 100%;
   padding: 12px;
   border: 2px dashed #ccc;
-  border-radius: 10px;
+  border-radius: 0;
   font-size: 14px;
   background: #fafafa;
   cursor: pointer;
@@ -1449,7 +1449,7 @@ select.input-field,
   font-size: 16px;
   font-weight: 600;
   border: none;
-  border-radius: 10px;
+  border-radius: 0;
   cursor: pointer;
   transition: background 0.2s, transform 0.1s;
 }
@@ -1535,7 +1535,7 @@ select.input-field,
   width: min(720px, 92vw);
   max-height: 84vh;
   background: #ffffff;
-  border-radius: 14px;
+  border-radius: 0;
   box-shadow: 0 22px 60px rgba(12, 25, 40, 0.25);
   display: flex;
   flex-direction: column;
@@ -1584,7 +1584,7 @@ select.input-field,
   min-width: 32px;
   padding: 0;
   margin: 0;
-  border-radius: 8px;
+  border-radius: 0;
   cursor: pointer;
   font-size: 18px;
   line-height: 1;
@@ -1623,7 +1623,7 @@ select.input-field,
   padding: 12px 14px;
   background: #ffffff;
   border: 1px solid #e1e9f0;
-  border-radius: 10px;
+  border-radius: 0;
   max-height: 320px;
   overflow: auto;
 }
@@ -1753,7 +1753,7 @@ select.input-field,
 .manual-image-slot {
   background: #fbfcfe;
   border: 1px dashed #c5d9e7;
-  border-radius: 10px;
+  border-radius: 0;
   padding: 8px;
   min-height: 130px;
   display: flex;
@@ -1767,7 +1767,7 @@ select.input-field,
 
 .manual-image-label {
   border: 1px solid #d4e6f0;
-  border-radius: 8px;
+  border-radius: 0;
   background: #ffffff;
   min-height: 78px;
   display: flex;
@@ -1811,7 +1811,7 @@ select.input-field,
   padding: 10px 22px;
   background: #484747;
   color: white;
-  border-radius: 8px;
+  border-radius: 0;
   text-decoration: none;
   font-size: 14px;
   transition: background-color 0.2s;
@@ -1844,7 +1844,7 @@ select.input-field,
     display: block;
     width: 100%;
     padding: 12px;
-    border-radius: 10px;
+    border-radius: 0;
     text-align: center;
     font-size: 16px;
     text-decoration: none;
@@ -2089,7 +2089,7 @@ select.input-field,
   background: linear-gradient(135deg, #f7f3ff, #efe7ff);
   border: 1px solid #d7c7ff;
   padding: 12px 16px;
-  border-radius: 10px;
+  border-radius: 0;
   text-align: right;
   min-width: 220px;
 }
@@ -2119,7 +2119,7 @@ select.input-field,
 .account-page .capacity-item {
   background: #ffffff;
   border: 1px solid #e3e9f1;
-  border-radius: 8px;
+  border-radius: 0;
   padding: 14px 16px;
   min-width: 0;
 }
@@ -2153,7 +2153,7 @@ select.input-field,
 .phone-verify-shell {
   background: #ffffff;
   border: 1px solid #dfe8ef;
-  border-radius: 18px;
+  border-radius: 0;
   box-shadow: 0 12px 32px rgba(14, 58, 82, 0.08);
   padding: 20px;
 }
@@ -2179,7 +2179,7 @@ select.input-field,
 
 .phone-verify-status {
   padding: 10px 14px;
-  border-radius: 999px;
+  border-radius: 0;
   border: 1px solid #cae2f1;
   background: #edf7ff;
   color: #1f6b8e;
@@ -2221,7 +2221,7 @@ select.input-field,
   display: inline-flex;
   align-items: center;
   padding: 8px 12px;
-  border-radius: 999px;
+  border-radius: 0;
   background: #f5f9fc;
   border: 1px solid #d9e7f1;
   color: #355668;
@@ -2235,7 +2235,7 @@ select.input-field,
 }
 
 .phone-verify-frame-wrap {
-  border-radius: 18px;
+  border-radius: 0;
   overflow: hidden;
   border: 1px solid #d7e7f2;
   background: #0d1117;
@@ -2266,7 +2266,7 @@ select.input-field,
 
 .account-page .account-card {
   background: #ffffff;
-  border-radius: 14px;
+  border-radius: 0;
   padding: 20px 22px 24px;
   border: 1px solid #e6ebf2;
   box-shadow: 0 8px 24px rgba(17, 40, 68, 0.08);
@@ -2301,7 +2301,7 @@ select.input-field,
 .account-page .account-form #account-password {
   width: 100%;
   padding: 12px 14px;
-  border-radius: 10px;
+  border-radius: 0;
   border: 1px solid #cfd6e0;
   font-size: 15px;
   background: #fdfdfd;
@@ -2314,7 +2314,7 @@ select.input-field,
   background: #5b3bd6;
   color: white;
   border: none;
-  border-radius: 10px;
+  border-radius: 0;
   font-size: 16px;
   font-weight: 600;
   cursor: pointer;
@@ -2356,7 +2356,7 @@ select.input-field,
 .account-page .session-check-btn,
 .account-page .session-check-cancel {
   border: none;
-  border-radius: 8px;
+  border-radius: 0;
   padding: 8px 12px;
   font-size: 13px;
   font-weight: 700;
@@ -2424,7 +2424,7 @@ select.input-field,
   height: 16px;
   border: 2px solid #d5deea;
   border-top-color: #26384f;
-  border-radius: 50%;
+  border-radius: 0;
   animation: spin 0.8s linear infinite;
 }
 
@@ -2477,7 +2477,7 @@ select.input-field,
   justify-content: center;
   min-width: 74px;
   padding: 5px 9px;
-  border-radius: 999px;
+  border-radius: 0;
   font-size: 12px;
   font-weight: 800;
 }
@@ -2538,7 +2538,7 @@ select.input-field,
   .topbar-brand-mark {
     width: 38px;
     height: 38px;
-    border-radius: 12px;
+    border-radius: 0;
     font-size: 14px;
   }
 
@@ -2549,7 +2549,7 @@ select.input-field,
   .mobile-header-toggle {
     width: 36px;
     height: 36px;
-    border-radius: 11px;
+    border-radius: 0;
   }
 
   .header-shortcuts {
@@ -2615,7 +2615,7 @@ select.input-field,
 
   .phone-verify-shell {
     padding: 16px;
-    border-radius: 16px;
+    border-radius: 0;
   }
 
   .phone-verify-head {
@@ -2705,7 +2705,7 @@ select.input-field,
   min-height: 56px;
   padding: 9px 11px;
   border: 1px solid transparent;
-  border-radius: 12px;
+  border-radius: 0;
   background: transparent;
   color: #33485d;
   transition: background-color .18s ease, border-color .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease;
@@ -2715,7 +2715,7 @@ select.input-field,
   width: 34px;
   height: 34px;
   border: 1px solid #c9dcf5;
-  border-radius: 10px;
+  border-radius: 0;
   background: #e7f1ff;
 }
 
@@ -2768,7 +2768,7 @@ select.input-field,
   margin-top: 22px;
   padding: 12px;
   border: 1px solid #d6e2ef;
-  border-radius: 12px;
+  border-radius: 0;
   background: #ffffff;
   color: #60758a;
 }
@@ -2777,7 +2777,7 @@ select.input-field,
   width: 21px;
   height: 21px;
   flex: 0 0 21px;
-  border-radius: 50%;
+  border-radius: 0;
   background: #287bd8;
   color: #ffffff;
   font-size: 12px;
@@ -2805,7 +2805,7 @@ select.input-field,
   min-height: 42px;
   padding: 0 13px;
   border: 1px solid #cbdced;
-  border-radius: 12px;
+  border-radius: 0;
   background: #eaf3ff;
   color: #175fae;
   cursor: pointer;
@@ -2850,7 +2850,7 @@ select.input-field,
   padding: 10px;
   overflow-y: auto;
   border: 1px solid #cfdeed;
-  border-radius: 15px;
+  border-radius: 0;
   background: #ffffff;
   box-shadow: 0 20px 45px rgba(32, 68, 105, .18);
   opacity: 0;
@@ -2871,7 +2871,7 @@ select.input-field,
   gap: 3px;
   padding: 11px 12px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 0;
   color: #294157;
   text-decoration: none;
   transition: background-color .16s ease, border-color .16s ease, transform .16s ease;

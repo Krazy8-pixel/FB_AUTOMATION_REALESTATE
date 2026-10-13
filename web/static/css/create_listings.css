@@ -36,7 +36,7 @@
   min-height: 40px;
   padding: 0 15px;
   border: 1px solid #0b3d91;
-  border-radius: 8px;
+  border-radius: 0;
   background: #fff;
   color: #0b3d91;
   font-size: 12px;
@@ -53,7 +53,7 @@
   margin-bottom: 18px;
   padding: 13px 15px;
   border: 1px solid #0b3d91;
-  border-radius: 9px;
+  border-radius: 0;
   background: #fff;
   color: #0b3d91;
   font-size: 13px;
@@ -73,7 +73,7 @@
   padding: 25px;
   border: 1px solid #d0d0d0;
   border-top: 5px solid #0b3d91;
-  border-radius: 12px;
+  border-radius: 0;
   background: #fff;
   cursor: pointer;
   transition: border-color .16s ease, transform .16s ease;
@@ -98,7 +98,7 @@
   width: 46px;
   height: 46px;
   margin-bottom: 28px;
-  border-radius: 10px;
+  border-radius: 0;
   background: #0b3d91;
   color: #fff;
   font-size: 14px;
@@ -129,7 +129,7 @@
 .create-form-panel {
   padding: 26px;
   border: 1px solid #d0d0d0;
-  border-radius: 12px;
+  border-radius: 0;
   background: #fff;
 }
 
@@ -159,7 +159,7 @@
   margin: 0 0 18px;
   padding: 10px 12px;
   border: 1px solid #bdbdbd;
-  border-radius: 8px;
+  border-radius: 0;
   background: #fff;
   color: #252525;
   font-size: 14px;
@@ -184,7 +184,7 @@
 .create-form-panel .manual-action-button {
   min-height: 43px;
   border: 1px solid #0b3d91;
-  border-radius: 8px;
+  border-radius: 0;
   background: #0b3d91;
   color: #fff;
   font-size: 13px;
@@ -241,7 +241,7 @@
   padding: 26px;
   border: 1px solid #d0d0d0;
   border-top: 5px solid #0b3d91;
-  border-radius: 12px;
+  border-radius: 0;
   background: #fff;
   box-shadow: none;
 }
@@ -292,7 +292,7 @@
 
 .manual-listing-page .manual-group-dialog {
   border: 1px solid #bdbdbd;
-  border-radius: 12px;
+  border-radius: 0;
   box-shadow: none;
 }
 

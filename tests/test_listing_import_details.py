@@ -10,6 +10,37 @@ from automation import reposting
 
 
 class ImportDetailsTests(unittest.TestCase):
+    def test_fallback_fills_only_unreadable_fields_once(self):
+        post = {'price': '100', 'description': '', 'model': '',
+                'field_states': {'price': 'read', 'description': 'empty', 'model': 'unavailable'}}
+        fallback = MagicMock(return_value={'posts': [{'price': '999', 'description': 'wrong',
+            'model': 'Civic', 'exterior_color': 'Blue', 'field_states':
+            {'price': 'read', 'description': 'read', 'model': 'read', 'exterior_color': 'read'}}]})
+        reposting.recover_unreadable_fields(MagicMock(), post, fallback)
+        fallback.assert_called_once()
+        self.assertEqual(post['price'], '100')
+        self.assertEqual(post['description'], '')
+        self.assertEqual(post['model'], 'Civic')
+        self.assertEqual(post['exterior_color'], 'Blue')
+        self.assertEqual(post['field_sources']['model'], 'visual_fallback')
+
+    def test_optional_colours_alone_do_not_trigger_fallback(self):
+        post = {key: 'saved' for key in reposting.EDIT_FIELDS}
+        post['field_states'] = {key: 'read' for key in reposting.EDIT_FIELDS}
+        for key in ('exterior_color', 'interior_color'):
+            post[key] = ''
+            post['field_states'][key] = 'unavailable'
+        fallback = MagicMock()
+        reposting.recover_unreadable_fields(MagicMock(), post, fallback)
+        fallback.assert_not_called()
+
+    def test_fallback_error_preserves_primary_result(self):
+        post = {'price': '100', 'field_states': {'price': 'read'}}
+        reposting.recover_unreadable_fields(MagicMock(), post,
+            MagicMock(side_effect=RuntimeError('OCR failed')))
+        self.assertEqual(post['price'], '100')
+        self.assertEqual(post['fallback_error'], 'OCR failed')
+
     def test_edit_read_returns_to_inventory_without_public_gallery_navigation(self):
         driver = MagicMock()
         edit_url = 'https://www.facebook.com/marketplace/edit/?listing_id=123'

@@ -7,6 +7,7 @@ datas = [
     (str(ROOT / 'web/static'), 'web/static'),
     (str(ROOT / 'assets'), 'assets'),
     (str(ROOT / 'app_config.json'), '.'),
+    (str(ROOT / '.ocr_runtime'), 'ocr_runtime'),
     (str(ROOT / 'build/updater/TayyaraUpdater.exe'), '.'),
 ]
 datas += collect_data_files('webview')

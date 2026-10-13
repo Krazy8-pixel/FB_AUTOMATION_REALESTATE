@@ -2,24 +2,24 @@
 {% block title %}Repost Status{% endblock %}
 {% block extra_css %}
 <style>
-  .repost-status-page { width:100%; box-sizing:border-box; padding:28px 32px; border:1px solid var(--app-grey-100); border-radius:14px; background:#fff; }
+  .repost-status-page { width:100%; box-sizing:border-box; padding:28px 32px; border:1px solid var(--app-grey-100); border-radius:0; background:#fff; }
   .repost-status-head { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:20px; }
   .content .repost-status-head h1 { margin:0; text-align:left; color:#0f172a; font-size:28px; }
   .repost-status-head p { margin:7px 0 0; color:#64748b; }
-  .repost-count { min-width:120px; padding:13px 16px; border:1px solid #dbeafe; border-radius:10px; background:#eff6ff; color:#1d4ed8; text-align:center; font-weight:800; }
-  .repost-table-wrap { overflow:auto; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
+  .repost-count { min-width:120px; padding:13px 16px; border:1px solid #dbeafe; border-radius:0; background:#eff6ff; color:#1d4ed8; text-align:center; font-weight:800; }
+  .repost-table-wrap { overflow:auto; border:1px solid #e2e8f0; border-radius:0; background:#fff; }
   .repost-table { width:100%; border-collapse:collapse; font-size:14px; }
   .repost-table th,.repost-table td { padding:13px 15px; border-bottom:1px solid #eef2f7; text-align:left; white-space:nowrap; }
   .repost-table th { background:#f8fafc; color:#475569; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
   .repost-table td:first-child { width:100%; white-space:normal; color:#0f172a; font-weight:700; }
-  .repost-state { display:inline-block; padding:5px 9px; border-radius:6px; background:#edf3fc; color:var(--app-blue); font-size:12px; font-weight:700; }
+  .repost-state { display:inline-block; padding:5px 9px; border-radius:0; background:#edf3fc; color:var(--app-blue); font-size:12px; font-weight:700; }
   .repost-count { display:flex; flex-direction:column; gap:5px; color:var(--app-blue); }
   .repost-count small { font-size:12px; font-weight:500; }
-  .repost-empty { padding:56px 20px; border:1px dashed #cbd5e1; border-radius:12px; background:#fff; color:#64748b; text-align:center; }
+  .repost-empty { padding:56px 20px; border:1px dashed #cbd5e1; border-radius:0; background:#fff; color:#64748b; text-align:center; }
   .repost-history { margin-top:24px; }
   .repost-history-head { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; }
   .content .repost-history-head h2 { margin:0; color:#0f172a; font-size:20px; }
-  .repost-clear-btn { padding:9px 14px; border:1px solid #fecaca; border-radius:8px; background:#fff; color:#b91c1c; font-weight:700; cursor:pointer; }
+  .repost-clear-btn { padding:9px 14px; border:1px solid #fecaca; border-radius:0; background:#fff; color:#b91c1c; font-weight:700; cursor:pointer; }
   .repost-clear-btn:hover { background:#fef2f2; }
   .repost-clear-btn:disabled { cursor:not-allowed; opacity:.55; }
   .repost-history-message { min-height:20px; margin:8px 0; color:#475569; font-size:13px; }
@@ -33,6 +33,7 @@
 </style>
 {% endblock %}
 {% block content %}
+{% include '_active_tasks.html' %}
 <div class="repost-status-page">
   <div class="repost-status-head">
     <div><h1>Repost Status</h1><p>Schedules, progress and results{% if active_account %} for {{ active_account }}{% endif %}.</p></div>
@@ -41,10 +42,10 @@
   <div id="repost-empty" class="repost-empty{% if repost_items %} delete-hidden{% endif %}">No scheduled or running reposts. Open a saved listing to start a repost.</div>
   <div id="repost-table-wrap" class="repost-table-wrap{% if not repost_items %} delete-hidden{% endif %}">
     <table class="repost-table">
-      <thead><tr><th>Listing</th><th>Delay</th><th>Scheduled For</th><th>Remaining</th><th>Status</th></tr></thead>
+      <thead><tr><th>Listing</th><th>Delay</th><th>Scheduled For</th><th>Remaining</th><th>Status</th><th>Action</th></tr></thead>
       <tbody id="repost-status-rows">
         {% set labels = {'pending':'Scheduled','reading':'Preparing repost','deleting':'Deleting original listing','posting':'Reposting'} %}
-        {% for item in repost_items %}<tr><td>{{ item.title }}</td><td>{{ item.delay_value }} {{ item.delay_unit }}</td><td>{{ item.run_at.strftime("%Y-%m-%d %H:%M:%S") }}</td><td>{{ item.remaining_seconds }}s</td><td><span class="repost-state">{{ labels.get(item.status, item.status) }}</span></td></tr>{% endfor %}
+        {% for item in repost_items %}<tr><td>{{ item.title }}</td><td>{{ item.delay_value }} {{ item.delay_unit }}</td><td>{{ item.run_at.strftime("%Y-%m-%d %H:%M:%S") }}</td><td>{{ item.remaining_seconds }}s</td><td><span class="repost-state">{{ labels.get(item.status, item.status) }}</span></td><td><button type="button" data-cancel-repost="{{ item.job_id }}">Cancel</button></td></tr>{% endfor %}
       </tbody>
     </table>
   </div>
@@ -73,9 +74,20 @@
   const historyRows=document.getElementById('repost-history-rows'), historyEmpty=document.getElementById('repost-history-empty'), historyWrap=document.getElementById('repost-history-wrap'), clearButton=document.getElementById('repost-history-clear'), historyMessage=document.getElementById('repost-history-message');
   const escapeHtml=value=>String(value||'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
   const labels={pending:'Scheduled',reading:'Preparing repost',deleting:'Deleting original listing',posting:'Reposting'};
+  document.addEventListener('click', async event => {
+    const button = event.target.closest('[data-cancel-repost]');
+    if (!button) return;
+    button.disabled = true;
+    try {
+      const response = await fetch('/reposting/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({job_id:button.dataset.cancelRepost})});
+      const result = await response.json();
+      if (historyMessage) historyMessage.textContent = result.message;
+    } catch (error) { if (historyMessage) historyMessage.textContent = 'Cancellation failed. Try again.'; }
+    button.disabled = false;
+  });
   function remaining(seconds){let value=Math.max(0,Number(seconds)||0);if(!value)return 'Now';const h=Math.floor(value/3600),m=Math.floor((value%3600)/60),s=Math.floor(value%60);return[h?`${h}h`:'',m?`${m}m`:'',`${s}s`].filter(Boolean).join(' ');}
   function renderHistory(history){if(historyEmpty)historyEmpty.classList.toggle('delete-hidden',!!history.length);if(historyWrap)historyWrap.classList.toggle('delete-hidden',!history.length);if(clearButton)clearButton.disabled=!history.length;if(historyRows)historyRows.innerHTML=history.map(item=>`<tr><td>${escapeHtml(item.title||'Listing')}</td><td><span class="repost-state ${item.status==='reposted'?'reposted':'failed'}">${escapeHtml(item.status||'-')}</span></td><td>${escapeHtml(item.timestamp||'-')}</td><td class="repost-error">${escapeHtml(item.error||'-')}</td></tr>`).join('');}
-  async function refresh(){try{const response=await fetch('{{ url_for("web.reposting_data") }}'),data=await response.json(),items=Array.isArray(data.items)?data.items:[],history=Array.isArray(data.history)?data.history:[];if(count)count.textContent=items.length;document.getElementById('repost-pending-count').textContent=data.pending_count||0;document.getElementById('repost-running-count').textContent=data.running_count||0;if(empty)empty.classList.toggle('delete-hidden',!!items.length);if(tableWrap)tableWrap.classList.toggle('delete-hidden',!items.length);if(rows)rows.innerHTML=items.map(item=>`<tr><td>${escapeHtml(item.title||'Listing')}</td><td>${escapeHtml(item.delay_label||'-')}</td><td>${escapeHtml(item.run_at||'-')}</td><td>${remaining(item.remaining_seconds)}</td><td><span class="repost-state">${escapeHtml(labels[item.status]||item.status||'-')}</span></td></tr>`).join('');renderHistory(history);}catch(error){}window.setTimeout(refresh,3000);}refresh();
+  async function refresh(){try{const response=await fetch('{{ url_for("web.reposting_data") }}'),data=await response.json(),items=Array.isArray(data.items)?data.items:[],history=Array.isArray(data.history)?data.history:[];if(count)count.textContent=items.length;document.getElementById('repost-pending-count').textContent=data.pending_count||0;document.getElementById('repost-running-count').textContent=data.running_count||0;if(empty)empty.classList.toggle('delete-hidden',!!items.length);if(tableWrap)tableWrap.classList.toggle('delete-hidden',!items.length);if(rows)rows.innerHTML=items.map(item=>`<tr><td>${escapeHtml(item.title||'Listing')}</td><td>${escapeHtml(item.delay_label||'-')}</td><td>${escapeHtml(item.run_at||'-')}</td><td>${remaining(item.remaining_seconds)}</td><td><span class="repost-state">${escapeHtml(labels[item.status]||item.status||'-')}</span></td><td><button type="button" data-cancel-repost="${escapeHtml(item.job_id)}">Cancel</button></td></tr>`).join('');renderHistory(history);}catch(error){}window.setTimeout(refresh,3000);}refresh();
   if(clearButton)clearButton.addEventListener('click',async()=>{if(!window.confirm('Clear all repost history for the active account?'))return;clearButton.disabled=true;if(historyMessage)historyMessage.textContent='Clearing repost history...';try{const response=await fetch('/reposting_history/clear',{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'}}),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'Could not clear repost history.');renderHistory([]);if(historyMessage)historyMessage.textContent=data.message;}catch(error){clearButton.disabled=false;if(historyMessage)historyMessage.textContent=error.message||'Could not clear repost history.';}});
 })();
 </script>
