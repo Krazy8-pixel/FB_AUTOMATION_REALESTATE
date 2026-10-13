@@ -9,7 +9,11 @@
 .topbar { background:#fff; border-bottom:1px solid #dbe3ee; box-shadow:0 3px 14px rgba(21,44,80,.04); }
 .topbar .topbar-inner { min-height:84px; padding:12px 26px; gap:24px; align-items:center; }
 .topbar .topbar-brand { padding:0; border:0; box-shadow:none; background:transparent; }
-.header-brand-link { display:flex; flex-direction:column; gap:5px; text-decoration:none; }
+.header-brand-link { display:flex; flex-direction:row; align-items:center; gap:12px; text-decoration:none; }
+.header-app-logo { width:64px; height:64px; object-fit:contain; flex-shrink:0; }
+.header-brand-text { display:flex; flex-direction:column; gap:5px; }
+.header-brand-text strong { color:#123d83; font-size:22px; }
+@media(max-width:1200px) { .header-app-logo { width:56px; height:56px; }.header-brand-text strong { font-size:19px; } }
 .topbar .tayyara-wordmark { padding:0; background:transparent; font-size:30px; gap:7px; letter-spacing:.3px; }
 .topbar .tayyara-wordmark > span:last-child { color:#123d83; }
 .header-brand-caption { font-size:10px; color:#6b7d95; letter-spacing:1.35px; text-transform:uppercase; }

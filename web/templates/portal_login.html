@@ -26,7 +26,7 @@
 </head>
 <body>
   <main class="login-card">
-    <div class="brand"><img class="app-brand-logo" src="{{ url_for('static', filename='app-logo.png') }}" alt="Tayyara Motors app logo"><span class="tayyara-wordmark" aria-label="Tayyara Motors"><span>TAYYARA</span> <span>MOTORS</span></span></div>
+    <div class="brand"><img class="app-brand-logo" src="{{ url_for('static', filename='app-logo.png') }}" alt="Tayyara Motors app logo"><strong class="app-brand-name">Tayyara Motors</strong></div>
     <h1>{% if setup_mode %}CREATE LOGIN{% else %}SIGN IN{% endif %}</h1>
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
     <form method="POST" action="{{ url_for('web.portal_setup') if setup_mode else url_for('web.portal_login') }}">

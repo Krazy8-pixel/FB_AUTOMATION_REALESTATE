@@ -10,7 +10,7 @@ _lock = threading.RLock()
 _local = threading.local()
 _tasks = {}
 _window_open = True
-BACKGROUND_ACTIONS = {'import_groups_from_facebook', 'import_listings_from_facebook', 'refresh_listing_clicks_from_facebook'}
+BACKGROUND_ACTIONS = {'import_groups_from_facebook', 'import_listings_from_facebook', 'refresh_listing_clicks_from_facebook', 'check_account_login_cookie', 'daily_cookie_check'}
 
 
 def set_window_open(opened):

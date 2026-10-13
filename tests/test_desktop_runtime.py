@@ -73,10 +73,23 @@ class DesktopRuntimeTests(unittest.TestCase):
             _start_groups_import_job=lambda account: (calls.append(account) or (True, 'Started')))
         with tempfile.TemporaryDirectory() as folder, patch.dict('sys.modules', {'web': SimpleNamespace(routes=routes)}), patch.object(desktop_state, 'checkpoint'), patch('automation.desktop_preferences.load', return_value={'background_sync': True}), patch.object(maintenance, 'data_dir', return_value=Path(folder)):
             maintenance.record('account', 'clicks', True)
+            maintenance.record('account', 'cookies', True)
             maintenance.tick()
             maintenance.record('account', 'groups', True)
             maintenance.tick()
         self.assertEqual(calls, ['account'])
+
+    def test_cookie_check_is_once_daily_even_after_unknown_result(self):
+        routes = SimpleNamespace(post_locks_by_account={}, listing_import_jobs={}, listing_click_jobs={},
+            facebook_delete_jobs={}, groups_jobs={}, scheduled_posts={}, repost_jobs={},
+            scheduler=SimpleNamespace(get_jobs=lambda: []), _get_post_lock=lambda account: threading.Lock(),
+            get_all_accounts=lambda: ['account'], _listing_snapshot_is_due=lambda account: False)
+        with tempfile.TemporaryDirectory() as folder, patch.dict('sys.modules', {'web': SimpleNamespace(routes=routes)}), patch.object(desktop_state, 'checkpoint'), patch('automation.desktop_preferences.load', return_value={'background_sync': True}), patch.object(maintenance, 'data_dir', return_value=Path(folder)), patch.object(maintenance.time, 'time', return_value=200000), patch.object(maintenance, 'start_cookie_check', return_value=(True, 'Started')) as start:
+            maintenance.record('account', 'groups', True)
+            maintenance.record('account', 'clicks', True)
+            maintenance.tick()
+            maintenance.tick()
+            start.assert_called_once_with('account')
 
     def test_two_days_off_runs_overdue_maintenance_once_per_account(self):
         calls = []
@@ -84,12 +97,12 @@ class DesktopRuntimeTests(unittest.TestCase):
         routes._start_listing_import_job = lambda account, automatic: (calls.append(('import', account)) or (True, 'Started'))
         routes._start_listing_click_refresh_job = lambda account: (calls.append(('clicks', account)) or (True, 'Started'))
         with tempfile.TemporaryDirectory() as folder, patch.dict('sys.modules', {'web': SimpleNamespace(routes=routes)}), patch.object(desktop_state, 'checkpoint'), patch('automation.desktop_preferences.load', return_value={'background_sync': True}), patch.object(maintenance, 'data_dir', return_value=Path(folder)), patch.object(maintenance.time, 'time', return_value=172800):
-            (Path(folder) / 'maintenance.json').write_text(json.dumps({name: {'groups': {'last_success': 1}} for name in ['first', 'second']}))
+            (Path(folder) / 'maintenance.json').write_text(json.dumps({name: {'groups': {'last_success': 1}, 'cookies': {'last_success': 172800}} for name in ['first', 'second']}))
             for _ in range(6):
                 maintenance.tick()
         self.assertEqual(calls, [('import', 'first'), ('clicks', 'first'), ('import', 'second'), ('clicks', 'second')])
 
-    def run_update_scenario(self, fail=False):
+    def run_update_scenario(self, fail=False, include_new_uninstaller=False):
         with tempfile.TemporaryDirectory() as folder:
             folder = Path(folder)
             root, data, updates = folder / 'app', folder / 'data', folder / 'updates'
@@ -105,6 +118,8 @@ class DesktopRuntimeTests(unittest.TestCase):
             package = updates / 'update.zip'
             with zipfile.ZipFile(package, 'w') as archive:
                 archive.writestr('TayyaraMotors.exe', b'new-program')
+                if include_new_uninstaller:
+                    archive.writestr('Uninstall.exe', b'new-uninstaller')
                 archive.writestr('_internal/app_config.json', json.dumps({'version': '1.1.0'}))
             manifest = {'app': 'TayyaraMotors', 'version': '1.1.0', 'sha256': hashlib.sha256(package.read_bytes()).hexdigest(), 'reset_databases': ['listings'] if fail else []}
             raw = json.dumps(manifest).encode()
@@ -127,7 +142,7 @@ class DesktopRuntimeTests(unittest.TestCase):
                 else:
                     updater.main(plan)
             self.assertEqual((root / 'TayyaraMotors.exe').read_bytes(), b'previous-program' if fail else b'new-program')
-            self.assertEqual((root / 'Uninstall.exe').read_bytes(), b'uninstaller')
+            self.assertEqual((root / 'Uninstall.exe').read_bytes(), b'new-uninstaller' if include_new_uninstaller and not fail else b'uninstaller')
             self.assertEqual((data / 'session.pkl').read_bytes(), b'saved-session')
             with closing(sqlite3.connect(data / 'listings.db')) as db:
                 self.assertEqual(db.execute('SELECT value FROM saved').fetchone()[0], 'client-listing')
@@ -135,6 +150,9 @@ class DesktopRuntimeTests(unittest.TestCase):
 
     def test_update_replaces_program_and_preserves_client_data(self):
         self.run_update_scenario()
+
+    def test_update_installs_updated_uninstaller(self):
+        self.run_update_scenario(include_new_uninstaller=True)
 
     def test_failed_update_restores_program_and_reset_database(self):
         self.run_update_scenario(fail=True)

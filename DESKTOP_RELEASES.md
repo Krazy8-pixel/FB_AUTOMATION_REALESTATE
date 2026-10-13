@@ -8,11 +8,11 @@ On first launch, the client creates their portal login and adds their Facebook a
 
 Installed program files live in `%LOCALAPPDATA%\Programs\TayyaraMotors`. Client accounts, sessions, groups, listings, media, preferences, and schedules live separately in `%LOCALAPPDATA%\TayyaraMotors\data`.
 
-Ordinary updates replace program files only. Uninstalling retains saved data. Facebook itself can still expire a session or request verification.
+Ordinary updates replace program files only. From version 1.0.11, uninstalling also deletes saved accounts, sessions, listings, groups, media, preferences, schedules, and caches. Facebook itself can still expire a session or request verification.
 
 ## Background operation
 
-Closing the window cancels foreground automation and queued posts/reposts permanently. Only group fetching, listing imports, and click refresh continue in the tray. Exit App also hides the tray icon while these maintenance tasks keep running. Launching the app again restores the window and tray icon. Start With Windows and Background Sync are enabled by default and can be changed in Settings.
+Closing the window cancels foreground automation and queued posts/reposts permanently. Group fetching, listing imports, click refresh, and daily cookie checks continue in the tray. Exit App also hides the tray icon while these maintenance tasks keep running. Launching the app again restores the window and tray icon. Start With Windows and Background Sync are enabled by default and can be changed in Settings.
 
 Imports run once every 24 hours and click refreshes every 4 hours for each account. Maintenance runs one task at a time and waits for manual automation. Sleeping or powered-off PCs cannot run tasks. Each overdue maintenance task runs once after the app resumes. Pending schedules are restored; interrupted posting jobs require review to avoid duplicate posts.
 

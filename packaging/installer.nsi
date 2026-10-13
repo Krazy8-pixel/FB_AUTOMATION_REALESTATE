@@ -1,7 +1,11 @@
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 Name "Facebook Marketplace Automation"
+!ifdef GENERATE_UNINSTALLER
+OutFile "..\build\uninstall\MakeUninstaller.exe"
+!else
 OutFile "..\release\FacebookMarketplaceAutomation-Setup-${APP_VERSION}.exe"
+!endif
 InstallDir "$LOCALAPPDATA\Programs\TayyaraMotors"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
@@ -11,16 +15,19 @@ UninstallIcon "..\assets\app.ico"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
+!define MUI_UNCONFIRMPAGE_TEXT_TOP "Uninstall will remove Tayyara Motors and all saved accounts, sessions, listings, groups, media, settings, and schedules from this computer."
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 Function .onInit
+!ifndef GENERATE_UNINSTALLER
   System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "Local\TayyaraMotorsDesktop") p .r0'
   ${If} $0 != 0
     System::Call 'kernel32::CloseHandle(p r0)'
     MessageBox MB_OK "Please exit the app using its tray menu before installing."
     Abort
   ${EndIf}
+!endif
 FunctionEnd
 ; NSIS is 32-bit: inspect the machine's 32-bit registration and both user views.
 Function DetectWebViewRuntime
@@ -39,6 +46,9 @@ Function DetectWebViewRuntime
   SetRegView 32
 FunctionEnd
 Section "Install"
+!ifdef GENERATE_UNINSTALLER
+  WriteUninstaller "$EXEDIR\Uninstall.exe"
+!else
   SetShellVarContext current
   SetOutPath "$TEMP\TayyaraMotorsSetup"
   File "prerequisites\MicrosoftEdgeWebview2Setup.exe"
@@ -73,6 +83,7 @@ Section "Install"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TayyaraMotors" "InstallLocation" "$INSTDIR"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TayyaraMotors" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TayyaraMotors" "NoRepair" 1
+!endif
 SectionEnd
 Function un.CloseApp
   ; Ask the tray instance to stop, rather than making users find its menu.
@@ -108,6 +119,7 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\Tayyara Motors\Tayyara Motors.lnk"
   Delete "$SMPROGRAMS\Tayyara Motors\Uninstall Tayyara Motors.lnk"
   RMDir "$SMPROGRAMS\Tayyara Motors"
-  ; Only the fixed program directory is removed. Saved client data is retained.
+  ; Delete this app's saved accounts, sessions, media, databases, and caches.
+  RMDir /r "$LOCALAPPDATA\TayyaraMotors"
   RMDir /r "$INSTDIR"
 SectionEnd

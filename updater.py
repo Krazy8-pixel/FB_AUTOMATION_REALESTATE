@@ -72,7 +72,7 @@ def main(plan_path):
             raise RuntimeError('The app did not close; no update was installed')
         time.sleep(.5)
     # Keep installer integration when replacing program files.
-    if (root / 'Uninstall.exe').exists():
+    if not (staging / 'Uninstall.exe').exists() and (root / 'Uninstall.exe').exists():
         shutil.copy2(root / 'Uninstall.exe', staging / 'Uninstall.exe')
     backup = folder / ('listings-before-' + manifest['version'] + '.db')
     root.rename(previous)

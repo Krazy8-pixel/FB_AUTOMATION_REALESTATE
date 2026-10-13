@@ -12,5 +12,6 @@
 @media(max-width:900px) {
   .topbar .topbar-brand { flex:1 1 100%; width:100%; min-width:0; }
 }
-.app-brand-logo { width:42px; height:42px; object-fit:contain; flex-shrink:0; }
-@media(max-width:400px) { .app-brand-logo { width:30px; height:30px; }.topbar .tayyara-wordmark { font-size:15px; }.brand .tayyara-wordmark { font-size:17px; } }
+.app-brand-logo { width:64px; height:64px; object-fit:contain; flex-shrink:0; }
+.app-brand-name { font-size:24px; color:#123d83; }
+@media(max-width:400px) { .app-brand-logo { width:56px; height:56px; }.app-brand-name { font-size:21px; }.topbar .tayyara-wordmark { font-size:15px; }.brand .tayyara-wordmark { font-size:17px; } }

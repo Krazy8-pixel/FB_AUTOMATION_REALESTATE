@@ -29,8 +29,13 @@ def main():
     cfg = json.loads(cfg_path.read_text())
     cfg['version'] = args.version
     cfg_path.write_text(json.dumps(cfg, indent=2) + '\n')
+    compiler = next((ROOT / 'packaging/compiler').rglob('makensis.exe'))
+    (ROOT / 'build/uninstall').mkdir(parents=True, exist_ok=True)
+    run(str(compiler), '/DGENERATE_UNINSTALLER', '/DAPP_VERSION=' + args.version, str(ROOT / 'packaging/installer.nsi'))
+    run(str(ROOT / 'build/uninstall/MakeUninstaller.exe'), '/S')
     run(sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile', '--noconsole', '--name', 'TayyaraUpdater', '--distpath', 'build/updater', '--workpath', 'build/updater-work', '--specpath', 'packaging', 'updater.py')
     run(sys.executable, '-m', 'PyInstaller', '--noconfirm', 'desktop.spec')
+    shutil.copy2(ROOT / 'build/uninstall/Uninstall.exe', ROOT / 'dist/TayyaraMotors/Uninstall.exe')
     # Selenium exposes browser drivers through lazy imports, which PyInstaller
     # cannot discover from the app's webdriver.Chrome call alone.
     from PyInstaller.archive.readers import ZlibArchiveReader
