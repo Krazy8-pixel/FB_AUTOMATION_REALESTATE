@@ -1,4 +1,5 @@
 import json
+from automation.task_control import cancellable, check_cancelled
 import os
 import pickle
 import re
@@ -239,11 +240,13 @@ def _find_logged_in_tab(driver):
     return False
 
 
+@cancellable
 def _capture_when_logged_in(account):
     deadline = time.time() + LOGIN_WAIT_SECONDS
     driver = None
     try:
         while time.time() < deadline:
+            check_cancelled()
             meta = get_cdp_account(account)
             if not meta:
                 return

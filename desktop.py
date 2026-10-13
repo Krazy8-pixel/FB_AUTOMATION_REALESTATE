@@ -16,6 +16,8 @@ def main():
     parser.add_argument('--smoke-test', action='store_true')
     args = parser.parse_args()
     os.environ['FB_AUTOMATION_DESKTOP'] = '1'
+    from automation.task_control import set_window_open, stop_foreground_work
+    set_window_open(not args.background)
     os.environ['FB_AUTOMATION_BLOCK_BUTTON_SLEEP'] = '0'
     os.environ['FB_AUTOMATION_KEEP_AWAKE'] = '0'
     from automation.runtime_paths import data_dir, resource_root
@@ -35,6 +37,8 @@ def main():
         return
     from app import app
     from web import routes
+    if args.background:
+        stop_foreground_work(routes)
     from waitress import create_server
     import pystray
     import webview
@@ -51,12 +55,16 @@ def main():
     window = webview.create_window('Tayyara Motors', f'http://127.0.0.1:{port}/', width=1380, height=900, min_size=(390, 600), hidden=args.background)
 
     def show(icon=None, item=None):
+        set_window_open(True)
+        tray.visible = True
         window.show()
         window.restore()
 
     def quit_app(icon=None, item=None, updating=False):
-        if not updating and busy(routes):
-            ctypes.windll.user32.MessageBoxW(None, 'Automation is still running. Wait for it to finish before exiting. Closing the window keeps the app running in the tray.', 'Tayyara Motors', 0x40)
+        if not updating:
+            stop_foreground_work(routes)
+            window.hide()
+            tray.visible = False
             return
         shutting_down.set()
         routes.scheduler.pause()
@@ -66,6 +74,7 @@ def main():
 
     def closing():
         if not shutting_down.is_set():
+            stop_foreground_work(routes)
             window.hide()
             return False
         return True

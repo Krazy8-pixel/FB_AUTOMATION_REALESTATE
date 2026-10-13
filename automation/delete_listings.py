@@ -1,4 +1,5 @@
-﻿import os
+from automation.task_control import cancellable
+import os
 import time
 import base64
 import requests
@@ -49,6 +50,7 @@ def _apply_browser_safety_patches(driver):
     except Exception as e:
         print(f"[DeleteListings] Browser safety patch warning: {e}")
 
+@cancellable
 def delete_listing(account, limit, status):
 
     limit = int(limit)

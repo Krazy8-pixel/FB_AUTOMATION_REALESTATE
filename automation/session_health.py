@@ -1,4 +1,5 @@
 import json
+from automation.task_control import cancellable
 import os
 import pickle
 import re
@@ -134,6 +135,7 @@ def _safe_get(driver, url):
         return False
 
 
+@cancellable
 def check_account_login_cookie(account, cancel_event=None, driver_holder=None):
     cancel_event = cancel_event or threading.Event()
     driver = None

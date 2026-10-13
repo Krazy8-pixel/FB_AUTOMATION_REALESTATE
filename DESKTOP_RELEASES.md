@@ -12,7 +12,7 @@ Ordinary updates replace program files only. Uninstalling retains saved data. Fa
 
 ## Background operation
 
-Closing the window hides it in the tray. Start With Windows and Background Sync are enabled by default and can be changed in Settings. Exit App in the tray stops the app after current work finishes.
+Closing the window cancels foreground automation and queued posts/reposts permanently. Only group fetching, listing imports, and click refresh continue in the tray. Exit App also hides the tray icon while these maintenance tasks keep running. Launching the app again restores the window and tray icon. Start With Windows and Background Sync are enabled by default and can be changed in Settings.
 
 Imports run once every 24 hours and click refreshes every 4 hours for each account. Maintenance runs one task at a time and waits for manual automation. Sleeping or powered-off PCs cannot run tasks. Each overdue maintenance task runs once after the app resumes. Pending schedules are restored; interrupted posting jobs require review to avoid duplicate posts.
 
@@ -21,12 +21,11 @@ added). The completion marker is saved, including successful empty results.
 Failed attempts retry after backoff. Cancelling group fetching pauses automatic
 retries; starting a manual group import enables it again.
 
-Closing the window keeps every task running in the tray, including scheduled
-posts and reposts. Scheduled Posts and Repost Status show running actions with
+Scheduled Posts and Repost Status show running actions with
 Cancel controls. Queued schedules can be cancelled before they start. Running
 cancellation prevents further browser commands and interrupts posting delays;
-an action already submitted to Facebook cannot be undone. Exit App stops the
-process; it is separate from closing the window.
+an action already submitted to Facebook cannot be undone. Updates and uninstall
+stop the actual app process; closing the window and Exit App retain maintenance.
 
 ## Publish a code update from this PC
 

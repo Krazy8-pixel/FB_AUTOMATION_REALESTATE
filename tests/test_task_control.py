@@ -1,10 +1,41 @@
 import threading
 import unittest
 from unittest.mock import MagicMock
+from unittest.mock import patch
+from types import SimpleNamespace
 from automation import task_control
 
 
 class TaskControlTests(unittest.TestCase):
+    def test_close_cancels_schedules_but_keeps_maintenance_jobs(self):
+        scheduler = MagicMock()
+        scheduler.get_jobs.return_value = [SimpleNamespace(id=value) for value in ['post-one', 'maintenance', 'desktop-state-checkpoint']]
+        routes = SimpleNamespace(scheduled_posts={'one': {'status': 'pending'}},
+            repost_jobs={'two': {'status': 'posting'}}, scheduled_posts_lock=threading.RLock(),
+            repost_jobs_lock=threading.RLock(), scheduler=scheduler, LISTING_AUTO_REFRESH_CHECK_JOB_ID='maintenance')
+        with patch('automation.desktop_state.checkpoint'):
+            task_control.stop_foreground_work(routes)
+        self.assertEqual(routes.scheduled_posts['one']['status'], 'cancelled')
+        self.assertEqual(routes.repost_jobs['two']['status'], 'cancelled')
+        scheduler.remove_job.assert_called_once_with('post-one')
+
+    def tearDown(self):
+        task_control.set_window_open(True)
+
+    def test_closed_window_rejects_posting_but_allows_maintenance(self):
+        @task_control.cancellable
+        def posting(account):
+            return 'posted'
+        @task_control.cancellable
+        def import_groups_from_facebook(account):
+            return 'imported'
+        with patch.dict('os.environ', FB_AUTOMATION_DESKTOP='1'):
+            task_control.set_window_open(False)
+            with self.assertRaisesRegex(RuntimeError, 'window is closed'):
+                posting('account')
+            self.assertEqual(import_groups_from_facebook('account'), 'imported')
+            task_control.set_window_open(True)
+            self.assertEqual(posting('account'), 'posted')
     def test_cancel_blocks_browser_actions_but_allows_cleanup(self):
         ready, done = threading.Event(), threading.Event()
         driver = MagicMock()
