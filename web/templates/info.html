@@ -1,96 +1,69 @@
 {% extends "base.html" %}
-{% block title %}How to Use the Bot{% endblock %}
-
-{% block extra_css %}
-<style>
-  .onboard-page { width:min(1120px,100%); margin:0 auto; color:#25364a; }
-  .onboard-hero { position:relative; overflow:hidden; padding:34px; border:1px solid #cbdced; border-radius:22px; background:linear-gradient(135deg,#fff 0%,#edf5ff 100%); box-shadow:0 15px 35px rgba(41,88,139,.09); }
-  .onboard-hero::after { content:""; position:absolute; right:-70px; top:-90px; width:240px; height:240px; border-radius:50%; background:rgba(48,128,220,.09); }
-  .onboard-label { display:inline-flex; padding:6px 10px; border-radius:999px; background:#e2efff; color:#1764ba; font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
-  .onboard-hero h1 { position:relative; z-index:1; max-width:700px; margin:13px 0 8px; color:#18344f; font-size:clamp(28px,4vw,42px); line-height:1.12; }
-  .onboard-hero > p { position:relative; z-index:1; max-width:720px; margin:0; color:#63778b; font-size:15px; line-height:1.65; }
-  .onboard-first-steps { position:relative; z-index:1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:24px; }
-  .onboard-step { display:flex; gap:12px; padding:16px; border:1px solid #d5e3f2; border-radius:14px; background:rgba(255,255,255,.9); }
-  .onboard-step-number { display:grid; place-items:center; width:32px; height:32px; flex:0 0 32px; border-radius:10px; background:#287bd8; color:#fff; font-size:13px; font-weight:800; }
-  .onboard-step strong { display:block; margin:1px 0 4px; color:#27435e; font-size:14px; }
-  .onboard-step span { color:#718396; font-size:12px; line-height:1.45; }
-  .onboard-section-title { margin:30px 0 14px; color:#203a54; font-size:21px; }
-  .onboard-workflows { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
-  .onboard-card { padding:22px; border:1px solid #d8e3ee; border-radius:17px; background:#fff; box-shadow:0 9px 25px rgba(38,75,114,.06); }
-  .onboard-card-head { display:flex; align-items:center; gap:11px; margin-bottom:13px; }
-  .onboard-card-icon { display:grid; place-items:center; width:38px; height:38px; border-radius:11px; background:#e6f1ff; color:#2474ce; font-size:13px; font-weight:900; }
-  .onboard-card h2 { margin:0; color:#274058; font-size:17px; }
-  .onboard-card p { margin:0 0 10px; color:#64788c; font-size:13px; line-height:1.55; }
-  .onboard-card ol,.onboard-card ul { margin:0; padding-left:19px; color:#526a80; font-size:13px; line-height:1.75; }
-  .onboard-card li + li { margin-top:3px; }
-  .onboard-warning { display:grid; grid-template-columns:auto 1fr; gap:14px; margin-top:18px; padding:20px 22px; border:1px solid #f0d48b; border-radius:16px; background:#fffaf0; }
-  .onboard-warning-mark { display:grid; place-items:center; width:36px; height:36px; border-radius:11px; background:#ffedbd; color:#9a6500; font-weight:900; }
-  .onboard-warning h2 { margin:0 0 7px; color:#805600; font-size:16px; }
-  .onboard-warning ul { margin:0; padding-left:18px; color:#755f31; font-size:13px; line-height:1.7; }
-  /* This page intentionally uses only blue and white. */
-  .onboard-page { color:#174f91; }
-  .onboard-hero { border-color:#287bd8; background:#fff; box-shadow:0 15px 35px rgba(25,103,190,.12); }
-  .onboard-hero::after { background:#287bd8; opacity:.08; }
-  .onboard-label { background:#287bd8; color:#fff; }
-  .onboard-hero h1,.onboard-section-title,.onboard-step strong,.onboard-card h2 { color:#174f91; }
-  .onboard-hero > p,.onboard-step span,.onboard-card p,.onboard-card ol,.onboard-card ul { color:#2367ae; }
-  .onboard-step,.onboard-card { border-color:#b8d7f7; background:#fff; }
-  .onboard-card-icon { background:#287bd8; color:#fff; }
-  .onboard-warning { border-color:#287bd8; background:#fff; }
-  .onboard-warning-mark { background:#287bd8; color:#fff; }
-  .onboard-warning h2,.onboard-warning ul { color:#174f91; }
-  /* Flat dark-blue, white and grey palette. */
-  .onboard-page { color:#0b3d91; }
-  .onboard-hero,.onboard-step,.onboard-card,.onboard-warning {
-    background:#fff;
-    background-image:none;
-    border-color:#d5d5d5;
-    box-shadow:none;
-  }
-  .onboard-hero::after { display:none; }
-  .onboard-label,.onboard-step-number,.onboard-card-icon,.onboard-warning-mark {
-    background:#0b3d91;
-    color:#fff;
-  }
-  .onboard-hero h1,.onboard-section-title,.onboard-step strong,.onboard-card h2,.onboard-warning h2 {
-    color:#0b3d91;
-  }
-  .onboard-hero > p,.onboard-step span,.onboard-card p,.onboard-card ol,.onboard-card ul,.onboard-warning ul {
-    color:#555;
-  }
-  @media (max-width:800px) {
-    .onboard-first-steps,.onboard-workflows { grid-template-columns:1fr; }
-    .onboard-hero { padding:24px 20px; }
-  }
-</style>
-{% endblock %}
-
+{% block title %}Help & Instructions{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">{% endblock %}
 {% block content %}
-<main class="onboard-page">
-  <section class="onboard-hero">
-    <span class="onboard-label">Simple setup guide</span>
-    <h1>Start using Marketplace Bot</h1>
-    <p>Choose the Facebook account first, then open the task you want. The five everyday tools stay in the sidebar; setup and less-used options are inside More Tools.</p>
-    <div class="onboard-first-steps">
-      <div class="onboard-step"><span class="onboard-step-number">1</span><div><strong>Add an account</strong><span>Open More Tools → Accounts and sign in to Facebook.</span></div></div>
-      <div class="onboard-step"><span class="onboard-step-number">2</span><div><strong>Select it</strong><span>Choose the correct account from the top bar.</span></div></div>
-      <div class="onboard-step"><span class="onboard-step-number">3</span><div><strong>Start a task</strong><span>Pick a tool from the sidebar and follow its buttons.</span></div></div>
-    </div>
+<main class="settings-page">
+  <a class="guide-back" href="{{ url_for('web.settings_page') }}">&larr; Back to Settings</a>
+  <div class="settings-heading"><span class="settings-eyebrow">USER GUIDE</span><h1>HELP &amp; INSTRUCTIONS</h1><p>Choose a topic below. Each guide explains where to go and what to do.</p></div>
+  <section class="guide-start"><h2>START HERE</h2><ol><li>Open <strong>Settings &rarr; Accounts</strong>. Add a Facebook account and finish signing in in the browser window.</li><li>Choose that account in <strong>Active Account</strong> at the top. Check this before starting a task.</li><li>Choose a task in the sidebar. Keep the app running while a task is working or waiting for its scheduled time.</li></ol></section>
+  <section class="guide-controls" aria-label="Guide controls">
+    <div class="guide-search"><label for="guide-search">FIND AN ANSWER</label><input id="guide-search" type="search" placeholder="Search topics or steps, e.g. photos" autocomplete="off" aria-controls="guide-topics"></div>
+    <div class="guide-actions"><button type="button" id="guide-expand">EXPAND ALL</button><button type="button" id="guide-collapse">COLLAPSE ALL</button><button type="button" id="guide-reset">CLEAR SEARCH</button></div>
   </section>
-
-  <h2 class="onboard-section-title">Main tasks</h2>
-  <section class="onboard-workflows">
-    <article class="onboard-card"><div class="onboard-card-head"><span class="onboard-card-icon">01</span><h2>Create Listings</h2></div><p>Publish one listing manually or several listings from an Excel file.</p><ul><li>Add the required listing details.</li><li>Use at least one valid image.</li><li>Leave enough delay between multiple posts.</li></ul></article>
-    <article class="onboard-card"><div class="onboard-card-head"><span class="onboard-card-icon">02</span><h2>Manage Listings</h2></div><ol><li>Click Import Listings and wait until it finishes.</li><li>Select listings when you want to delete several.</li><li>Clear All Listings only removes saved app data, not Facebook listings.</li></ol></article>
-    <article class="onboard-card"><div class="onboard-card-head"><span class="onboard-card-icon">03</span><h2>Repost a Listing</h2></div><ol><li>Import listings in Manage Listings.</li><li>Click Repost beside one listing.</li><li>Choose the delay and schedule it.</li><li>Check progress on the Reposting page.</li></ol></article>
-    <article class="onboard-card"><div class="onboard-card-head"><span class="onboard-card-icon">04</span><h2>Auto Reply</h2></div><p>Set the reply message and start Auto Reply for the selected account.</p><ul><li>Use More Tools → Reply Status to check it.</li><li>Keep the Facebook account signed in.</li></ul></article>
-    <article class="onboard-card"><div class="onboard-card-head"><span class="onboard-card-icon">05</span><h2>Groups</h2></div><p>Open More Tools → Groups to add or import groups. Use Group Posting to publish to the selected groups.</p></article>
-    <article class="onboard-card"><div class="onboard-card-head"><span class="onboard-card-icon">06</span><h2>Schedules and Activity</h2></div><p>Open More Tools to view Scheduled Posts, Reply Status, and the Activity Log whenever you need to check progress.</p></article>
-  </section>
-
-  <section class="onboard-warning">
-    <span class="onboard-warning-mark">!</span>
-    <div><h2>Before running automation</h2><ul><li>Confirm the correct active account at the top.</li><li>Keep the app running while work is scheduled or in progress.</li><li>If Facebook requests verification, sign in again before retrying.</li><li>Do not schedule posting actions too close together.</li></ul></div>
-  </section>
+  <p id="guide-results" class="guide-results" role="status" aria-live="polite"></p>
+  <p id="guide-empty" class="guide-empty" hidden>No topics match your search. Try another word or click CLEAR SEARCH.</p>
+  <nav class="guide-nav" aria-label="Instruction topics">{% for id, label in [('accounts','Accounts'),('dashboard','Dashboard'),('manual','Manual posting'),('excel','Excel posting'),('manage','Manage listings'),('repost','Reposting'),('cross','Cross posting'),('groups','Groups'),('group-posting','Group posting'),('schedules','Schedules'),('activity','Activity log'),('header','Header controls'),('cleanup','Cleanup'),('desktop','Background & Updates')] %}<a href="#{{ id }}">{{ label|upper }}</a>{% endfor %}</nav>
+  <div id="guide-topics">
+  <details class="guide-topic" id="accounts" open><summary>ACCOUNTS: ADD, CHECK, OR SIGN IN AGAIN</summary><div><ol><li>Open <strong>Settings &rarr; Accounts</strong>.</li><li>Enter an account title and click <strong>Open Facebook Login</strong>.</li><li>Sign in to Facebook in the window that opens. Complete any verification Facebook requests and wait for the app to save the login.</li><li>Choose the account from the top bar when you want to use it.</li><li>Use <strong>Check Login Cookies</strong> to check saved logins. If a login has expired, use <strong>Re-login</strong> and finish signing in again.</li></ol><p><strong>Delete</strong> removes an account from this app. It does not delete your Facebook account. Your portal login is separate from your Facebook login; <strong>Logout</strong> signs you out of the portal.</p></div></details>
+  <details class="guide-topic" id="dashboard"><summary>DASHBOARD: FIND A TASK QUICKLY</summary><div><p>Open <strong>Dashboard</strong> in the sidebar for shortcuts to posting, listings, accounts, groups, and history. Click a task to open its page.</p></div></details>
+  <details class="guide-topic" id="manual"><summary>CREATE ONE LISTING MANUALLY</summary><div><ol><li>Open <strong>Create Listings &rarr; Manual Posting</strong>.</li><li>Choose the vehicle type and fill in the vehicle details, price, and description.</li><li>Add photos (up to 20) and optional videos (up to 5). If a video upload fails or is unsupported, it is skipped and posting continues. Review the details before posting.</li><li>Choose a delay if you want the post to run later.</li><li>Choose the posting action. For group posting, select the groups. For posting to multiple accounts, select the accounts in the account window.</li><li>Open <strong>Scheduled Posts</strong> to check the job.</li></ol><p>Use <strong>Settings &rarr; Groups</strong> first if the group selection is empty.</p></div></details>
+  <details class="guide-topic" id="excel"><summary>CREATE SEVERAL LISTINGS FROM EXCEL</summary><div><ol><li>Open <strong>Create Listings &rarr; Excel Posting</strong>.</li><li>Choose your Excel file. Put each listing on its own row, with its vehicle details, price, description, and supported image fields.</li><li>Choose the delay unit and value to set the time between posts.</li><li>Submit the file and check any messages about missing details or images.</li><li>Open <strong>Scheduled Posts</strong> to follow the queue.</li></ol><p>Check the active account before uploading. Keep the app running until the queued work finishes.</p></div></details>
+  <details class="guide-topic" id="manage"><summary>MANAGE LISTINGS: IMPORT, REVIEW, AND DELETE</summary><div><ol><li>Open <strong>Manage Listings</strong> and click <strong>Import Listings</strong>.</li><li>Wait while the app saves listing details and photos. Use <strong>Stop Import</strong> if you need to stop.</li><li>Search or select listings. Open a listing to review its details and saved photos.</li><li>Click <strong>Refresh Clicks</strong> to update listing click counts from Facebook.</li><li>To remove a listing, open it and click <strong>Delete listing</strong>. Choose <strong>Delete from Facebook</strong>, <strong>Delete from database</strong>, or <strong>Delete both</strong>.</li></ol><p>Deleting from Facebook removes the live post. Deleting from the database removes the app's saved backup. <strong>Clear All Listings</strong> clears saved app listings; it does not delete Facebook posts. For bulk Facebook deletion, select listings and use <strong>Delete from Facebook</strong>.</p></div></details>
+  <details class="guide-topic" id="repost"><summary>REPOST A SAVED LISTING</summary><div><ol><li>Import your listings in <strong>Manage Listings</strong>, then open the listing you want.</li><li>Click <strong>Repost listing</strong>.</li><li>Review or change the new listing's details. Arrange the photos; the first photo becomes the cover.</li><li>Choose to repost now or schedule it for later, then confirm the action.</li><li>Open <strong>Repost Status</strong> to see its schedule, progress, and result.</li></ol><p>Reposting deletes the original Facebook listing first, then publishes the new one. Your saved backup is kept even if posting fails. Review the result before retrying. <strong>Clear history</strong> clears the repost history display.</p></div></details>
+  <details class="guide-topic" id="cross"><summary>CROSS POST TO OTHER FACEBOOK ACCOUNTS</summary><div><ol><li>Open a saved listing in <strong>Manage Listings</strong> and click <strong>Post on Other accounts</strong>.</li><li>Choose the other accounts that should receive the listing.</li><li>Review the details, photo order, and timing, then confirm cross posting.</li><li>Check <strong>Scheduled Posts</strong> for the source or destination account. Cross posts run one at a time.</li></ol><p>Each destination account needs a working Facebook login.</p></div></details>
+  <details class="guide-topic" id="groups"><summary>IMPORT OR ADD FACEBOOK GROUPS</summary><div><ol><li>Choose the Facebook account at the top, then open <strong>Settings &rarr; Groups</strong>.</li><li>Click <strong>Import Buy and Sell Groups</strong> and wait for the list to load. You can stop an import using the stop control.</li><li>To add a group individually, paste its Facebook group link into the add-group field and submit it.</li><li>Search the saved groups and select entries to remove if needed.</li></ol><p>Removing a saved group from this app does not make you leave the group on Facebook.</p></div></details>
+  <details class="guide-topic" id="group-posting"><summary>SCHEDULE A POST FOR SEVERAL GROUPS</summary><div><ol><li>Open <strong>Settings &rarr; Group Posting</strong>.</li><li>Write the description that you want to use for every group.</li><li>Paste the group links, one link per line.</li><li>Add photos if needed and choose the delay unit and value.</li><li>Click <strong>Schedule Group Posting</strong> and follow the page's progress messages.</li></ol><p>The account must be able to post in each group. A group's approval process can affect when a post becomes visible.</p></div></details>
+  <details class="guide-topic" id="schedules"><summary>SCHEDULED POSTS AND REPOST STATUS</summary><div><p>Open <strong>Scheduled Posts</strong> in the sidebar to see queued posts, posting times, and statuses for the selected account. The table refreshes automatically. Use its delete action to remove a queue entry, and review the displayed status first.</p><p>Open <strong>Repost Status</strong> for repost schedules and history. Keep the app running and your PC awake until jobs finish. In the installed desktop app, schedules are saved when you restart. Closing the window keeps the app running in its tray. If your PC is off or asleep, jobs wait until it is available again. Interrupted posts are marked for review so the app does not post them twice.</p></div></details>
+  <details class="guide-topic" id="activity"><summary>ACTIVITY LOG: CHECK WHAT HAPPENED</summary><div><p>Open <strong>Settings &rarr; Activity Log</strong> to read recent automation messages. If a task fails, check its message, confirm the account is signed in, and fix any missing details before retrying. Clearing the log removes saved activity messages.</p></div></details>
+  <details class="guide-topic" id="header"><summary>HEADER CONTROLS: ACCOUNT, BACKGROUND MODE, AND STORAGE</summary><div><ul><li><strong>Active Account:</strong> choose which Facebook account you want to work with.</li><li><strong>Background:</strong> Hidden runs supported automation without showing its Chrome window. Visible shows the browser. Login and verification may still need a visible window.</li><li><strong>Temp / Uploads:</strong> show the space used by screenshots and manually uploaded images/videos.</li><li><strong>Logout:</strong> sign out of the app's portal.</li><li>On a small screen, use the header arrow to collapse or expand the header.</li></ul></div></details>
+  <details class="guide-topic" id="cleanup"><summary>CLEAN UP: FREE SPACE AFTER POSTING</summary><div><ol><li>Wait until posting jobs have finished, including scheduled jobs that need uploaded photos.</li><li>Open <strong>Settings</strong> and find <strong>Clean Up</strong>.</li><li>Review the screenshot and upload sizes, then click <strong>Clean Up</strong>.</li></ol><p>This deletes saved screenshots and manually uploaded images/videos. It keeps accounts, listing backups, and Facebook posts. Cleanup is disabled while listing posts are running or queued for any account.</p></div></details>
+<details class="guide-topic" id="desktop"><summary>BACKGROUND SYNC AND APP UPDATES</summary><div><ol><li>Open <strong>Settings</strong> to control <strong>Background Sync</strong> and <strong>Start With Windows</strong>. Both are on by default in the installed app.</li><li>The app imports each account's latest listings once every 24 hours and refreshes clicks every 4 hours. It waits for your current automation to finish.</li><li>If the PC has been off, each overdue task runs once when the app resumes. Missed refreshes are not repeated.</li><li>Close the window to keep the app in the tray. Right-click its tray icon and choose <strong>Exit App</strong> to stop it.</li><li>When you are told an update is ready, open <strong>Settings</strong>, click <strong>Check for Updates</strong>, then <strong>Download &amp; Install</strong>. Finish any running automation first.</li></ol><p>Normal updates keep accounts, Facebook sessions, groups, and listings. An update that resets saved listings asks you before installing. Facebook may still occasionally require a fresh login.</p></div></details>
+  </div>
 </main>
+{% endblock %}
+{% block extra_js %}
+<script>
+(function () {
+  const topics = Array.from(document.querySelectorAll('.guide-topic'));
+  const links = Array.from(document.querySelectorAll('.guide-nav a'));
+  const search = document.getElementById('guide-search');
+  const results = document.getElementById('guide-results');
+  const empty = document.getElementById('guide-empty');
+  function filterTopics() {
+    const query = search.value.trim().toLowerCase();
+    let count = 0;
+    topics.forEach(function(topic) {
+      const match = !query || topic.textContent.toLowerCase().includes(query);
+      topic.hidden = !match;
+      if (match) { count++; if (query) topic.open = true; }
+    });
+    links.forEach(function(link) { link.hidden = document.getElementById(link.hash.slice(1)).hidden; });
+    results.textContent = query ? count + ' matching topic' + (count === 1 ? '' : 's') : topics.length + ' topics ? select one to see its steps.';
+    empty.hidden = count !== 0;
+  }
+  function clearSearch() { search.value = ''; filterTopics(); }
+  function openGuideTopic() {
+    const topic = topics.find(function(item) { return '#' + item.id === window.location.hash; });
+    if (topic) { clearSearch(); topic.open = true; topic.scrollIntoView({block:'start'}); }
+  }
+  search.addEventListener('input', filterTopics);
+  document.getElementById('guide-expand').addEventListener('click', function() { topics.forEach(function(topic) { if (!topic.hidden) topic.open = true; }); });
+  document.getElementById('guide-collapse').addEventListener('click', function() { topics.forEach(function(topic) { topic.open = false; }); });
+  document.getElementById('guide-reset').addEventListener('click', function() { clearSearch(); search.focus(); });
+  links.forEach(function(link) { link.addEventListener('click', function() { document.getElementById(link.hash.slice(1)).open = true; }); });
+  window.addEventListener('hashchange', openGuideTopic);
+  filterTopics();
+  openGuideTopic();
+})();
+</script>
 {% endblock %}

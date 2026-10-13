@@ -18,6 +18,7 @@ from automation.runtime_paths import session_health_path, sessions_dir
 SESSION_DIR = sessions_dir()
 HEALTHY = "Valid"
 EXPIRED = "Expired"
+UNKNOWN = "Check failed"
 
 _health_lock = threading.Lock()
 _check_job_lock = threading.Lock()
@@ -72,7 +73,7 @@ def set_session_health(account, status):
     account = str(account or "").strip()
     if not account:
         return
-    status = HEALTHY if status == HEALTHY else EXPIRED
+    status = status if status in {HEALTHY, EXPIRED, UNKNOWN} else UNKNOWN
     with _health_lock:
         payload = _read_health_unlocked()
         payload[account] = {
@@ -157,8 +158,7 @@ def check_account_login_cookie(account, cancel_event=None, driver_holder=None):
         options.add_argument("--disable-notifications")
         options.add_argument("--log-level=3")
         options.add_argument("--disable-blink-features=AutomationControlled")
-        # Session health checks are always invisible, independent of the
-        # user-facing Background toggle used by the other automations.
+        # Cookie checks run invisibly, independent of the Background toggle.
         options.add_argument("--headless=new")
         options.page_load_strategy = "eager"
         options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
@@ -205,7 +205,7 @@ def check_account_login_cookie(account, cancel_event=None, driver_holder=None):
         if driver_holder is not None:
             driver_holder["error"] = str(exc)
         print(f"[SessionCheck] Failed for {account}: {exc}", flush=True)
-        return EXPIRED
+        return UNKNOWN
     finally:
         if driver_holder is not None:
             driver_holder["driver"] = None

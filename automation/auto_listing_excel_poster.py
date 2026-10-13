@@ -175,7 +175,7 @@ def _normalize_marketplace_vehicle_settings(data):
     vehicle_type = _norm_text(normalized.get("vehicle_type")).casefold()
     other_vehicle_types = {"other", "motorcycle", "motorcycle/bike", "motorbike", "bike"}
     normalized["vehicle_type"] = "Other" if vehicle_type in other_vehicle_types else "Car"
-    normalized["vehicle_condition"] = "Excellent"
+    normalized["vehicle_condition"] = _norm_text(normalized.get('vehicle_condition')) or "Excellent"
     # Colours can come from Excel, manual posting, scraper integrations, and
     # other callers. Preserve the supplied values regardless of source.
 
@@ -257,6 +257,265 @@ def _combobox_label_xpath(label_text):
         f" | //*[@role='combobox' and ({aria_condition})]"
         f" | //*[@role='combobox'][{label_condition}]"
     )
+
+
+def _visible_vehicle_type_choices(driver):
+    """Read only the vehicle menu, including text-only listbox choices."""
+    return driver.execute_script(r"""
+        const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length))
+          && getComputedStyle(el).visibility !== 'hidden';
+        const norm = value => (value || '').replace(/\s+/g, ' ').trim();
+        const combos = [...document.querySelectorAll('[role="combobox"]')].filter(el => visible(el)
+          && (norm(el.getAttribute('aria-label')).toLowerCase() === 'vehicle type'
+            || [...el.querySelectorAll('span,div')].some(n => norm(n.textContent).toLowerCase() === 'vehicle type')));
+        const combo = combos[0];
+        if (!combo) return [];
+        const ids = norm((combo.getAttribute('aria-controls') || '') + ' ' + (combo.getAttribute('aria-owns') || '')).split(' ').filter(Boolean);
+        const owned = ids.map(id => document.getElementById(id)).filter(visible);
+        const roots = ids.length ? owned : [...document.querySelectorAll('[role="listbox"],[role="menu"]')].filter(visible);
+        const known = new Set(['car', 'car/van', 'motorcycle', 'power sport', 'motorhome/caravan',
+          'trailer', 'boat', 'commercial/industrial', 'other']);
+        const choices = [], seen = new Set();
+        const add = el => {
+          const text = norm(el.innerText || el.textContent);
+          if (!visible(el) || el.closest('[role="combobox"]') || el.getAttribute('aria-disabled') === 'true'
+            || !(known.has(text.toLowerCase()) || text.toLowerCase().startsWith('car'))
+            || seen.has(text.toLowerCase())) return;
+          seen.add(text.toLowerCase()); choices.push([el, text]);
+        };
+        for (const root of roots) {
+          const items = [...root.querySelectorAll('[role="option"],[role="menuitem"],[role="radio"],[role="button"]')];
+          items.forEach(add);
+          // Facebook may omit option roles. Use exact leaf text within the menu,
+          // never a matching value displayed in the closed combobox or page.
+          [...root.querySelectorAll('span,div')].filter(el =>
+            ![...el.children].some(child => norm(child.textContent) === norm(el.textContent))).forEach(add);
+        }
+        if (!ids.length && !roots.length && combo.getAttribute('aria-expanded') !== 'false') {
+          [...document.querySelectorAll('[role="option"],[role="menuitem"]')].forEach(add);
+        }
+        return choices;
+    """) or []
+
+
+def _open_vehicle_type_menu(driver, timeout=5):
+    """Avoid toggling an open menu; retry clicks lost during form re-renders."""
+    last_error = None
+    for method in ('javascript', 'native', 'actions', 'keyboard'):
+        if _visible_vehicle_type_choices(driver):
+            return
+        try:
+            combo = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(
+                (By.XPATH, _combobox_label_xpath('Vehicle type'))))
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", combo)
+            # An expanded-but-empty menu may still be rendering. Wait before
+            # resetting it so a second click doesn't close a working menu.
+            if combo.get_attribute('aria-expanded') == 'true':
+                try:
+                    WebDriverWait(driver, timeout).until(lambda d: _visible_vehicle_type_choices(d))
+                    return
+                except Exception:
+                    combo.send_keys(Keys.ESCAPE)
+                    combo = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(
+                        (By.XPATH, _combobox_label_xpath('Vehicle type'))))
+            if method == 'native':
+                combo.click()
+            elif method == 'actions':
+                ActionChains(driver).move_to_element(combo).pause(0.15).click().perform()
+            elif method == 'keyboard':
+                combo.send_keys(Keys.SPACE)
+            else:
+                driver.execute_script('arguments[0].click();', combo)
+            WebDriverWait(driver, timeout).until(lambda d: _visible_vehicle_type_choices(d))
+            return
+        except Exception as exc:
+            last_error = exc
+            print(f'[AutoListing] Vehicle type menu did not open with {method}; retrying.')
+    raise RuntimeError('Vehicle type menu did not show any selectable choices after four opening attempts') from last_error
+
+
+def _marketplace_combo(driver, label):
+    for combo in driver.find_elements(By.XPATH, _combobox_label_xpath(label)):
+        if combo.is_displayed() and combo.is_enabled() and combo.get_attribute('aria-disabled') != 'true':
+            return combo
+    return False
+
+
+def _marketplace_combo_choices(driver, label):
+    combo = _marketplace_combo(driver, label)
+    if not combo:
+        return []
+    return driver.execute_script(r"""
+      const combo=arguments[0], norm=v=>(v||'').replace(/\s+/g,' ').trim();
+      const visible=el=>!!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length))
+        && getComputedStyle(el).visibility !== 'hidden';
+      const ids=norm((combo.getAttribute('aria-controls')||'')+' '+(combo.getAttribute('aria-owns')||'')).split(' ').filter(Boolean);
+      const roots=ids.length ? ids.map(id=>document.getElementById(id)).filter(visible)
+        : [...document.querySelectorAll('[role="listbox"],[role="menu"]')].filter(visible);
+      let items=[];
+      for(const root of roots) {
+        let options=[...root.querySelectorAll('[role="option"],[role="menuitem"],[role="radio"],[role="button"]')].filter(visible);
+        if(!options.length) options=[...root.querySelectorAll('span,div')].filter(el=>visible(el)
+          && ![...el.children].some(child=>norm(child.textContent)===norm(el.textContent)));
+        items.push(...options);
+      }
+      if(!ids.length && !roots.length && combo.getAttribute('aria-expanded')!=='false')
+        items=[...document.querySelectorAll('[role="option"]')].filter(visible);
+      const seen=new Set(), result=[];
+      for(const el of items) {
+        const text=norm(el.innerText||el.textContent);
+        if(text && el.getAttribute('aria-disabled')!=='true' && !seen.has(text.toLowerCase())) {
+          seen.add(text.toLowerCase()); result.push([el,text]);
+        }
+      }
+      return result;
+    """, combo) or []
+
+
+def _marketplace_combo_value(driver, label):
+    combo = _marketplace_combo(driver, label)
+    if not combo:
+        return ''
+    return _norm_text(driver.execute_script(r"""
+      const el=arguments[0], label=arguments[1], norm=v=>(v||'').replace(/\s+/g,' ').trim();
+      const input=el.matches('input') ? el : el.querySelector('input');
+      if(input && norm(input.value)) return norm(input.value);
+      const clone=el.cloneNode(true);
+      clone.querySelectorAll('[role="option"],[role="listbox"],[role="menu"]').forEach(n=>n.remove());
+      let value=norm(clone.textContent);
+      for(const name of [label,label.replace('colour','color'),label.replace('color','colour')])
+        if(value.toLowerCase().startsWith(name.toLowerCase())) {value=value.slice(name.length).trim(); break;}
+      return value;
+    """, combo, label))
+
+
+def _open_marketplace_combo(driver, label, timeout=5):
+    last_error = None
+    # CDP Chrome may be behind another window; DOM clicks still reach React.
+    for method in ('javascript', 'native', 'actions', 'keyboard'):
+        if _marketplace_combo_choices(driver, label):
+            return
+        try:
+            combo = WebDriverWait(driver, timeout).until(lambda d: _marketplace_combo(d, label))
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", combo)
+            if combo.get_attribute('aria-expanded') == 'true':
+                try:
+                    WebDriverWait(driver, timeout).until(lambda d: _marketplace_combo_choices(d, label))
+                    return
+                except Exception:
+                    combo.send_keys(Keys.ESCAPE)
+                    combo = WebDriverWait(driver, timeout).until(lambda d: _marketplace_combo(d, label))
+            if method == 'javascript':
+                driver.execute_script('arguments[0].click();', combo)
+            elif method == 'native':
+                combo.click()
+            elif method == 'actions':
+                ActionChains(driver).move_to_element(combo).click().perform()
+            else:
+                combo.send_keys(Keys.SPACE)
+            WebDriverWait(driver, timeout).until(lambda d: _marketplace_combo_choices(d, label))
+            return
+        except Exception as exc:
+            last_error = exc
+            print(f'[AutoListing] {label} menu did not open with {method}; retrying.')
+    raise RuntimeError(f'{label} menu did not show selectable choices after four opening attempts') from last_error
+
+
+def _select_marketplace_combo(driver, label, desired, fallback=None, timeout=20, exact_only=False):
+    """Wait for the menu, try the source value and then verify the fallback."""
+    if label.casefold() == 'vehicle type':
+        fallback = None
+    candidates = []
+    values = [desired]
+    if label.casefold() == 'body style' and _norm_text(desired).casefold() == 'saloon':
+        values.append('Sedan')
+    values.append(fallback)
+    for value in values:
+        if _norm_text(value) and _norm_text(value).casefold() not in [v.casefold() for v in candidates]:
+            candidates.append(_norm_text(value))
+    wait_seconds = min(timeout, 5)
+    last_error = None
+    available = []
+    for candidate in candidates:
+        selected = _marketplace_combo_value(driver, label)
+        if selected.casefold() == candidate.casefold():
+            return selected
+        for method in ('javascript', 'native', 'actions', 'keyboard'):
+            try:
+                _open_marketplace_combo(driver, label, wait_seconds)
+                choices = _marketplace_combo_choices(driver, label)
+                available = [text for _, text in choices]
+                matches = [(el, text) for el, text in choices if text.casefold() == candidate.casefold()]
+                if not matches and not exact_only:
+                    matches = [(el, text) for el, text in choices if text.casefold().startswith(candidate.casefold())]
+                if not matches:
+                    # Keep the existing menu open while moving to Other.
+                    break
+                option, text = matches[0]
+                driver.execute_script("arguments[0].scrollIntoView({block:'nearest'});", option)
+                if method == 'javascript':
+                    driver.execute_script(
+                        "arguments[0].dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));"
+                        "arguments[0].dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));arguments[0].click();", option)
+                elif method == 'native':
+                    option.click()
+                elif method == 'actions':
+                    ActionChains(driver).move_to_element(option).click().perform()
+                else:
+                    option.send_keys(Keys.ENTER)
+                WebDriverWait(driver, wait_seconds).until(
+                    lambda d: _marketplace_combo_value(d, label).casefold() == text.casefold())
+                print(f'[AutoListing] {label} retained after {method} selection: {text}')
+                return text
+            except Exception as exc:
+                last_error = exc
+                print(f'[AutoListing] {label} selection did not retain {candidate!r} with {method}; retrying.')
+    raise RuntimeError(f'No matching {label} option retained for {desired!r} or fallback {fallback!r}. '
+                       f'Visible choices: {", ".join(available) or "none"}') from last_error
+
+
+def _fill_optional_color(driver, label, value, timeout=15):
+    """Use one shared time budget for finding, opening and selecting a color."""
+    deadline = time.monotonic() + timeout
+    combo = None
+    def remaining():
+        seconds = deadline - time.monotonic()
+        if seconds <= 0:
+            raise TimeoutError(f'{label} exceeded {timeout} seconds')
+        return seconds
+    desired = _closest_facebook_color(value)
+    if not _norm_text(value):
+        return None
+    try:
+        combo = WebDriverWait(driver, remaining()).until(lambda d: _marketplace_combo(d, label))
+        if _marketplace_combo_value(driver, label).casefold() == desired.casefold():
+            return desired
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'}); arguments[0].click();", combo)
+        choices = WebDriverWait(driver, remaining()).until(lambda d: _marketplace_combo_choices(d, label))
+        match = next(((el, text) for el, text in choices if text.casefold() == desired.casefold()), None)
+        if match is None:
+            match = next(((el, text) for el, text in choices if text.casefold() == 'gray'), None)
+        if match is None:
+            raise ValueError('No matching color option available')
+        option, selected = match
+        remaining()
+        driver.execute_script("""
+            const option=arguments[0], color=arguments[1].trim().toLowerCase();
+            const span=[...option.querySelectorAll('span')].find(el =>
+                (el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase() === color);
+            (span || option).click();
+        """, option, selected)
+        WebDriverWait(driver, remaining()).until(lambda d: _marketplace_combo_value(d, label).casefold() == selected.casefold())
+        print(f'[AutoListing] {label}: {selected}', flush=True)
+        return selected
+    except Exception as exc:
+        if combo is not None:
+            try:
+                combo.send_keys(Keys.ESCAPE)
+            except Exception:
+                pass
+        print(f'[AutoListing][FIELD SKIPPED] {label}: {exc}', flush=True)
+        return None
 
 
 def _input_for_label_xpath(label_text):
@@ -768,9 +1027,22 @@ def _select_groups_for_listing(driver, group_names):
 # ðŸ§  Main Function: Facebook Marketplace Auto Poster
 # ======================================================
 
+def _marketplace_publish_confirmed(driver):
+    """Require a destination page or explicit successful publication message."""
+    path = urlsplit(driver.current_url).path.rstrip('/').lower()
+    if path.startswith('/marketplace/item/') or path == '/marketplace/you/selling':
+        return True
+    return bool(driver.execute_script(r"""
+        const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+        return [...document.querySelectorAll('[role="alert"],[role="status"],[role="dialog"]')]
+          .filter(visible).some(el => /(?:your listing (?:is now live|has been published|was published)|listing published|successfully published)/i.test(el.innerText || ''));
+    """))
+
+
 def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
     print("post_to_fb_marketplace : Starting Facebook Marketplace posting process...")
     indicator=False
+    posting_error = None
     active_field = "initialization"
 
     def debug_field_success(field_name, value=None):
@@ -1024,6 +1296,10 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
 
     except Exception as e:
       debug_field_failure("Images", e)
+    # Optional videos never block the required listing fields or publishing.
+    from automation.video_upload import upload_optional_videos
+    upload_optional_videos(driver, data.get("video_paths", []), log=log)
+
     # ======================================================
     # Step 6: Fill Post Details (step 1: vehicle type only)
     # ======================================================
@@ -1056,35 +1332,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             return "concat('" + value.replace("'", "',\"'\",'") + "')"
 
         def _open_vehicle_type_combo():
-            try:
-                current_combo = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable(
-                        (By.XPATH, _combobox_label_xpath("Vehicle type"))
-                    )
-                )
-            except Exception as exc:
-                print(f"[AutoListing][FIELD FAILED] Vehicle type: combobox HTML not found/clickable: {exc}", flush=True)
-                raise
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", current_combo)
-            try:
-                current_combo.click()
-            except Exception as native_exc:
-                print(f"[AutoListing] Vehicle type native click intercepted; trying JavaScript: {native_exc}", flush=True)
-                current_combo = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located(
-                        (By.XPATH, _combobox_label_xpath("Vehicle type"))
-                    )
-                )
-                try:
-                    driver.execute_script("arguments[0].click();", current_combo)
-                except Exception as js_exc:
-                    print(f"[AutoListing][FIELD FAILED] Vehicle type: combobox JavaScript click failed: {js_exc}", flush=True)
-                    raise
-            try:
-                WebDriverWait(driver, 15).until(lambda d: bool(_visible_vehicle_type_options()))
-            except Exception as exc:
-                print(f"[AutoListing][FIELD FAILED] Vehicle type: dropdown opened but no visible option HTML was found: {exc}", flush=True)
-                raise
+            _open_vehicle_type_menu(driver)
 
         def _selected_vehicle_type_text():
             try:
@@ -1138,21 +1386,28 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 return False
 
         def _visible_vehicle_type_options():
-            options = driver.find_elements(By.XPATH, "//*[@role='option']")
-            visible = []
-            for option in options:
-                try:
-                    text = " ".join((option.text or "").split()).strip()
-                    if option.is_displayed() and text:
-                        visible.append((option, text))
-                except Exception:
-                    continue
-            return visible
+            return _visible_vehicle_type_choices(driver)
+
+        def _log_vehicle_type_failure(reason, exc=None):
+            print(f"[AutoListing][VEHICLE TYPE DEBUG] {reason}", flush=True)
+            if exc is not None:
+                import traceback
+                print(f"[AutoListing][VEHICLE TYPE DEBUG] Exception: {type(exc).__name__}: {exc!r}", flush=True)
+                print(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)), flush=True)
+            try:
+                choices = [text for _, text in _visible_vehicle_type_options()]
+                print(
+                    f"[AutoListing][VEHICLE TYPE DEBUG] URL={driver.current_url!r}; "
+                    f"visible options={choices!r}; selected value={_selected_vehicle_type_text()!r}",
+                    flush=True,
+                )
+            except Exception as diagnostic_error:
+                print(f"[AutoListing][VEHICLE TYPE DEBUG] Cannot inspect dropdown: {diagnostic_error!r}", flush=True)
 
         def _click_and_verify_vehicle_type(option, option_text, timeout=8):
             wanted = _norm_text(option_text).casefold()
             last_error = ""
-            for method in ("actions", "native", "javascript", "keyboard"):
+            for method in ("javascript", "native", "actions", "keyboard"):
                 try:
                     # Facebook frequently replaces the option node after the
                     # first pointer event, so locate a fresh matching node for
@@ -1196,6 +1451,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 except Exception as exc:
                     last_error = str(exc)
                     print(f"[AutoListing] Vehicle type {method} selection failed for {option_text!r}: {exc}", flush=True)
+                    _log_vehicle_type_failure(f"Click/verification failed: method={method}, requested option={option_text!r}", exc)
             print(f"[AutoListing][FIELD FAILED] Vehicle type: option {option_text!r} was located but not retained; last_error={last_error}", flush=True)
             return False
 
@@ -1211,9 +1467,11 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 for option, text in _visible_vehicle_type_options():
                     if text.casefold() == wanted:
                         return _click_and_verify_vehicle_type(option, text)
+                _log_vehicle_type_failure(f"No exact dropdown option matches {option_text!r}; checking supported prefix next.")
                 return False
             except Exception as exc:
                 print(f"[AutoListing][FIELD FAILED] Vehicle type: exact option lookup failed for {option_text!r}: {exc}", flush=True)
+                _log_vehicle_type_failure(f"Exact lookup failed for {option_text!r}", exc)
                 return False
 
         def _select_vehicle_type_starts_with(prefix, timeout=25):
@@ -1226,206 +1484,15 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 for option, text in _visible_vehicle_type_options():
                     if text.casefold().startswith(prefix_lower):
                         return text if _click_and_verify_vehicle_type(option, text) else ""
+                _log_vehicle_type_failure(f"No visible dropdown option starts with {prefix!r}.")
                 return ""
             except Exception as exc:
                 print(f"[AutoListing][FIELD FAILED] Vehicle type: prefix option lookup failed for {prefix!r}: {exc}", flush=True)
+                _log_vehicle_type_failure(f"Prefix lookup failed for {prefix!r}", exc)
                 return ""
 
-        def _select_first_vehicle_type_option(timeout=25):
-            """Last fallback: select and verify the first visible dropdown option."""
-            try:
-                WebDriverWait(driver, timeout).until(
-                    lambda d: bool(_visible_vehicle_type_options())
-                )
-                first_option, first_text = _visible_vehicle_type_options()[0]
-                if _click_and_verify_vehicle_type(first_option, first_text):
-                    return first_text
-            except Exception as exc:
-                print(f"[AutoListing] First vehicle type fallback failed: {exc}", flush=True)
-            return ""
-
-        def _select_case_insensitive_combo(
-            label, desired, fallback=None, timeout=20, exact_only=False
-        ):
-            combo_xpath = _combobox_label_xpath(label)
-
-            def _get_combo(wait_seconds=timeout):
-                return WebDriverWait(driver, wait_seconds).until(
-                    EC.element_to_be_clickable((By.XPATH, combo_xpath))
-                )
-
-            combo = _get_combo()
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", combo)
-
-            def _open():
-                current_combo = _get_combo()
-                try:
-                    current_combo.click()
-                except Exception:
-                    current_combo = _get_combo()
-                    driver.execute_script("arguments[0].click();", current_combo)
-                time.sleep(0.35)
-
-            def _match(value):
-                wanted = _norm_text(value).casefold()
-                if not wanted:
-                    return None
-                options = []
-                if exact_only:
-                    # Colour labels such as "Blue" and "Blue-Green" must not
-                    # be confused. Prefer a popup explicitly owned by the
-                    # combobox, with fallbacks for Facebook's changing markup.
-                    try:
-                        current_combo = _get_combo(wait_seconds=5)
-                        controlled_ids = _norm_text(
-                            current_combo.get_attribute("aria-controls")
-                            or current_combo.get_attribute("aria-owns")
-                        ).split()
-                    except Exception:
-                        controlled_ids = []
-                    for controlled_id in controlled_ids:
-                        try:
-                            popup = driver.find_element(By.ID, controlled_id)
-                            if popup.is_displayed():
-                                options.extend(
-                                    popup.find_elements(By.XPATH, ".//*[@role='option']")
-                                )
-                        except Exception:
-                            continue
-                    if not options:
-                        try:
-                            listboxes = driver.find_elements(By.XPATH, "//*[@role='listbox']")
-                        except Exception:
-                            listboxes = []
-                        for listbox in listboxes:
-                            try:
-                                if listbox.is_displayed():
-                                    options.extend(
-                                        listbox.find_elements(By.XPATH, ".//*[@role='option']")
-                                    )
-                            except Exception:
-                                continue
-                    if not options:
-                        # Current Marketplace markup renders the opened colour
-                        # choices as sibling role="option" divs with no
-                        # role="listbox" ancestor. Only the active dropdown's
-                        # options are displayed, so use those visible options.
-                        def _visible_role_options(_driver):
-                            visible = []
-                            try:
-                                role_options = _driver.find_elements(
-                                    By.XPATH, "//*[@role='option']"
-                                )
-                            except Exception:
-                                role_options = []
-                            for role_option in role_options:
-                                try:
-                                    if role_option.is_displayed():
-                                        visible.append(role_option)
-                                except Exception:
-                                    continue
-                            return visible or False
-
-                        try:
-                            options = WebDriverWait(driver, min(timeout, 5)).until(
-                                _visible_role_options
-                            )
-                        except Exception:
-                            options = []
-                else:
-                    try:
-                        options = driver.find_elements(
-                            By.XPATH,
-                            "//*[@role='listbox']//*[@role='option']"
-                            " | //*[@role='option']"
-                            " | //*[@role='listbox']//*[self::span or self::div][normalize-space()]",
-                        )
-                    except Exception:
-                        options = []
-                exact = []
-                partial = []
-                for option in options:
-                    try:
-                        if not option.is_displayed():
-                            continue
-                        text = _norm_text(option.text or option.get_attribute("textContent"))
-                    except Exception:
-                        continue
-                    option_norm = text.casefold()
-                    if option_norm == wanted:
-                        exact.append(option)
-                    elif not exact_only and (
-                        option_norm.startswith(wanted) or wanted.startswith(option_norm)
-                    ):
-                        partial.append(option)
-                matches = exact or partial
-                return matches[0] if matches else None
-
-            def _selected_text_contains(value):
-                wanted = _norm_text(value).casefold()
-                try:
-                    current_combo = _get_combo(wait_seconds=5)
-                    selected_text = _norm_text(
-                        current_combo.text or current_combo.get_attribute("textContent")
-                    ).casefold()
-                except Exception:
-                    return False
-                return bool(wanted and (selected_text == wanted or wanted in selected_text))
-
-            candidates = []
-            for value in (desired, fallback):
-                if value and _norm_text(value).casefold() not in {
-                    _norm_text(existing).casefold() for existing in candidates
-                }:
-                    candidates.append(value)
-            for candidate in candidates:
-                if not candidate:
-                    continue
-                _open()
-                option = _match(candidate)
-                if option is not None:
-                    try:
-                        option.click()
-                    except Exception:
-                        # The listbox may re-render between discovery and click.
-                        # Locate a fresh option without clicking the already
-                        # open combobox again (which would close its dropdown).
-                        option = _match(candidate)
-                        if option is None:
-                            continue
-                        driver.execute_script("arguments[0].click();", option)
-                    time.sleep(0.3)
-                    if exact_only:
-                        # We located and clicked an exact option inside the
-                        # active colour listbox. Do not let Facebook's varying
-                        # combobox display text make us overwrite it with the
-                        # fallback colour.
-                        return _norm_text(candidate)
-                    if _selected_text_contains(candidate):
-                        return _norm_text(candidate)
-                # Facebook sometimes renders listbox choices without option
-                # roles. A focused combobox still supports first-letter/full
-                # text keyboard selection.
-                if exact_only:
-                    try:
-                        _get_combo(wait_seconds=5).send_keys(Keys.ESCAPE)
-                    except Exception:
-                        pass
-                    continue
-                try:
-                    current_combo = _get_combo()
-                    current_combo.send_keys(_norm_text(candidate))
-                    current_combo.send_keys(Keys.ENTER)
-                    time.sleep(0.4)
-                    if _selected_text_contains(candidate):
-                        return _norm_text(candidate)
-                except Exception:
-                    pass
-                try:
-                    _get_combo(wait_seconds=5).send_keys(Keys.ESCAPE)
-                except Exception:
-                    pass
-            raise Exception(f"No matching {label} option found for {desired!r} or fallback {fallback!r}")
+        def _select_case_insensitive_combo(label, desired, fallback=None, timeout=20, exact_only=False):
+            return _select_marketplace_combo(driver, label, desired, fallback, timeout, exact_only)
 
         active_field = "Vehicle type"
         excel_vehicle_type = _norm_text(data.get("vehicle_type"))
@@ -1447,31 +1514,20 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             matched_car_type = _select_vehicle_type_starts_with("car")
             if matched_car_type:
                 selected_vehicle_type = matched_car_type
-            else:
-                # Step 3: If "car" options not found, select "Other"
-                _open_vehicle_type_combo()
-                if _select_vehicle_type("Other"):
-                    selected_vehicle_type = "Other"
-        elif not selected_vehicle_type:
-            # Step 3: If Excel type doesn't start with "car" and exact match not found, select "Other"
-            _open_vehicle_type_combo()
-            if _select_vehicle_type("Other"):
-                selected_vehicle_type = "Other"
-
-        # Third fallback requested for Facebook layouts/options that do not
-        # match the source value: select the first visible option in the list.
         if not selected_vehicle_type:
-            _open_vehicle_type_combo()
-            selected_vehicle_type = _select_first_vehicle_type_option()
-
-        if not selected_vehicle_type:
-            raise Exception("No matching vehicle type option found.")
+            _log_vehicle_type_failure(f"Selection exhausted for requested vehicle type {excel_vehicle_type!r}.")
+            raise Exception(
+                f"Could not select and retain requested vehicle type {excel_vehicle_type!r}. "
+                "Posting stopped; no fallback vehicle type will be selected."
+            )
 
         if not _is_vehicle_type_selected(selected_vehicle_type):
             raise Exception(
                 f"Vehicle type selection was not retained by Facebook: {selected_vehicle_type}"
             )
         selected_vehicle_type = _selected_vehicle_type_text() or selected_vehicle_type
+        # Later fields must follow the requested type Facebook retained.
+        data['vehicle_type'] = 'Car' if selected_vehicle_type.casefold().startswith('car') else 'Other'
 
         debug_field_success("Vehicle type", selected_vehicle_type)
 
@@ -1646,31 +1702,10 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         else:
             print("[AutoListing][FIELD SKIPPED] Body style: vehicle type is Other.", flush=True)
 
-        # Facebook makes both colour fields mandatory but provides no Other
-        # choice. Normalize arbitrary source values to its supported palette.
-        active_field = "Exterior colour"
-        exterior_raw = _norm_text(data.get("exterior_color"))
-        exterior_value = _closest_facebook_color(exterior_raw)
-        exterior_selected = _select_case_insensitive_combo(
-            "Exterior colour", exterior_value, fallback="Gray", timeout=15,
-            exact_only=True,
-        )
-        debug_field_success(
-            "Exterior colour",
-            f"{exterior_selected} (source: {exterior_raw or 'missing'})",
-        )
-
-        active_field = "Interior colour"
-        interior_raw = _norm_text(data.get("interior_color"))
-        interior_value = _closest_facebook_color(interior_raw)
-        interior_selected = _select_case_insensitive_combo(
-            "Interior colour", interior_value, fallback="Gray", timeout=15,
-            exact_only=True,
-        )
-        debug_field_success(
-            "Interior colour",
-            f"{interior_selected} (source: {interior_raw or 'missing'})",
-        )
+        for color_label, color_key in (("Exterior colour", "exterior_color"),
+                                       ("Interior colour", "interior_color")):
+            active_field = color_label
+            _fill_optional_color(driver, color_label, data.get(color_key), timeout=15)
 
         # Everything below is optional. Each field gets its own 15-second
         # attempt and can never abort an otherwise valid listing.
@@ -1684,21 +1719,22 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             )
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", clean_title_checkbox)
             is_checked = (clean_title_checkbox.get_attribute("aria-checked") or "").lower() == "true" or clean_title_checkbox.is_selected()
-            if not is_checked:
+            clean_title_requested = _norm_text(data.get('clean_title', 'Yes')).casefold() not in {'no', 'false', '0'}
+            if is_checked != clean_title_requested:
                 try:
                     clean_title_checkbox.click()
                 except Exception:
                     driver.execute_script("arguments[0].click();", clean_title_checkbox)
-                debug_field_success("Clean title", "checked")
+                debug_field_success("Clean title", "checked" if clean_title_requested else "unchecked")
             else:
-                debug_field_success("Clean title", "already checked")
+                debug_field_success("Clean title", "checked" if is_checked else "unchecked")
         except Exception as exc:
             debug_field_failure("Clean title", exc)
 
         try:
             active_field = "Vehicle condition"
             condition_selected = _select_case_insensitive_combo(
-                "Vehicle condition", "Excellent", fallback="Very good", timeout=15
+                "Vehicle condition", data.get('vehicle_condition') or "Excellent", fallback="Very good", timeout=15
             )
             debug_field_success("Vehicle condition", condition_selected)
         except Exception as exc:
@@ -1896,6 +1932,14 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             except Exception:
                 driver.execute_script("arguments[0].click();", publish_btn)
             print("Clicked Publish")
+            if data.get('_require_publish_confirmation'):
+                try:
+                    WebDriverWait(driver, 45).until(_marketplace_publish_confirmed)
+                except Exception as exc:
+                    raise RuntimeError(
+                        'Publish was clicked, but Facebook did not confirm publication; '
+                        'saved listing date, clicks, and details were not changed.'
+                    ) from exc
             # Facebook frequently publishes without changing the create-page
             # URL or showing stable confirmation text. A completed Publish
             # click is therefore the success boundary for this flow.
@@ -1908,8 +1952,13 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         time.sleep(1)
     except Exception as e:
         debug_field_failure(active_field, e)
-        print(f"❌ Vehicle details step failed: {e}")
+        print(f"❌ Vehicle details step failed: {e}", flush=True)
+        if active_field == "Vehicle type":
+            import traceback
+            print(f"[AutoListing][VEHICLE TYPE DEBUG] Final exception: {type(e).__name__}: {e!r}", flush=True)
+            print(''.join(traceback.format_exception(type(e), e, e.__traceback__)), flush=True)
         indicator = False
+        posting_error = RuntimeError(f'{active_field}: {e}')
     finally:
         close_posting_tab(driver, posting_handle, original_handles, posting_lock)
         time.sleep(1)
@@ -1918,6 +1967,8 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
          
         
 
+    if posting_error is not None:
+        raise posting_error
     return indicator
 
 

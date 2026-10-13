@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from '_marketplace_colors.html' import color_options %}
 
 {% block title %}Manual Vehicle Post{% endblock %}
 {% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/create_listings.css') }}">{% endblock %}
@@ -24,10 +25,13 @@
           <option value="Other" {% if vehicle_type_value|lower == 'other' %}selected{% endif %}>Other</option>
         </select>
 
-        <label class="file-label">Images (up to 10)</label>
+        <label class="file-label">Images (up to 20)</label>
+        <label for="bulk-images" class="file-label">Add multiple photos</label>
+        <input id="bulk-images" type="file" accept="image/*" multiple data-bulk-media="image">
+        <p class="manual-note" id="bulk-image-message" aria-live="polite">Select several photos together. They will fill the available slots below.</p>
         {% if prefilled_images %}
         <div class="manual-note" style="text-align:left; margin-top:4px;">
-          Selected images from Website Post 1 are included below. Uncheck any to remove.
+          Previously selected images are included below. Uncheck any to remove.
         </div>
         <div class="manual-image-grid" style="margin-top: 10px;">
           {% for img in prefilled_images %}
@@ -44,7 +48,7 @@
         </div>
         {% endif %}
         <div class="manual-image-grid">
-          {% for i in range(1, 11) %}
+          {% for i in range(1, 21) %}
           <div class="manual-image-slot">
             <input
               id="image_slot_{{ i }}"
@@ -60,6 +64,21 @@
               <span class="manual-image-text">Photo {{ i }}</span>
             </label>
             <div class="manual-image-name" id="image_slot_name_{{ i }}">No file chosen</div>
+          </div>
+          {% endfor %}
+        </div>
+
+        <label class="file-label">Videos (up to 5, optional)</label>
+        <label for="bulk-videos" class="file-label">Add multiple videos</label>
+        <input id="bulk-videos" type="file" accept="video/*" multiple data-bulk-media="video">
+        <p class="manual-note" id="bulk-video-message" aria-live="polite">Select several videos together. They will fill the available slots below.</p>
+        <p class="manual-note">Videos are attempted when the posting page supports them. If a video cannot be uploaded, the app skips it and continues posting.</p>
+        <div class="manual-image-grid">
+          {% for i in range(1, 6) %}
+          <div class="manual-image-slot">
+            <input id="video_slot_{{ i }}" type="file" name="videos" accept="video/*" class="manual-image-input" data-slot="{{ i }}" data-media="video">
+            <label for="video_slot_{{ i }}" class="manual-image-label"><span class="manual-image-plus">+</span><span class="manual-image-text">Video {{ i }}</span></label>
+            <div class="manual-image-name" id="video_slot_name_{{ i }}">No file chosen</div>
           </div>
           {% endfor %}
         </div>
@@ -92,23 +111,16 @@
           </select>
         </div>
 
-        {% set marketplace_color_options = ['Black', 'Blue', 'Brown', 'Gold', 'Green', 'Gray', 'Pink', 'Purple', 'Red', 'Silver', 'Orange', 'White', 'Yellow', 'Charcoal', 'Off white', 'Tan', 'Beige', 'Burgundy', 'Turquoise'] %}
         {% set exterior_color_value = request.form.get('exterior_color', prefill_data.get('exterior_color', '')) %}
         <label for="exterior_color" class="file-label">Exterior color</label>
-        <select id="exterior_color" name="exterior_color" class="input-field" required>
-          <option value="" disabled {% if not exterior_color_value %}selected{% endif %}>Select exterior color</option>
-          {% for color in marketplace_color_options %}
-          <option value="{{ color }}" {% if exterior_color_value|lower == color|lower %}selected{% endif %}>{{ color }}</option>
-          {% endfor %}
+        <select id="exterior_color" name="exterior_color" class="input-field">
+          {{ color_options(exterior_color_value, 'Select exterior color') }}
         </select>
 
         {% set interior_color_value = request.form.get('interior_color', prefill_data.get('interior_color', '')) %}
         <label for="interior_color" class="file-label">Interior color</label>
-        <select id="interior_color" name="interior_color" class="input-field" required>
-          <option value="" disabled {% if not interior_color_value %}selected{% endif %}>Select interior color</option>
-          {% for color in marketplace_color_options %}
-          <option value="{{ color }}" {% if interior_color_value|lower == color|lower %}selected{% endif %}>{{ color }}</option>
-          {% endfor %}
+        <select id="interior_color" name="interior_color" class="input-field">
+          {{ color_options(interior_color_value, 'Select interior color') }}
         </select>
 
         <label for="vehicle_condition" class="file-label">Vehicle condition</label>
@@ -147,7 +159,6 @@
           <button type="submit" name="post_action" value="simple" class="manual-action-button">Simple Post</button>
           <button type="button" id="manual-group-trigger" class="manual-action-button">Group Post</button>
           <button type="button" id="manual-account-trigger" class="manual-action-button">Accounts Post</button>
-          <button type="button" id="manual-instagram-trigger" data-action="{{ url_for('web.auto_listing_manual_instagram') }}" class="manual-action-button">Instagram Post</button>
         </div>
         <input type="hidden" id="multi-account-hidden" name="multi_account" value="0">
         <div id="manual-group-hidden" hidden></div>
@@ -234,7 +245,6 @@
     const accountSelectAll = document.getElementById("manual-account-select-all");
     const accountChecks = Array.from(document.querySelectorAll(".manual-account-check"));
     const accountHidden = document.getElementById("multi-account-hidden");
-    const instagramTrigger = document.getElementById("manual-instagram-trigger");
     const vehicleTypeInput = document.getElementById("vehicle_type");
     const bodyStyleField = document.getElementById("body-style-field");
     const bodyStyleInput = document.getElementById("body_style");
@@ -250,24 +260,6 @@
 
     if (vehicleTypeInput) vehicleTypeInput.addEventListener("change", syncBodyStyleRequirement);
     syncBodyStyleRequirement();
-
-    if (instagramTrigger) {
-      instagramTrigger.addEventListener("click", function () {
-        const form = instagramTrigger.closest("form");
-        if (!form) return;
-        // Use a dedicated action and a hidden value so this cannot submit as
-        // the first Facebook (Simple Post) button.
-        form.action = instagramTrigger.dataset.action;
-        form.querySelectorAll("input[data-instagram-action]").forEach((input) => input.remove());
-        const actionInput = document.createElement("input");
-        actionInput.type = "hidden";
-        actionInput.name = "post_action";
-        actionInput.value = "instagram";
-        actionInput.setAttribute("data-instagram-action", "1");
-        form.appendChild(actionInput);
-        form.submit();
-      });
-    }
 
     function updateAccountSelectAll() {
       if (!accountSelectAll) return;
@@ -332,10 +324,58 @@
     imageInputs.forEach((input) => {
       input.addEventListener("change", function () {
         const slot = this.getAttribute("data-slot");
-        const nameBox = document.getElementById("image_slot_name_" + slot);
+        const nameBox = document.getElementById((this.dataset.media === "video" ? "video" : "image") + "_slot_name_" + slot);
         if (!nameBox) return;
         const file = this.files && this.files[0] ? this.files[0] : null;
         nameBox.textContent = file ? file.name : "No file chosen";
+        const slotBox = this.closest('.manual-image-slot');
+        let remove = slotBox.querySelector('[data-remove-media]');
+        if (!remove) {
+          remove = document.createElement('button');
+          remove.type = 'button';
+          remove.dataset.removeMedia = 'true';
+          remove.textContent = 'Remove';
+          remove.addEventListener('click', () => {
+            this.value = '';
+            this.dispatchEvent(new Event('change', {bubbles: true}));
+          });
+          slotBox.appendChild(remove);
+        }
+        remove.hidden = !file;
+        const oldPreview = slotBox.querySelector('[data-media-preview]');
+        if (oldPreview) {
+          URL.revokeObjectURL(oldPreview.src);
+          oldPreview.remove();
+        }
+        if (file) {
+          const preview = document.createElement(this.dataset.media === 'video' ? 'video' : 'img');
+          preview.dataset.mediaPreview = 'true';
+          preview.src = URL.createObjectURL(file);
+          preview.style.cssText = 'width:100%;height:100px;object-fit:contain';
+          if (preview.tagName === 'VIDEO') { preview.controls = true; preview.preload = 'metadata'; }
+          else preview.alt = file.name;
+          slotBox.appendChild(preview);
+        }
+      });
+    });
+    document.querySelectorAll('[data-bulk-media]').forEach((picker) => {
+      picker.addEventListener('change', () => {
+        const media = picker.dataset.bulkMedia;
+        const slots = imageInputs.filter(input => (input.dataset.media || 'image') === media);
+        const savedCount = media === 'image' ? document.querySelectorAll('[name="prefilled_images"]:checked').length : 0;
+        const capacity = Math.max(0, slots.length - savedCount - slots.filter(input => input.files.length).length);
+        const empty = slots.filter(input => !input.files.length).slice(0, capacity);
+        const files = Array.from(picker.files || []);
+        files.slice(0, empty.length).forEach((file, index) => {
+          const transfer = new DataTransfer();
+          transfer.items.add(file);
+          empty[index].files = transfer.files;
+          empty[index].dispatchEvent(new Event('change', {bubbles: true}));
+        });
+        const added = Math.min(files.length, empty.length);
+        document.getElementById('bulk-' + media + '-message').textContent =
+          'Added ' + added + ' file(s).' + (files.length > added ? ' ' + (files.length - added) + ' could not be added because the limit was reached.' : '');
+        picker.value = '';
       });
     });
 

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from '_listing_storage_badges.html' import storage_badges %}
 
 {% block title %}Manage Listings{% endblock %}
 
@@ -37,18 +38,19 @@
   .delete-clear-storage:disabled { opacity:.5; cursor:not-allowed; }
   .delete-grid { display:grid; width:calc(100% - 80px); max-width:1080px; margin:0 auto; grid-template-columns:minmax(0,1fr); gap:14px; }
   .delete-card { display:grid; width:100%; grid-template-columns:132px minmax(0,1fr) 132px; gap:22px; align-items:center; min-height:158px; box-sizing:border-box; padding:13px 22px 13px 13px; border:1px solid #e2e8f0; border-radius:13px; background:#fff; }
-  .delete-card:hover { border-color:#bfdbfe; box-shadow:0 4px 14px rgba(15,23,42,.07); }
+  .content .delete-page .delete-card { transition:background .18s,border-color .18s,box-shadow .18s,transform .18s; }
+  .content .delete-page .delete-card:hover,.content .delete-page .delete-card:focus-within { background:#f8faff !important; border-color:var(--app-blue) !important; box-shadow:0 5px 16px rgba(11,61,145,.09) !important; transform:translateY(-2px); }
   .delete-card input { position:absolute; margin:0 0 112px 5px; z-index:2; display:none; }
   .delete-grid.selection-mode .delete-card input { display:block; }
   .listing-photo { width:132px; height:132px; border-radius:11px; object-fit:cover; background:#e2e8f0; }
   .listing-photo-placeholder { display:flex; align-items:center; justify-content:center; color:#94a3b8; font-size:11px; text-align:center; }
   .listing-details { min-width:0; }
-  .listing-title { display:block; margin-bottom:7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#0f172a; font-size:17px; }
+  .content .delete-page .listing-title,.content .delete-page .listing-title:hover { display:block; margin-bottom:7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--app-text) !important; font-size:17px; font-weight:600; text-decoration:none; }
   .listing-price { display:block; color:#0f172a; font-size:16px; font-weight:700; }
   .listing-meta { display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:11px; color:#64748b; font-size:14px; }
-  .listing-actions { display:flex; justify-content:flex-end; }
-  .listing-repost-btn { width:124px; min-height:40px; border:0; border-radius:8px; background:#2563eb; color:#fff; cursor:pointer; font-weight:700; }
-  .listing-repost-btn:disabled { background:#cbd5e1; color:#64748b; cursor:not-allowed; }
+  .listing-actions { display:flex; flex-direction:column; align-items:flex-end; justify-content:center; gap:10px; }
+  .listing-view-btn { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:124px; min-height:40px; border:0; border-radius:8px; background:var(--app-blue); color:#fff; text-decoration:none; font-size:14px; font-weight:700; }
+  .listing-state { font-size:12px; font-weight:600; color:var(--app-blue); background:var(--app-grey-50); border-radius:5px; padding:5px 8px; }
   .repost-modal-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:18px 0; text-align:left; }
   .repost-modal-fields label { color:#475569; font-size:13px; font-weight:700; }
   .repost-modal-fields input,.repost-modal-fields select { width:100%; box-sizing:border-box; margin-top:6px; padding:10px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; }
@@ -67,7 +69,7 @@
     .listing-photo { width:84px; height:84px; }
     .listing-title { font-size:15px; }
     .listing-actions { grid-column:1 / -1; }
-    .listing-repost-btn { width:100%; }
+    .listing-view-btn { width:100%; }
     .delete-operation-overlay { align-items:flex-start; padding:16px 12px; }
     .delete-operation-card { width:100%; max-width:420px; margin:auto 0; padding:22px 16px; border-radius:12px; }
     .repost-modal-fields { grid-template-columns:1fr; gap:14px; margin:16px 0; }
@@ -120,37 +122,25 @@
     <div class="delete-card" data-id="{{ listing.id }}">
       <input class="listing-check" type="checkbox" value="{{ listing.id }}" {% if listing.id in scheduled_repost_ids %}disabled{% endif %}>
       {% set listing_image = listing.image or (listing.images[0] if listing.images else '') %}
+      {% if listing.downloaded_images %}{% set listing_image = url_for('web.listing_photo', listing_id=listing.id, name=listing.downloaded_images[0].name) %}{% endif %}
       {% if listing_image %}<img class="listing-photo" src="{{ listing_image }}" alt="" loading="lazy" referrerpolicy="no-referrer">
       {% else %}<span class="listing-photo listing-photo-placeholder">No image</span>{% endif %}
       <span class="listing-details">
-        <strong class="listing-title">{{ listing.year }} {{ listing.make }} {{ listing.model }}</strong>
+        <a class="listing-title" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">{{ listing.year }} {{ listing.make }} {{ listing.model }}</a>
         <span class="listing-price">{{ listing.price or "Price unavailable" }}</span>
         <span class="listing-meta">
           <span>{{ listing.clicks|default(0, true) }} clicks</span>
           <span>{{ ('Listed on ' ~ listing.listed_date) if listing.listed_date else 'Date unavailable' }}</span>
         </span>
+        {{ storage_badges(listing) }}
       </span>
-      <span class="listing-actions"><button class="listing-repost-btn" type="button" data-repost-id="{{ listing.id }}" {% if listing.id in scheduled_repost_ids %}disabled{% endif %}>{% if listing.id in scheduled_repost_ids %}Scheduled{% else %}Repost{% endif %}</button></span>
+      <span class="listing-actions"><a class="listing-view-btn" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">View</a></span>
     </div>
     {% endfor %}
   </div>
   {% else %}
   <div class="delete-empty">Select a Facebook account from the header first.</div>
   {% endif %}
-  <div id="repost-delay-modal" class="delete-operation-overlay delete-hidden">
-    <div class="delete-operation-card" role="dialog" aria-modal="true" aria-labelledby="repost-delay-title">
-      <h2 id="repost-delay-title">Schedule Repost</h2>
-      <div class="repost-modal-fields">
-        <label>Delay<input id="repost-delay-value" type="number" min="1" step="1" value="1"></label>
-        <label>Unit<select id="repost-delay-unit"><option value="minutes">Minutes</option><option value="hours">Hours</option><option value="days">Days</option></select></label>
-      </div>
-      <p id="repost-modal-error" class="repost-modal-error"></p>
-      <div class="delete-actions">
-        <button id="repost-modal-cancel" class="delete-btn delete-muted" type="button">Cancel</button>
-        <button id="repost-modal-confirm" class="delete-btn delete-primary" type="button">Schedule</button>
-      </div>
-    </div>
-  </div>
 </div>
 {% endblock %}
 
@@ -169,17 +159,10 @@
   const clearStorageBtn = document.getElementById('listing-clear-storage-btn');
   const facebookDeleteBtn = document.getElementById('listing-facebook-delete-btn');
   const cancelSelectionBtn = document.getElementById('listing-cancel-selection-btn');
-  const repostModal = document.getElementById('repost-delay-modal');
-  const repostDelayValue = document.getElementById('repost-delay-value');
-  const repostDelayUnit = document.getElementById('repost-delay-unit');
-  const repostModalError = document.getElementById('repost-modal-error');
-  const repostModalCancel = document.getElementById('repost-modal-cancel');
-  const repostModalConfirm = document.getElementById('repost-modal-confirm');
   const selectAllWrap = document.getElementById('listing-select-all-wrap');
   let timer = null;
   let selectionMode = false;
   let localStatusMessage = '';
-  let pendingRepostListingId = '';
   let facebookDeleteRunning = !!facebookDeleteBtn && facebookDeleteBtn.dataset.running === 'true';
   const selectedListingIds = new Set();
 
@@ -195,9 +178,6 @@
     if (selectAllWrap) selectAllWrap.classList.add('delete-hidden');
     if (facebookDeleteBtn) facebookDeleteBtn.textContent = 'Delete from Facebook';
     if (cancelSelectionBtn) cancelSelectionBtn.classList.add('delete-hidden');
-    document.querySelectorAll('.listing-repost-btn').forEach(button => {
-      button.disabled = button.textContent.trim() === 'Scheduled';
-    });
   }
 
   function render(data) {
@@ -235,13 +215,17 @@
       const clickLabel = item.clicks_confirmed === false
         ? 'Reading clicks...'
         : `${clicks.toLocaleString()} clicks`;
-      const image = escapeHtml(item.image || (Array.isArray(item.images) ? item.images[0] : '') || '');
+      const localPhotos = Array.isArray(item.downloaded_images) ? item.downloaded_images : [];
+      const localPhoto = localPhotos.length ? '/delete_listings/photo/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(localPhotos[0].name) : '';
+      const image = escapeHtml(localPhoto || item.image || (Array.isArray(item.images) ? item.images[0] : '') || '');
       const id = escapeHtml(item.id);
       const photo = image
         ? `<img class="listing-photo" src="${image}" alt="" loading="lazy" referrerpolicy="no-referrer">`
         : '<span class="listing-photo listing-photo-placeholder">No image</span>';
       const scheduled = scheduledRepostIds.has(String(item.id || ''));
-      return `<div class="delete-card" data-id="${id}"><input class="listing-check" type="checkbox" value="${id}" ${scheduled ? 'disabled' : ''}>${photo}<span class="listing-details"><strong class="listing-title">${title}</strong><span class="listing-price">${price}</span><span class="listing-meta"><span>${clickLabel}</span><span>${date}</span></span></span><span class="listing-actions"><button class="listing-repost-btn" type="button" data-repost-id="${id}" ${scheduled ? 'disabled' : ''}>${scheduled ? 'Scheduled' : 'Repost'}</button></span></div>`;
+      const removed = item.facebook_present === false || (item.source_deleted && !item.facebook_reposted);
+      const storageStatus = `<span class="listing-storage-status" aria-label="Listing storage status">${removed ? '' : '<span class="listing-source-badge is-posted">Posted on Facebook</span>'}<span class="listing-backup-badge">Saved as backup</span></span>`;
+      return `<div class="delete-card" data-id="${id}"><input class="listing-check" type="checkbox" value="${id}" ${scheduled ? 'disabled' : ''}>${photo}<span class="listing-details"><a class="listing-title" href="/delete_listings/detail/${encodeURIComponent(item.id)}">${title}</a><span class="listing-price">${price}</span><span class="listing-meta"><span>${clickLabel}</span><span>${date}</span></span>${storageStatus}</span><span class="listing-actions"><a class="listing-view-btn" href="/delete_listings/detail/${encodeURIComponent(item.id)}">View</a></span></div>`;
     }).join('');
     grid.querySelectorAll('.listing-check').forEach(box => { box.checked = selectedListingIds.has(box.value); });
     const selectableItems = items.filter(item => !scheduledRepostIds.has(String(item.id || '')));
@@ -345,48 +329,9 @@
     if (box.checked) selectedListingIds.add(box.value); else selectedListingIds.delete(box.value);
   });
   if (grid) grid.addEventListener('click', event => {
-    const button = event.target.closest('.listing-repost-btn');
-    if (!button || button.disabled) return;
-    pendingRepostListingId = button.dataset.repostId || '';
-    if (repostModalError) repostModalError.textContent = '';
-    if (repostModal) repostModal.classList.remove('delete-hidden');
-    if (repostDelayValue) { repostDelayValue.value = '1'; repostDelayValue.focus(); }
-  });
-  function closeRepostModal() {
-    pendingRepostListingId = '';
-    if (repostModal) repostModal.classList.add('delete-hidden');
-    if (repostModalError) repostModalError.textContent = '';
-  }
-  if (repostModalCancel) repostModalCancel.addEventListener('click', closeRepostModal);
-  if (repostDelayUnit) repostDelayUnit.addEventListener('change', () => {
-    if (!repostDelayValue) return;
-    repostDelayValue.max = repostDelayUnit.value === 'days' ? '365' : (repostDelayUnit.value === 'hours' ? '24' : '59');
-  });
-  if (repostModalConfirm) repostModalConfirm.addEventListener('click', async () => {
-    const delayValue = Number(repostDelayValue ? repostDelayValue.value : 0);
-    const delayUnit = repostDelayUnit ? repostDelayUnit.value : 'minutes';
-    const max = delayUnit === 'days' ? 365 : (delayUnit === 'hours' ? 24 : 59);
-    if (!Number.isInteger(delayValue) || delayValue < 1 || delayValue > max) {
-      if (repostModalError) repostModalError.textContent = `Enter a value from 1 to ${max}.`;
-      return;
-    }
-    repostModalConfirm.disabled = true;
-    try {
-      const response = await fetch('{{ url_for("web.delete_listings_repost") }}', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({listing_id:pendingRepostListingId, delay_value:delayValue, delay_unit:delayUnit})
-      });
-      const data = await response.json();
-      if (!response.ok || !data.ok) {
-        if (repostModalError) repostModalError.textContent = data.message || 'Could not schedule repost.';
-        return;
-      }
-      closeRepostModal();
-      poll();
-    } catch (error) {
-      if (repostModalError) repostModalError.textContent = 'Could not schedule repost.';
-    } finally {
-      repostModalConfirm.disabled = false;
+    const card = event.target.closest('.delete-card');
+    if (card && !selectionMode && !event.target.closest('input,a,button')) {
+      window.location.href = '/delete_listings/detail/' + encodeURIComponent(card.dataset.id);
     }
   });
   async function selectedIds() {
@@ -418,7 +363,6 @@
       if (grid) grid.classList.add('selection-mode');
       if (selectAllWrap) selectAllWrap.classList.remove('delete-hidden');
       if (cancelSelectionBtn) cancelSelectionBtn.classList.remove('delete-hidden');
-      document.querySelectorAll('.listing-repost-btn').forEach(control => { control.disabled = true; });
       button.textContent = 'Confirm Facebook Delete';
       return;
     }

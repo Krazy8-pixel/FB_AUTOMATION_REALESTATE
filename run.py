@@ -186,7 +186,7 @@ if __name__ == "__main__":
                     "Common causes:\n"
                     "- Port 5001 already in use\n"
                     "- Missing files/permissions\n"
-                    "- Chrome/driver issues when auto-reply starts\n"
+                    "- Chrome/driver installation issues\n"
                 )
                 _append_watchdog_log("Too many crashes; stopping watchdog")
                 _show_fatal_message("FBAutomation startup failed", msg)

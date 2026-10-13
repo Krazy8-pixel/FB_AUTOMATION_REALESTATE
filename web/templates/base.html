@@ -3,10 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}FB Marketplace Automation{% endblock %}</title>
+  <title>{% block title %}Tayyara Motors{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
   {% block extra_css %}{% endblock %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app_theme.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/branding.css') }}">
+<link rel="icon" href="{{ url_for('static', filename='app-logo.png') }}">
 </head>
 <body>
 
@@ -55,33 +57,24 @@
         </div>
       </li>
 
-      <li class="{% if active_page == 'auto_reply' %}active{% endif %}">
-        <div class="menu-link-wrap" onclick="window.location.href='/auto_reply'">
-          <span class="menu-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v11H7l-3 3z"></path><path d="M8 10h8M8 13h5"></path></svg>
-          </span>
-          <a href="/auto_reply">Auto Reply</a>
-        </div>
-      </li>
-      <li class="{% if active_page == 'reposting' %}active{% endif %}">
-        <div class="menu-link-wrap" onclick="window.location.href='/reposting'">
-          <span class="menu-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" focusable="false">
-              <path d="M7 7h10v10H7z"></path>
-              <path d="M10 4H4v6"></path>
-              <path d="M4 4l6 6"></path>
-              <path d="M14 20h6v-6"></path>
-              <path d="M20 20l-6-6"></path>
-            </svg>
-          </span>
-          <a href="/reposting">Reposting</a>
-        </div>
-      </li>
 
+
+
+
+      <li class="{% if active_page == 'reposting' %}active{% endif %}">
+        <div class="menu-link-wrap" onclick="window.location.href='{{ url_for('web.reposting_page') }}'">
+          <span class="menu-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M20 8a8 8 0 1 0 1 6"></path><path d="M20 3v5h-5M12 7v5l3 2"></path></svg>
+          </span>
+          <a href="{{ url_for('web.reposting_page') }}">Repost Status</a>
+        </div>
+      </li>
+      <li class="{% if active_page == 'schedule' %}active{% endif %}"><div class="menu-link-wrap" onclick="window.location.href='{{ url_for('web.post_schedular') }}'"><span class="menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M7 3v4M17 3v4M3 10h18M8 14h3M8 17h6"></path></svg></span><a href="{{ url_for('web.post_schedular') }}">Scheduled Posts</a></div></li>
+      <li class="{% if active_page in ['settings', 'account', 'groups', 'posting_in_groups', 'activity_log', 'info'] %}active{% endif %}"><div class="menu-link-wrap" onclick="window.location.href='{{ url_for('web.settings_page') }}'"><span class="menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 7h16M4 17h16"></path><circle cx="9" cy="7" r="3"></circle><circle cx="15" cy="17" r="3"></circle></svg></span><a href="{{ url_for('web.settings_page') }}">Settings</a></div></li>
     </ul>
     <div class="sidebar-tip">
       <span aria-hidden="true">i</span>
-      <p>Account setup, schedules and other options are under <strong>More Tools</strong>.</p>
+      <p>Find accounts, groups, cleanup and instructions in <strong>Settings</strong>.</p>
     </div>
   </aside>
 
@@ -92,11 +85,7 @@
     <header class="topbar">
       <div class="topbar-inner">
         <div class="topbar-brand">
-          <div class="topbar-brand-mark" aria-hidden="true">MB</div>
-          <div class="topbar-brand-copy">
-            <span class="topbar-brand-title">Marketplace Bot</span>
-            <span class="topbar-brand-version">Version 2.0</span>
-          </div>
+          <span class="tayyara-wordmark" aria-label="Tayyara Motors"><span>TAYYARA</span> <span>MOTORS</span></span>
           <button
             type="button"
             class="mobile-header-toggle"
@@ -123,24 +112,6 @@
                 {% endfor %}
               </select>
             </form>
-          </div>
-
-          <div class="nav-tools" id="nav-tools">
-            <button type="button" class="nav-tools-toggle" id="nav-tools-toggle" aria-expanded="false" aria-controls="nav-tools-menu">
-              <span>More Tools</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"></path></svg>
-            </button>
-            <div class="nav-tools-menu" id="nav-tools-menu" role="menu">
-              <a href="/account" role="menuitem"><strong>Accounts</strong><small>Add or change Facebook accounts</small></a>
-              <a href="/website_posting4" role="menuitem"><strong>Website Post</strong><small>Create a listing from a website</small></a>
-              <a href="{{ url_for('web.groups_page') }}" role="menuitem"><strong>Groups</strong><small>Choose and organize groups</small></a>
-              <a href="/posting_in_groups" role="menuitem"><strong>Group Posting</strong><small>Post listings into groups</small></a>
-              <a href="/post_schedular" role="menuitem"><strong>Scheduled Posts</strong><small>View upcoming posting jobs</small></a>
-              <a href="/auto_reply_status" role="menuitem"><strong>Reply Status</strong><small>Check automatic replies</small></a>
-              <a href="/email_setter" role="menuitem"><strong>Email Settings</strong><small>Update notification email</small></a>
-              <a href="/activity_log" role="menuitem"><strong>Activity Log</strong><small>See recent automation activity</small></a>
-              <a href="{{ url_for('web.info_page') }}" role="menuitem"><strong>Help &amp; Instructions</strong><small>Learn how to use the bot</small></a>
-            </div>
           </div>
 
           <div class="header-utility-group">
@@ -183,15 +154,7 @@
               <span class="junk-label">Uploads:</span>
               <span class="junk-value">{{ manual_pics_size_label or "0 MB" }}</span>
             </div>
-            <form method="post" action="{{ url_for('web.auto_listing_clear_junk') }}" class="clear-junk-form">
-              <button
-                type="submit"
-                class="delete-btn"
-                {% if auto_listing_running %}disabled style="opacity:0.6; cursor:not-allowed;"{% endif %}
-              >
-                Clean Up
-              </button>
-            </form>
+
           </div>
         </div>
 
@@ -199,11 +162,7 @@
           <div class="top-link-wrap" onclick="window.location.href='{{ url_for('web.portal_logout') }}'">
             <a href="{{ url_for('web.portal_logout') }}" class="add-account" title="Sign out of the portal">Logout</a>
           </div>
-          <div class="top-link-wrap" onclick="window.location.href='{{ url_for('web.info_page') }}'">
-            <a href="{{ url_for('web.info_page') }}" class="info-icon-link" title="How to use this bot" aria-label="Information">
-              i
-            </a>
-          </div>
+
           <span class="account-pill">{{ active_account or "No Account" }}</span>
         </div>
       </div>
@@ -253,37 +212,6 @@
       toggle.setAttribute("aria-label", (showing ? "Show " : "Hide ") + (input.name === "messenger_pin" ? "Messenger PIN" : "password"));
     });
   });
-
-  (function() {
-    const tools = document.getElementById("nav-tools");
-    const toggle = document.getElementById("nav-tools-toggle");
-    if (!tools || !toggle) {
-      return;
-    }
-
-    function setOpen(open) {
-      tools.classList.toggle("open", open);
-      toggle.setAttribute("aria-expanded", open ? "true" : "false");
-    }
-
-    toggle.addEventListener("click", function(event) {
-      event.stopPropagation();
-      setOpen(!tools.classList.contains("open"));
-    });
-
-    document.addEventListener("click", function(event) {
-      if (!tools.contains(event.target)) {
-        setOpen(false);
-      }
-    });
-
-    document.addEventListener("keydown", function(event) {
-      if (event.key === "Escape") {
-        setOpen(false);
-        toggle.focus();
-      }
-    });
-  })();
 
   (function() {
     const toggle = document.getElementById("mobile-header-toggle");

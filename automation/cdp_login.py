@@ -10,11 +10,12 @@ import threading
 import time
 from uuid import uuid4
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from selenium.webdriver.chrome.options import Options
 
 from automation.browser_settings import is_run_in_background_enabled
-from automation.chromedriver import build_chrome_driver
+from automation.chromedriver import build_chrome_driver, installed_chrome_path
 from automation.fb_login import _is_home_screen_visible, _safe_session_filename
 from automation.runtime_paths import data_dir, sessions_dir
 
@@ -112,6 +113,8 @@ def _delete_profile_folder(profile_dir):
 
 
 def _find_chrome():
+    if os.getenv('FB_AUTOMATION_DESKTOP') == '1':
+        return installed_chrome_path()
     candidates = [
         os.getenv("CHROME_PATH", "").strip(),
         os.path.join(os.getenv("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
@@ -186,7 +189,18 @@ def _close_dedicated_browser(driver):
     try:
         driver.execute_cdp_cmd("Browser.close", {})
     except Exception:
-        pass
+        # Attached Chrome is not owned by ChromeDriver: stopping its service
+        # alone leaves Chrome open. Fall back to closing this dedicated
+        # browser's windows if the CDP close command fails.
+        try:
+            for handle in list(driver.window_handles):
+                try:
+                    driver.switch_to.window(handle)
+                    driver.close()
+                except Exception:
+                    pass
+        except Exception:
+            pass
     finally:
         _detach(driver)
 
@@ -194,23 +208,35 @@ def _close_dedicated_browser(driver):
 def _facebook_login_confirmed(driver):
     """Confirm the authenticated Facebook home location and session cookie."""
     current_url = str(driver.current_url or "").lower()
-    if "facebook.com" not in current_url:
+    hostname = urlsplit(current_url).hostname or ""
+    if hostname != "facebook.com" and not hostname.endswith(".facebook.com"):
         return False
     if any(marker in current_url for marker in ("/login", "checkpoint", "two_step_verification")):
         return False
 
-    # Keep the original home-screen locator check as a positive signal. Some
-    # current Facebook layouts land on Marketplace, redirects, or localized
-    # home URLs, so a valid c_user cookie on a non-auth Facebook URL is the
-    # final authoritative confirmation.
-    home_location = current_url.rstrip("/").endswith("facebook.com") or "/home.php" in current_url
+    # Cookie presence alone is insufficient: require authenticated home UI.
     cookies = driver.get_cookies()
     has_authenticated_cookie = any(
         c.get("name") == "c_user" and str(c.get("value") or "").strip()
         for c in cookies
         if isinstance(c, dict)
     )
-    return bool(has_authenticated_cookie and (home_location or _is_home_screen_visible(driver) or current_url))
+    return bool(has_authenticated_cookie and _is_home_screen_visible(driver))
+
+
+def _find_logged_in_tab(driver):
+    """Login may finish in a different tab from the one ChromeDriver attached to."""
+    if _facebook_login_confirmed(driver):
+        return True
+    original = driver.current_window_handle
+    for handle in driver.window_handles:
+        if handle == original:
+            continue
+        driver.switch_to.window(handle)
+        if _facebook_login_confirmed(driver):
+            return True
+    driver.switch_to.window(original)
+    return False
 
 
 def _capture_when_logged_in(account):
@@ -224,7 +250,7 @@ def _capture_when_logged_in(account):
             try:
                 if driver is None:
                     driver = _attach(meta["port"])
-                if _facebook_login_confirmed(driver):
+                if _find_logged_in_tab(driver):
                     cookies = driver.get_cookies()
                     facebook_user_id = next(
                         (
@@ -244,6 +270,11 @@ def _capture_when_logged_in(account):
                         ),
                         None,
                     )
+                    if meta.get('relogin') and meta.get('facebook_user_id') and facebook_user_id != meta['facebook_user_id']:
+                        _update_account(account, status='failed',
+                                        message='Sign into the original Facebook account. Saved cookies and data were not replaced.')
+                        time.sleep(2)
+                        continue
                     if duplicate_title:
                         _update_account(
                             account,
@@ -256,17 +287,32 @@ def _capture_when_logged_in(account):
                     session_path = os.path.join(sessions_dir(), _safe_session_filename(account))
                     with open(session_path, "wb") as handle:
                         pickle.dump(cookies, handle)
+                    from automation.session_health import set_session_health, HEALTHY
+                    set_session_health(account, HEALTHY)
+                    # Finish browser cleanup before publishing ready to the UI.
+                    _close_dedicated_browser(driver)
+                    driver = None
                     _update_account(
                         account,
                         status="ready",
+                        relogin=False,
                         message="Facebook login saved. Posting browser is ready.",
                         facebook_user_id=facebook_user_id,
                         cookies_updated_at=int(time.time()),
                     )
-                    _close_dedicated_browser(driver)
-                    driver = None
                     return
-            except Exception:
+                _update_account(
+                    account,
+                    status='waiting',
+                    message='Connected to Chrome. Waiting for the authenticated Facebook home page; finish any verification and open Facebook Home.',
+                )
+            except Exception as exc:
+                message = str(exc)
+                message = message or 'Could not connect to the login browser. Please try again.'
+                current = get_cdp_account(account) or {}
+                if current.get('message') != message or current.get('status') != 'failed':
+                    print(f'[CDP Login] browser connection failed: {type(exc).__name__}: {message}', flush=True)
+                    _update_account(account, status='failed', message=message)
                 if driver is not None:
                     _detach(driver)
                     driver = None
@@ -275,7 +321,11 @@ def _capture_when_logged_in(account):
         if driver is not None:
             _close_dedicated_browser(driver)
             driver = None
-        delete_cdp_account(account)
+        if (get_cdp_account(account) or {}).get('relogin'):
+            _update_account(account, status='relogin_expired', relogin=True,
+                            message='Re-login timed out. Saved account data was kept.')
+        else:
+            delete_cdp_account(account)
     finally:
         if driver is not None:
             _detach(driver)
@@ -283,18 +333,22 @@ def _capture_when_logged_in(account):
             _watchers.pop(account, None)
 
 
-def start_cdp_login(account):
+def start_cdp_login(account, relogin=False):
     account = str(account or "").strip()
     if not account:
         raise ValueError("Enter an account title.")
     if re.search(r"[\\/:*?\"<>|]", account):
         raise ValueError('Account title cannot contain \\ / : * ? " < > or |.')
     existing_meta = get_cdp_account(account)
+    if relogin and _account_locks.get(account) and _account_locks[account].locked():
+        raise RuntimeError('Wait for this account\'s posting operation to finish before re-login.')
+    if relogin and existing_meta and _port_open(existing_meta.get('port')):
+        close_cdp_browser(account)
     session_path = os.path.join(sessions_dir(), _safe_session_filename(account))
     # A ready mapping without its exported session means the user deleted the
     # account before complete-CDP cleanup existed. Remove that old identity so
     # it can never reopen the deleted Facebook login.
-    if existing_meta and existing_meta.get("status") == "ready" and not os.path.isfile(session_path):
+    if not relogin and existing_meta and existing_meta.get("status") == "ready" and not os.path.isfile(session_path):
         delete_cdp_account(account)
     with _config_lock:
         accounts = _load_config()
@@ -306,12 +360,17 @@ def start_cdp_login(account):
             }
         meta.update(
             status="waiting",
+            relogin=relogin,
             message="Complete the Facebook login in the Chrome window.",
             login_started_at=int(time.time()),
         )
         accounts[account] = meta
         _save_config(accounts)
-    proc = _launch_profile(meta, background=False)
+    try:
+        proc = _launch_profile(meta, background=False)
+    except Exception as exc:
+        _update_account(account, status='failed', message=f'Could not open Chrome: {exc}')
+        raise
     if proc is not None:
         _update_account(account, pid=proc.pid)
     with _config_lock:
@@ -327,7 +386,8 @@ def refresh_cdp_cookies(account):
     meta = get_cdp_account(account)
     if not meta:
         raise RuntimeError("No CDP profile is configured for this account.")
-    if not _port_open(meta["port"]):
+    launched = not _port_open(meta["port"])
+    if launched:
         _launch_profile(meta, background=is_run_in_background_enabled())
         deadline = time.time() + 15
         while time.time() < deadline and not _port_open(meta["port"]):
@@ -341,7 +401,10 @@ def refresh_cdp_cookies(account):
             pickle.dump(cookies, handle)
         _update_account(account, status="ready", message="Facebook cookies refreshed.", cookies_updated_at=int(time.time()))
     finally:
-        _detach(driver)
+        if launched:
+            _close_dedicated_browser(driver)
+        else:
+            _detach(driver)
 
 
 def close_cdp_browser(account):
@@ -412,14 +475,22 @@ def cleanup_expired_cdp_logins():
     removed = []
     cutoff = int(time.time()) - LOGIN_WAIT_SECONDS
     for account, meta in list_cdp_accounts().items():
-        if meta.get("status") == "ready":
+        if meta.get("status") in {"ready", "relogin_expired"}:
             continue
+        watcher = _watchers.get(account)
+        if meta.get('status') == 'waiting' and (not watcher or not watcher.is_alive()):
+            _update_account(account, status='failed',
+                            message='Login was interrupted. Open Facebook Login again to retry.')
         try:
             started_at = int(meta.get("login_started_at") or 0)
         except (TypeError, ValueError):
             started_at = 0
         # Non-ready records created by older versions have no start time and
         # are the permanently stuck attempts this cleanup is intended to fix.
+        if (not started_at or started_at <= cutoff) and meta.get('relogin'):
+            _update_account(account, status='relogin_expired', relogin=True,
+                            message='Re-login timed out. Saved account data was kept.')
+            continue
         if (not started_at or started_at <= cutoff) and delete_cdp_account(account):
             removed.append(account)
             print(

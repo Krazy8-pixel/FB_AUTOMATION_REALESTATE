@@ -51,38 +51,13 @@
       {% set waiting_accounts = cdp_accounts|dictsort %}
       {% for title, cdp in waiting_accounts if cdp.get('status') != 'ready' %}
         <div class="cdp-login-status" data-cdp-account="{{ title }}">
-          <span class="session-check-loader" aria-hidden="true"></span>
+          <span class="session-check-loader{% if cdp.get('status') != 'waiting' %} hidden{% endif %}" aria-hidden="true"></span>
           <span><strong>{{ title }}</strong><small>{{ cdp.get('message', 'Waiting for Facebook login.') }}</small></span>
         </div>
       {% endfor %}
       <a href="/" class="btn-back account-back">Back to Dashboard</a>
     </div>
 
-    <div class="account-card">
-      <div class="card-head">
-        <h2>Instagram Account</h2>
-        <p>One Instagram session is supported. A Chrome window opens for login and manual verification.</p>
-      </div>
-      {% if instagram_account %}
-        <div class="saved-list">
-          <div class="account-row">
-            <span class="account-name">{{ instagram_account.get('email', 'Instagram account') }}</span>
-            <span class="session-health-badge valid">Saved</span>
-            <form method="post" action="/instagram_account/delete">
-              <button type="submit" class="delete-btn">Delete Cookies</button>
-            </form>
-          </div>
-        </div>
-      {% else %}
-        <form method="post" action="/account" class="account-form">
-          <input type="hidden" name="account_type" value="instagram">
-          <p class="form-hint">Click below, then enter your Instagram credentials and complete any verification in the browser window.</p>
-          <label class="field-label" for="instagram-email">Account label (optional)</label>
-          <input id="instagram-email" type="text" name="email" placeholder="Email or username">
-          <button type="submit" class="primary-btn">Login Instagram</button>
-        </form>
-      {% endif %}
-    </div>
     </div>
 
     <div class="account-card">
@@ -114,6 +89,10 @@
                   >
                     {{ health_status }}
                   </span>
+                  <form method="post" action="{{ url_for('web.account_relogin') }}" data-account-relogin="{{ acc }}" {% if health_status == 'Valid' %}hidden{% endif %}>
+                    <input type="hidden" name="account" value="{{ acc }}">
+                    <button type="submit" class="primary-btn">Re-login</button>
+                  </form>
                   <form method="post" action="/delete_account">
                     <input type="hidden" name="account" value="{{ acc }}">
                     <button type="submit" class="delete-btn">Delete</button>
@@ -150,7 +129,18 @@
             return;
           }
           if (message) message.textContent = data.message || "Waiting for Facebook login.";
+          const loginLoader = item.querySelector('.session-check-loader');
+          if (loginLoader) loginLoader.classList.toggle('hidden', data.status !== 'waiting');
+          if (data.status === 'relogin_expired') return;
           if (data.ready) {
+            const badge = document.querySelector('[data-account-status="' + CSS.escape(account) + '"]');
+            if (badge) {
+              badge.textContent = 'Valid';
+              badge.classList.add('valid');
+              badge.classList.remove('expired');
+            }
+            const relogin = document.querySelector('[data-account-relogin="' + CSS.escape(account) + '"]');
+            if (relogin) relogin.hidden = true;
             window.location.reload();
             return;
           }
@@ -204,6 +194,8 @@
         badge.textContent = status;
         badge.classList.toggle("valid", status === "Valid");
         badge.classList.toggle("expired", status === "Expired");
+        const relogin = document.querySelector('[data-account-relogin="' + CSS.escape(account) + '"]');
+        if (relogin) relogin.hidden = status === "Valid";
       });
     }
 

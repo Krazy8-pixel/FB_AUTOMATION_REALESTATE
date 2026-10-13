@@ -9,7 +9,6 @@ pandas
 openpyxl
 Pillow
 waitress
-google-genai
 pyautogui
  
  

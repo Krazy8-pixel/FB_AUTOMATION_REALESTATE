@@ -11,7 +11,7 @@
   <div class="schedular-head">
     <div>
       <h1>Scheduled Posts</h1>
-      <p>Facebook jobs for the selected account and Instagram jobs share this queue.</p>
+      <p>Track posts and cross posting sent from or to the selected account. Cross posts run one at a time.</p>
     </div>
     <div class="schedular-meta">
       <span class="meta-label">Active Account</span>
@@ -34,22 +34,6 @@
     </div>
   </div>
 
-  <div class="schedular-table" style="margin-bottom:18px;">
-    <div class="table-head">
-      <div>
-        <h2>California Auto Finance Automation</h2>
-        <span class="table-sub" id="california-automation-info">
-          {% if california_automation.enabled %}
-          Active · {{ california_automation.post_count }} post(s) daily · {{ california_automation.delay_value }} {{ california_automation.delay_unit }} between posts · Next scan: {{ california_automation.next_scan_at.strftime('%Y-%m-%d %H:%M:%S') if california_automation.next_scan_at else 'Preparing' }}{% if california_automation.scan_running %} · Extracting now{% endif %}
-          {% else %}Stopped{% endif %}
-        </span>
-      </div>
-    </div>
-  </div>
-  <div class="schedular-table" style="margin-bottom:18px;">
-    <div class="table-head"><div><h2>CarsForSale Automation</h2><span class="table-sub" id="carsforsale-automation-info">{{ 'Active' if carsforsale_automation.enabled else 'Stopped' }}{% if carsforsale_automation.scan_running %} · Extracting now{% endif %}</span></div></div>
-  </div>
-
   <div class="schedular-table">
     <div class="table-head">
       <h2>Queue</h2>
@@ -61,6 +45,7 @@
         <thead>
           <tr>
             <th>Vehicle</th>
+            <th>Accounts</th>
             <th>Status</th>
             <th>Scheduled For</th>
             <th>Time Remaining</th>
@@ -71,16 +56,14 @@
           {% for item in scheduled_items %}
           <tr>
             <td>
-              {% if item.platform == "instagram" %}<span class="platform-badge platform-instagram">Instagram</span>{% endif %}
-              {% if item.source == "California Auto Finance" %}<span class="platform-badge">California Auto Finance</span>{% endif %}
-              {% if item.source == "CarsForSale" %}<span class="platform-badge">CarsForSale</span>{% endif %}
-              {{ item.title if item.title is defined and item.title and item.platform != "instagram" else "" }}
+              {{ item.title if item.title is defined and item.title else "" }}
             </td>
-            <td><span class="status-pill status-{{ item.status }}">{{ item.status }}</span></td>
+            <td>{% if item.source == 'Cross posting' %}Cross posting<br>{{ item.source_account }} &rarr; {{ item.account }}{% else %}{{ active_account }}{% endif %}</td>
+            <td><span class="status-pill status-{{ item.status }}">{{ item.status }}</span>{% if item.error %}<p>{{ item.error }}</p>{% endif %}</td>
             <td>{{ item.run_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
-            <td data-remaining="{{ item.remaining_seconds }}"></td>
+            <td data-remaining="{{ item.remaining_seconds }}" data-status="{{ item.status }}"></td>
             <td>
-              {% if item.status == "pending" %}
+              {% if item.status in ["pending", "waiting"] %}
               <button class="delete-btn delete-job" data-job="{{ item.job_id }}">Delete</button>
               {% else %}
               <span class="muted">-</span>
@@ -89,7 +72,7 @@
           </tr>
           {% else %}
           <tr>
-            <td colspan="5" class="empty">No scheduled posts in the queue for this account.</td>
+            <td colspan="6" class="empty">No scheduled posts in the queue for this account.</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -104,8 +87,9 @@
   const statPending = document.getElementById("stat-pending");
   const statPosted = document.getElementById("stat-posted");
   const statNext = document.getElementById("stat-next");
-  const californiaAutomationInfo = document.getElementById("california-automation-info");
-  const carsforsaleAutomationInfo = document.getElementById("carsforsale-automation-info");
+  function escapeSchedule(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[ch]));
+  }
 
   function formatRemaining(seconds) {
     if (seconds <= 0) return "Posting now";
@@ -122,7 +106,9 @@
   function updateRemainingCells() {
     document.querySelectorAll("[data-remaining]").forEach((cell) => {
       const remaining = parseInt(cell.getAttribute("data-remaining"), 10) || 0;
-      cell.textContent = formatRemaining(remaining);
+      const status = cell.dataset.status;
+      cell.textContent = status === 'posted' ? 'Completed' : status === 'failed' ? 'Failed'
+        : status === 'waiting' ? 'Waiting for previous post' : status === 'pending' && remaining <= 0 ? 'Queued' : formatRemaining(remaining);
     });
   }
 
@@ -134,30 +120,24 @@
 
     statPending.textContent = data.pending_count;
     statPosted.textContent = data.posted_count;
-    const automation = data.california_automation || {};
-    californiaAutomationInfo.textContent = automation.enabled
-      ? `Active · ${automation.post_count} post(s) daily · ${automation.delay_value} ${automation.delay_unit} between posts · Next scan: ${automation.next_scan_at || "Preparing"}${automation.scan_running ? " · Extracting now" : ""}`
-      : "Stopped";
-    const carsforsale = data.carsforsale_automation || {};
-    carsforsaleAutomationInfo.textContent = carsforsale.enabled ? `Active${carsforsale.scan_running ? " · Extracting now" : ""}` : "Stopped";
-
     if (!data.items.length) {
       statNext.textContent = "-";
-      schedularRows.innerHTML = '<tr><td colspan="5" class="empty">No scheduled posts in the queue for this account.</td></tr>';
+      schedularRows.innerHTML = '<tr><td colspan="6" class="empty">No scheduled posts in the queue for this account.</td></tr>';
     } else {
-      statNext.textContent = data.items[0].run_at;
+      const next = data.items.find(item => ['pending', 'waiting'].includes(item.status));
+      statNext.textContent = next ? next.run_at : '-';
 
       const rows = data.items.map((item) => {
-        const action = item.status === "pending"
+        const action = ["pending", "waiting"].includes(item.status)
           ? `<button class="delete-btn delete-job" data-job="${item.job_id}">Delete</button>`
           : '<span class="muted">-</span>';
-        const sourceBadge = item.source === "California Auto Finance" ? '<span class="platform-badge">California Auto Finance</span>' : item.source === "CarsForSale" ? '<span class="platform-badge">CarsForSale</span>' : '';
       return `
         <tr>
-          <td>${item.platform === "instagram" ? '<span class="platform-badge platform-instagram">Instagram</span>' : sourceBadge + (item.title || item.make || "-")}</td>
-            <td><span class="status-pill status-${item.status}">${item.status}</span></td>
+          <td>${escapeSchedule(item.title || item.make || "-")}</td>
+          <td>${item.source === 'Cross posting' ? 'Cross posting<br>' + escapeSchedule(item.source_account) + ' &rarr; ' + escapeSchedule(item.account) : escapeSchedule(item.account)}</td>
+            <td><span class="status-pill status-${escapeSchedule(item.status)}">${escapeSchedule(item.status)}</span>${item.error ? '<p>' + escapeSchedule(item.error) + '</p>' : ''}</td>
             <td>${item.run_at}</td>
-            <td data-remaining="${item.remaining_seconds}"></td>
+            <td data-remaining="${item.remaining_seconds}" data-status="${escapeSchedule(item.status)}"></td>
             <td>${action}</td>
           </tr>
         `;

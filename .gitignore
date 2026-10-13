@@ -11,6 +11,7 @@ config/
 # Generated images, downloads, caches, and logs
 screenshots/
 downloads/
+outputs/
 __pycache__/
 *.py[cod]
 *.log
@@ -30,3 +31,22 @@ drivers/*.exe
 .idea/
 .DS_Store
 Thumbs.db
+
+# Standalone domain checker's local installation, browser data and pending input
+.domain_checker_deps/
+.listing_test_deps/
+.domain_probe_profile/
+automation/domain_checker_chrome/
+automation/domain_checker_pending.json
+
+# Desktop build artifacts and private release signing material
+.desktop_deps/
+.release_keys/
+packaging/browser/
+packaging/prerequisites/
+packaging/compiler/
+dist/
+build/
+release/
+
+packaging/github-auth/

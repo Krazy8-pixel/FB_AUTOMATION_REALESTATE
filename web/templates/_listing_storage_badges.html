@@ -1,0 +1,7 @@
+{% macro storage_badges(listing, detail=false) -%}
+<span class="listing-storage-status" aria-label="Listing storage status">
+  {% set removed = listing.facebook_present is sameas false or (listing.source_deleted and not listing.facebook_reposted) %}
+  <span {% if detail %}id="listing-facebook-status"{% endif %} class="listing-source-badge is-posted" {% if removed %}hidden{% endif %}>Posted on Facebook</span>
+  <span class="listing-backup-badge">Saved as backup</span>
+</span>
+{%- endmacro %}

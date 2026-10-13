@@ -28,6 +28,9 @@ app = Flask(
     static_folder=static_dir(),
 )
 app.secret_key = "fb_automation_secret"
+if os.getenv("FB_AUTOMATION_DESKTOP") == "1":
+    from datetime import timedelta
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=365)
 enable_keep_awake_from_env()
 enable_button_sleep_block_from_env()
 
@@ -56,13 +59,15 @@ def _screenshot_junk_bytes():
 def _manual_images_bytes():
     try:
         folder = str(data_dir("manual_listing_images"))
+        videos = str(data_dir("manual_listing_videos"))
     except Exception:
         folder = ""
-    return _folder_image_bytes(folder)
+        videos = ""
+    return _folder_image_bytes(folder) + _folder_image_bytes(videos)
 
 
 def _folder_image_bytes(folder):
-    image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".jfif"}
+    image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".jfif", ".mp4", ".mov", ".webm", ".m4v", ".avi", ".mkv"}
     total = 0
     try:
         if os.path.isdir(folder):
@@ -97,5 +102,4 @@ def inject_junk_files_size():
 
 if __name__ == "__main__":
     print(f"[Startup] Running source app: {os.path.abspath(__file__)}", flush=True)
-    print("[Startup] Instagram manual endpoint: /auto_listing_manual_instagram", flush=True)
     app.run(host="127.0.0.1", port=5001, debug=False)

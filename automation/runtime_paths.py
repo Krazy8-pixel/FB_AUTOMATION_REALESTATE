@@ -52,7 +52,7 @@ def runtime_root():
         candidates.append(Path(env_home))
 
     if getattr(sys, "frozen", False):
-        candidates.append(Path(sys.executable).resolve().parent)
+        candidates.append(Path(os.getenv("LOCALAPPDATA") or Path.home()) / "TayyaraMotors")
     else:
         candidates.append(project_root())
 
@@ -86,10 +86,6 @@ def sessions_dir():
     return str(data_dir("sessions"))
 
 
-def auto_reply_log_dir():
-    return str(data_dir("auto_reply_logs"))
-
-
 def screenshots_dir():
     return str(data_dir("screenshots"))
 
@@ -100,14 +96,6 @@ def runtime_log_path():
 
 def activity_log_path():
     return str(data_dir() / "activity_log.json")
-
-
-def email_receiver_path():
-    return str(data_dir() / "email_receiver.json")
-
-
-def auto_reply_state_path():
-    return str(data_dir() / "auto_reply_state.json")
 
 
 def browser_settings_path():

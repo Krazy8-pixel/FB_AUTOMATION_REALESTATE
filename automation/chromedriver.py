@@ -9,7 +9,29 @@ from selenium.common.exceptions import SessionNotCreatedException, WebDriverExce
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.selenium_manager import SeleniumManager
 
-from automation.runtime_paths import resource_root
+from automation.runtime_paths import resource_root, data_dir
+
+
+def installed_chrome_path():
+    """Find regular installed Chrome without downloading a browser."""
+    candidates = [os.getenv('CHROME_PATH', '').strip()]
+    if sys.platform.startswith('win'):
+        import winreg
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+                try:
+                    with winreg.OpenKey(hive, r'Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe', 0, winreg.KEY_READ | view) as key:
+                        candidates.append(winreg.QueryValueEx(key, '')[0])
+                except OSError:
+                    pass
+    for variable in ('PROGRAMFILES', 'PROGRAMFILES(X86)', 'LOCALAPPDATA'):
+        base = os.getenv(variable)
+        if base:
+            candidates.append(os.path.join(base, 'Google', 'Chrome', 'Application', 'chrome.exe'))
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return str(Path(candidate).resolve())
+    raise FileNotFoundError('Google Chrome is not installed. Install regular Google Chrome, then try again.')
 
 
 def resolve_chromedriver_path():
@@ -146,6 +168,11 @@ def build_chrome_driver(options):
     - FB_AUTOMATION_FORCE_BUNDLED_CHROMEDRIVER=1 -> never use Selenium Manager fallback
     - FB_AUTOMATION_USE_SELENIUM_MANAGER=1 -> try Selenium Manager first
     """
+    desktop = _is_truthy_env('FB_AUTOMATION_DESKTOP')
+    chrome_path = installed_chrome_path() if desktop else os.getenv("CHROME_PATH", "").strip()
+    if chrome_path:
+        options.binary_location = chrome_path
+
     force_bundled = _is_truthy_env("FB_AUTOMATION_FORCE_BUNDLED_CHROMEDRIVER")
     prefer_manager = _is_truthy_env("FB_AUTOMATION_USE_SELENIUM_MANAGER")
 
@@ -160,6 +187,21 @@ def build_chrome_driver(options):
         return webdriver.Chrome(service=Service(path), options=options)
 
     def _try_with_manager():
+        if desktop:
+            try:
+                paths = SeleniumManager().binary_paths([
+                    '--browser', 'chrome', '--browser-path', chrome_path,
+                    '--avoid-browser-download', '--avoid-stats',
+                    '--cache-path', str(data_dir('driver-cache')),
+                ])
+                return _try_with_service(paths['driver_path'])
+            except Exception as exc:
+                if isinstance(exc, OSError) and getattr(exc, 'winerror', None) in (4551, 577, 1260):
+                    raise RuntimeError('Windows Application Control blocked ChromeDriver. Facebook login cannot be saved until Windows permits this automation driver. Contact the PC administrator; this is not an internet or password error.') from exc
+                raise RuntimeError(
+                    'Could not connect the Chrome automation driver. '
+                    f'{type(exc).__name__}: {exc}'
+                ) from exc
         manager_error = None
         try:
             paths = SeleniumManager().binary_paths(["--browser", "chrome", "--avoid-stats"])
@@ -177,6 +219,9 @@ def build_chrome_driver(options):
                     f"Selenium Manager could not resolve ChromeDriver: {manager_error}"
                 ) from e
             raise
+
+    if desktop:
+        return _try_with_manager()
 
     attempts = []
 

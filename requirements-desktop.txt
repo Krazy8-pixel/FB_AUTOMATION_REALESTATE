@@ -1,0 +1,6 @@
+-r requirements.txt
+pywebview==6.2.1
+pystray==0.19.5
+SQLAlchemy>=2.0,<3
+cryptography>=46
+packaging>=25

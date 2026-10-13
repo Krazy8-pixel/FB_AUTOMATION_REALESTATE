@@ -12,6 +12,15 @@
   --app-radius: 12px;
 }
 
+.listing-storage-status { display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; }
+.listing-source-badge,.listing-backup-badge { display:inline-flex; align-items:center; gap:6px; padding:5px 9px; border-radius:6px; font-size:11px; font-weight:600; line-height:1.4; }
+.listing-source-badge::before,.listing-backup-badge::before { content:""; width:5px; height:5px; border-radius:50%; background:currentColor; flex-shrink:0; }
+.listing-source-badge.is-posted { color:#226344; background:#edf7f0; }
+.listing-source-badge[hidden] { display:none !important; }
+.listing-source-badge.is-removed { color:var(--app-grey-700); background:var(--app-grey-50); }
+.listing-backup-badge { color:var(--app-blue); background:#edf3fc; }
+@media(prefers-reduced-motion:reduce) { .content .delete-page .delete-card { transition:none; }.content .delete-page .delete-card:hover,.content .delete-page .delete-card:focus-within { transform:none; } }
+
 body {
   background: var(--app-grey-50);
   color: var(--app-text);
@@ -83,14 +92,6 @@ body {
 .cdp-login-status strong { color: var(--app-blue); font-size: 13px; }
 .cdp-login-status small { color: var(--app-grey-700); font-size: 12px; line-height: 1.4; }
 
-.reply-setup-card .password-input-wrap {
-  margin-bottom: 18px;
-}
-
-.reply-setup-card .password-input-wrap .auto-reply-select {
-  margin-bottom: 0 !important;
-}
-
 .content {
   width: 100%;
   padding: 118px 30px 30px;
@@ -107,7 +108,6 @@ body {
 .content p,
 .muted,
 .account-subtitle,
-.auto-reply-info,
 .gp-help,
 .table-sub {
   color: var(--app-grey-700);
@@ -121,13 +121,8 @@ body {
 .phone-verify-shell,
 .groups-card,
 .gp-block,
-.auto-reply-card,
-.status-card,
-.replied-feed-wrap,
 .schedular-table,
 .activity-table,
-.automation-card,
-.website-posting-page .form-box,
 .reposting-card,
 .repost-card,
 .stat-card,
@@ -380,40 +375,6 @@ body {
   color: var(--app-blue) !important;
 }
 
-/* Auto reply and reply status */
-.auto-reply-container,
-.auto-reply-status-container {
-  width: min(900px, 100%);
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.auto-reply-card,
-.status-card,
-.replied-feed-wrap {
-  border-top: 4px solid var(--app-blue) !important;
-}
-
-.auto-reply-title,
-.status-title,
-.replied-feed-title,
-.status-row .label {
-  color: var(--app-blue) !important;
-}
-
-.status-badge,
-.replied-feed-badge {
-  background: var(--app-blue) !important;
-  color: var(--app-white) !important;
-  border-color: var(--app-blue) !important;
-}
-
-.status-row,
-.replied-feed-item {
-  background: var(--app-grey-25) !important;
-  border-color: var(--app-grey-200) !important;
-}
-
 /* Schedules, activity and data tables */
 .schedular-container,
 .activity-page,
@@ -507,49 +468,6 @@ body {
   background: var(--app-grey-50) !important;
   border-color: var(--app-grey-200) !important;
   color: var(--app-grey-700) !important;
-}
-
-/* Website posting */
-.website-posting-page {
-  width: min(1050px, 100%);
-  max-width: 1050px;
-  margin: 0 auto;
-  padding: 0;
-  text-align: left;
-}
-
-.website-posting-page > h3 {
-  margin: 0 0 7px;
-  padding-bottom: 14px;
-  border-bottom: 2px solid var(--app-blue);
-  color: var(--app-blue);
-  font-size: 26px;
-}
-
-.website-posting-page .form-box,
-.automation-card {
-  width: 100%;
-  max-width: none;
-  border-top: 4px solid var(--app-blue) !important;
-}
-
-.website-posting-info-item,
-.website-posting-image-card,
-.automation-status {
-  background: var(--app-grey-50) !important;
-  border-color: var(--app-grey-200) !important;
-  color: var(--app-grey-700) !important;
-}
-
-.website-posting-info-label,
-.website-posting-results-title,
-.automation-card h3,
-.automation-status strong {
-  color: var(--app-blue) !important;
-}
-
-.website-posting-info-value {
-  color: var(--app-text) !important;
 }
 
 /* Reposting cards and empty states */

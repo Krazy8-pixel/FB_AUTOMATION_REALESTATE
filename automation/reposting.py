@@ -1,8 +1,8 @@
-﻿import os
+import os
 import pickle
 import re
 import time
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlsplit
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -16,6 +16,83 @@ from automation.runtime_paths import sessions_dir
 
 
 SESSION_DIR = sessions_dir()
+
+
+EDIT_FIELDS = {
+    'vehicle_type': 'Vehicle type', 'year': 'Year', 'make': 'Make', 'model': 'Model',
+    'mileage': 'Mileage', 'price': 'Price', 'body_style': 'Body style',
+    'exterior_color': 'Exterior color', 'interior_color': 'Interior color',
+    'vehicle_condition': 'Vehicle condition', 'fuel_type': 'Fuel type',
+    'transmission': 'Transmission', 'description': 'Description', 'location': 'Location',
+    'clean_title': 'This vehicle has a clean title.',
+}
+
+
+def read_edit_form_snapshot(driver):
+    """Read actual controls once, including empty/absent/disabled field states."""
+    return driver.execute_script('''
+        const fields = arguments[0];
+        const norm = s => (s || '').replace(/colour/gi, 'color').replace(/\\s+/g, ' ').trim().toLowerCase();
+        const visible = el => !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
+        const roots = [...document.querySelectorAll('[role="dialog"],[role="main"]')].filter(visible);
+        const root = roots.reverse().find(el => el.querySelector('input:not([type="hidden"]),textarea,[contenteditable="true"]')) || document;
+        const containers = [...root.querySelectorAll('label,[role="combobox"]')];
+        const controls = [...root.querySelectorAll('input:not([type="hidden"]),textarea,[contenteditable="true"]')];
+        const result = {};
+        for (const [key, label] of Object.entries(fields)) {
+            const target = norm(label);
+            let container = containers.find(el => norm(el.getAttribute('aria-label')) === target ||
+                [...el.querySelectorAll('span')].some(span => norm(span.textContent) === target));
+            const controlLabel = el => el.getAttribute('aria-label') || (el.getAttribute('aria-labelledby') || '').split(/\\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ') || [...(el.labels || [])].map(label => label.textContent).join(' ');
+            let control = controls.find(el => norm(controlLabel(el)) === target);
+            if (!container && control) container = control.closest('label') || control;
+            if (!control && container) control = container.querySelector('input:not([type="hidden"]),textarea,[contenteditable="true"]');
+            if (!control && key === 'description') control = root.querySelector('textarea');
+            if (!container && control) container = control.closest('label') || control;
+            if (!container && !control) { result[key] = {value:'',state:'unavailable'}; continue; }
+            let value = '';
+            if (control) value = control.type === 'checkbox' ? (control.checked || control.getAttribute('aria-checked') === 'true' ? 'Yes' : 'No') : (control.value ?? control.innerText ?? '');
+            else {
+                const clone = container.cloneNode(true);
+                for (const span of [...clone.querySelectorAll('span')]) {
+                    if (norm(span.textContent) === target) span.remove();
+                }
+                value = (clone.textContent || '').replace(/\\s+/g, ' ').trim();
+                if (norm(value) === target) value = '';
+            }
+            if (/^(select|choose)(\\s|$)/i.test(value)) value = '';
+            const disabled = !!control?.disabled || container.getAttribute('aria-disabled') === 'true';
+            result[key] = {value:String(value).trim(), state:disabled ? 'disabled' : String(value).trim() ? 'read' : 'empty'};
+        }
+        return result;
+    ''', EDIT_FIELDS) or {}
+
+
+def wait_for_edit_form_ready(driver, timeout=30):
+    """Require populated, stable form controls rather than just an edit URL."""
+    previous = None
+    stable_since = None
+
+    def ready(current):
+        nonlocal previous, stable_since
+        snapshot = read_edit_form_snapshot(current)
+        price = snapshot.get('price', {})
+        if not str(price.get('value') or '').strip() or price.get('state') not in {'read', 'disabled'}:
+            previous, stable_since = None, None
+            return False
+        # A price alone can arrive before the rest of the form.
+        if sum(value.get('state') != 'unavailable' for value in snapshot.values()) < 3:
+            previous, stable_since = None, None
+            return False
+        if snapshot != previous:
+            previous, stable_since = snapshot, time.monotonic()
+            return False
+        return snapshot if time.monotonic() - stable_since >= 1.5 else False
+
+    try:
+        return WebDriverWait(driver, timeout, poll_frequency=0.5).until(ready)
+    except Exception as exc:
+        raise RuntimeError('The Facebook edit form did not finish loading or its fields could not be detected. Saved details were not replaced; retry the import.') from exc
 
 
 def _combobox_label_xpath(label_text):
@@ -167,7 +244,7 @@ def _safe_image_urls(driver):
             )
         )
         for img in preview_imgs:
-            src = _img_src(img) or _srcset_best(img)
+            src = _srcset_best(img) or _img_src(img)
             if not src:
                 continue
             if src.startswith("data:") or src.startswith("blob:"):
@@ -176,16 +253,6 @@ def _safe_image_urls(driver):
                 urls.append(src)
     except Exception:
         pass
-
-    if urls:
-        seen = set()
-        deduped = []
-        for u in urls:
-            if u in seen:
-                continue
-            seen.add(u)
-            deduped.append(u)
-        return deduped
 
     candidates = []
     try:
@@ -205,7 +272,12 @@ def _safe_image_urls(driver):
     except Exception:
         pass
 
-    if not candidates:
+    uploader_photos = bool(candidates)
+    preview_urls = list(urls)
+    if uploader_photos:
+        urls = []
+
+    if not candidates and not urls:
         try:
             # Fallback 1: edit page listing canvas/media region.
             candidates = WebDriverWait(driver, 20).until(
@@ -220,7 +292,7 @@ def _safe_image_urls(driver):
         except Exception:
             candidates = []
 
-    if not candidates:
+    if not candidates and not urls:
         try:
             # Fallback 2: broad page scan, later filtered.
             candidates = WebDriverWait(driver, 20).until(
@@ -232,7 +304,7 @@ def _safe_image_urls(driver):
             candidates = []
 
     for img in candidates:
-        src = _img_src(img)
+        src = _srcset_best(img) or _img_src(img)
         if not src:
             src = _srcset_best(img)
         if not src:
@@ -241,9 +313,12 @@ def _safe_image_urls(driver):
             continue
         if not _is_listing_cdn_url(src):
             continue
-        if not _is_large_image(img):
+        if not uploader_photos and not _is_large_image(img):
             continue
         urls.append(src)
+
+    if not urls:
+        urls = preview_urls
 
     if not urls:
         # Last-resort parse of Preview region HTML for direct src links.
@@ -282,6 +357,53 @@ def _safe_image_urls(driver):
         seen.add(u)
         deduped.append(u)
     return deduped
+
+
+def highest_resolution_listing_images(driver, edit_url, urls):
+    """Resolve signed full-size gallery URLs; never guess CDN resize parameters.
+
+    Edit forms often expose only cropped 260px thumbnails. Match each photo
+    by its CDN filename on the public listing so unrelated recommendations
+    cannot enter the imported photo set. Preserve the edit form's photo order.
+    """
+    ids = parse_qs(urlsplit(edit_url).query).get('listing_id') or []
+    if not urls or not ids or not str(ids[0]).isdigit():
+        return urls
+    expected = {urlsplit(url).path.rsplit('/', 1)[-1] for url in urls}
+    original_handle = driver.current_window_handle
+    gallery_handle = None
+    try:
+        # Keep the source edit form intact while resolving full-size photos.
+        driver.switch_to.new_window('tab')
+        gallery_handle = driver.current_window_handle
+        driver.set_page_load_timeout(45)
+        driver.get('https://www.facebook.com/marketplace/item/' + ids[0] + '/')
+        def matching_images(current):
+            images = current.execute_script('''
+                return [...document.querySelectorAll('[role="main"] img')].map(img => ({
+                  url:img.currentSrc || img.src || '', width:img.naturalWidth, height:img.naturalHeight}));
+            ''') or []
+            return [image for image in images if urlsplit(image.get('url') or '').path.rsplit('/', 1)[-1] in expected] or False
+        images = WebDriverWait(driver, 15).until(matching_images)
+        best = {}
+        for image in images:
+            url = image['url']
+            if not url.startswith('https://') or not (urlsplit(url).hostname or '').endswith('.fbcdn.net'):
+                continue
+            name = urlsplit(url).path.rsplit('/', 1)[-1]
+            score = int(image.get('width') or 0) * int(image.get('height') or 0)
+            if name not in best or score > best[name][0]:
+                best[name] = (score, url)
+        return [best.get(urlsplit(url).path.rsplit('/', 1)[-1], (0, url))[1] for url in urls]
+    except Exception as exc:
+        print(f'[ListingImport] Full-size gallery unavailable; retaining edit photo URLs: {type(exc).__name__}', flush=True)
+        return urls
+    finally:
+        if gallery_handle is not None:
+            try:
+                driver.close()
+            finally:
+                driver.switch_to.window(original_handle)
 
 
 def _extract_listing_id(post_url):
@@ -416,6 +538,16 @@ def _read_marketplace_summary(driver):
     return result
 
 
+def _valid_model_text(value, allow_numeric=True):
+    """Reject inventory containers and edit-form internal IDs as model names."""
+    value = " ".join(str(value or "").split()).strip()
+    if not value or len(value) > 100 or (not allow_numeric and value.isdecimal()):
+        return ""
+    if re.search(r"[$€£]|\b(?:MAD|USD|CAD|GBP|EUR|PKR)\s*[\d,]|\b(?:listed on|clicks on listing|listed on marketplace|renew your listing)\b", value, re.IGNORECASE):
+        return ""
+    return value
+
+
 def _model_from_visible_listing_heading(driver, year, make, log_result=True):
     """Return the model portion of a visible `Year Make Model` Marketplace h1."""
     year = " ".join(str(year or "").split()).strip()
@@ -423,33 +555,25 @@ def _model_from_visible_listing_heading(driver, year, make, log_result=True):
     if not year or not make:
         return ""
 
-    heading_xpath = (
-        "//div[@aria-hidden='false']//h1//span[normalize-space()]"
-        " | //div[@aria-hidden='false']//h1[normalize-space()]"
-        " | //h1//span[normalize-space()]"
-        " | //h1[normalize-space()]"
-    )
-    try:
-        headings = driver.find_elements(By.XPATH, heading_xpath)
-    except Exception:
-        headings = []
-
     prefix_pattern = re.compile(
         rf"^{re.escape(year)}\s+{re.escape(make)}(?:\s+|$)",
         re.IGNORECASE,
     )
-    # Keep the broad span scan lazy so the normal h1 path stays fast.
-    candidate_groups = [("h1 heading", headings), ("matching span fallback", None)]
+    # Prefer the opened listing's dialog. A parent span on the selling page
+    # can contain the titles, prices and metrics of every listing; only leaf
+    # spans are eligible for the non-heading fallback.
+    candidate_groups = [
+        ("dialog heading", "//*[@role='dialog']//h1[normalize-space()] | //*[@role='dialog']//*[@role='heading'][normalize-space()]"),
+        ("h1 heading", "//h1[normalize-space()]"),
+        ("matching span fallback", "//span[not(.//span) and normalize-space()]"),
+    ]
 
     seen_texts = set()
-    for source_name, candidates in candidate_groups:
-        if candidates is None:
-            try:
-                # Facebook sometimes changes the title wrapper while retaining
-                # the complete `Year Make Model` text in a visible span.
-                candidates = driver.find_elements(By.XPATH, "//span[normalize-space()]")
-            except Exception:
-                candidates = []
+    for source_name, xpath in candidate_groups:
+        try:
+            candidates = driver.find_elements(By.XPATH, xpath)
+        except Exception:
+            candidates = []
         for candidate in candidates:
             try:
                 if not candidate.is_displayed():
@@ -462,7 +586,7 @@ def _model_from_visible_listing_heading(driver, year, make, log_result=True):
             seen_texts.add(title_text)
             if not prefix_pattern.match(title_text):
                 continue
-            model = prefix_pattern.sub("", title_text, count=1).strip()
+            model = _valid_model_text(prefix_pattern.sub("", title_text, count=1))
             if model:
                 if log_result:
                     print(
@@ -663,6 +787,7 @@ def _find_listing_card_with_scroll(
     listing_price="",
     require_pending=False,
     timeout=30,
+    listing_url="",
 ):
     """
     Search every visible batch, then scroll down one viewport and pause so
@@ -685,6 +810,7 @@ def _find_listing_card_with_scroll(
             listing_name=listing_name,
             listing_price=listing_price,
             require_pending=require_pending,
+            listing_url=listing_url,
         )
         if matched_card:
             return matched_card
@@ -738,7 +864,7 @@ def _find_listing_card_with_scroll(
     return None
 
 
-def _find_listing_card(driver, listing_name, listing_price="", require_pending=False):
+def _find_listing_card(driver, listing_name, listing_price="", require_pending=False, listing_url=""):
     target_name = _normalize_text(listing_name)
     target_price = _normalize_price(listing_price)
     if not target_name:
@@ -770,6 +896,11 @@ def _find_listing_card(driver, listing_name, listing_price="", require_pending=F
 
     for card, title_controls in candidates:
         try:
+            if listing_url and '/marketplace/item/' in listing_url:
+                links = [str(link.get_attribute('href') or '').split('?', 1)[0].rstrip('/') for link in card.find_elements(By.CSS_SELECTOR, 'a[href]')]
+                item_links = [link for link in links if '/marketplace/item/' in link]
+                if item_links and listing_url.split('?', 1)[0].rstrip('/') not in item_links:
+                    continue
             card_text = _normalize_text(card.text or "")
             labels = [
                 _normalize_text(control.get_attribute("aria-label") or "")
@@ -892,7 +1023,7 @@ def _print_reposting_read_summary(post_data, edit_url=""):
             print(f"[Reposting]   image_{index}={image_url!r}", flush=True)
 
 
-def read_listing_from_manage(account, listing):
+def read_listing_from_manage(account, listing, driver=None):
     """Read one stored listing through Manage Listings -> Edit listing."""
     if not account:
         raise ValueError("Account is required")
@@ -908,9 +1039,10 @@ def read_listing_from_manage(account, listing):
     if not listing_name:
         raise ValueError("Listing title is required")
 
-    driver = None
+    owns_driver = driver is None
     try:
-        driver = _open_prelogged_facebook(account)
+        if owns_driver:
+            driver = _open_prelogged_facebook(account)
         if not _open_manage_listings(driver):
             raise Exception("Manage Listings could not be opened")
 
@@ -920,6 +1052,7 @@ def read_listing_from_manage(account, listing):
             listing_price=listing_price,
             require_pending=False,
             timeout=40,
+            listing_url=str(listing.get('url') or ''),
         )
         if not card:
             raise Exception(f"Listing not found in Manage Listings: {listing_name}")
@@ -976,13 +1109,26 @@ def read_listing_from_manage(account, listing):
             lambda current: "/marketplace/edit/" in str(current.current_url or "")
             or bool(current.find_elements(By.XPATH, "//*[@aria-label='Price']"))
         )
-        time.sleep(1)
+        snapshot = wait_for_edit_form_ready(driver)
+        print('[ListingImport] Edit form ready; reading saved vehicle fields on the edit page.', flush=True)
         _scroll_down_page(driver, steps=3)
+        # Some Facebook forms virtualize controls while scrolling. Retain the
+        # fields read at the top instead of replacing them with absent controls.
+        scrolled_snapshot = read_edit_form_snapshot(driver)
+        for field, value in scrolled_snapshot.items():
+            if value.get('state') != 'unavailable' and (
+                value.get('value') or snapshot.get(field, {}).get('state') == 'unavailable'
+            ):
+                snapshot[field] = value
 
         def read_value(field, reader):
             try:
+                if field in snapshot and snapshot[field].get('state') != 'unavailable':
+                    return snapshot[field].get('value') or ''
                 value = reader() or ""
                 if value not in (None, "", [], {}):
+                    if field in EDIT_FIELDS:
+                        snapshot[field] = {'value': value, 'state': 'read'}
                     print(f"[Reposting] READ {field}={value!r}", flush=True)
                 else:
                     print(f"[Reposting] MISSING {field}: no value found", flush=True)
@@ -996,7 +1142,7 @@ def read_listing_from_manage(account, listing):
             "image_urls": read_value("image_urls", lambda: _safe_image_urls(driver)),
             "year": read_value("year", lambda: _safe_combobox_text(driver, "Year") or _safe_input_value(driver, "Year")) or str(listing.get("year") or ""),
             "make": read_value("make", lambda: _safe_input_value(driver, "Make") or _safe_combobox_text(driver, "Make")) or str(listing.get("make") or ""),
-            "model": heading_model or str(listing.get("model") or ""),
+            "model": heading_model or _valid_model_text(snapshot.get('model', {}).get('value'), allow_numeric=False) or _valid_model_text(listing.get("model")),
             "mileage": read_value("mileage", lambda: _safe_input_value(driver, "Mileage")),
             "price": read_value("price", lambda: _safe_input_value(driver, "Price")) or listing_price,
             "body_style": read_value("body_style", lambda: _safe_combobox_text(driver, "Body style")),
@@ -1006,7 +1152,11 @@ def read_listing_from_manage(account, listing):
             "fuel_type": read_value("fuel_type", lambda: _safe_combobox_text(driver, "Fuel type")),
             "transmission": read_value("transmission", lambda: _safe_combobox_text(driver, "Transmission")),
             "description": read_value("description", lambda: _safe_description(driver)),
+            "location": read_value("location", lambda: _safe_input_value(driver, "Location")),
+            "clean_title": read_value("clean_title", lambda: ''),
         }
+        post_data['field_states'] = {key: value.get('state', 'unavailable') for key, value in snapshot.items()}
+        _print_reposting_read_summary(post_data, edit_url=edit_href)
         post_data["title"] = " ".join(
             str(post_data.get(field) or "").strip()
             for field in ("year", "make", "model")
@@ -1020,7 +1170,15 @@ def read_listing_from_manage(account, listing):
             "posts": [post_data],
         }
     finally:
-        if driver:
+        if driver and not owns_driver:
+            # Return the shared import browser to inventory after each listing,
+            # including a failed read. Photos come only from the edit page.
+            try:
+                if not _open_manage_listings(driver):
+                    print('[ListingImport] Could not return to Manage Listings.', flush=True)
+            except Exception as exc:
+                print(f'[ListingImport] Could not return to Manage Listings: {exc}', flush=True)
+        if driver and owns_driver:
             try:
                 driver.quit()
             except Exception:
@@ -1229,6 +1387,17 @@ def _open_prelogged_facebook(account, force_headless=False):
     options.add_experimental_option("useAutomationExtension", False)
 
     driver = build_chrome_driver(options)
+    try:
+        return _restore_facebook_cookies(driver, cookies, account)
+    except Exception:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        raise
+
+
+def _restore_facebook_cookies(driver, cookies, account):
     _apply_browser_safety_patches(driver)
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
 

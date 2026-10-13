@@ -14,6 +14,11 @@ from selenium.webdriver.support import expected_conditions as EC
 
 from automation.reposting import _open_prelogged_facebook
 from automation.runtime_paths import data_dir
+from automation import listing_store
+from automation.reposting import read_listing_from_manage, _find_edit_listing_link, _extract_listing_id, _normalize_price
+from io import BytesIO
+from PIL import Image
+import requests
 
 
 SELLING_URL = "https://www.facebook.com/marketplace/you/selling"
@@ -89,34 +94,63 @@ def listings_store_path(account):
 
 
 def load_listings(account):
-    path = listings_store_path(account)
-    if not path.exists():
-        return {"account_email": account, "updated_at": None, "listings": []}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        raw = {}
-    listings = raw.get("listings") if isinstance(raw, dict) else []
-    record = {
-        "account_email": (raw.get("account_email") if isinstance(raw, dict) else None) or account,
-        "updated_at": raw.get("updated_at") if isinstance(raw, dict) else None,
-        "listings": [item for item in listings if isinstance(item, dict)],
-    }
-    return record
+    return listing_store.load(account, listings_store_path(account))
 
 
 def save_listings(account, listings):
-    IMPORT_DIR.mkdir(parents=True, exist_ok=True)
-    path = listings_store_path(account)
-    payload = {
-        "account_email": account,
-        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "listings": listings if isinstance(listings, list) else [],
-    }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    listing_store.save(account, listings if isinstance(listings, list) else [])
+
+
+def download_listing_images(driver, account, listing_id, urls, stop_event):
+    """Keep the original CDN bytes; never resize or recompress downloaded photos."""
+    folder = IMPORT_DIR / 'images' / hashlib.sha256(account.encode()).hexdigest()[:24] / listing_id
+    folder.mkdir(parents=True, exist_ok=True)
+    images, errors = [], []
+    with requests.Session() as session:
+        session.headers.update({'User-Agent': driver.execute_script('return navigator.userAgent'), 'Referer': 'https://www.facebook.com/'})
+        for cookie in driver.get_cookies():
+            session.cookies.set(cookie['name'], cookie['value'], domain=cookie.get('domain', '.facebook.com'))
+        for url in urls:
+            if stop_event.is_set():
+                raise ListingImportCancelled()
+            try:
+                from urllib.parse import urlsplit
+                host = (urlsplit(url).hostname or '').lower()
+                if not host.endswith('.fbcdn.net') or not url.startswith('https://'):
+                    raise ValueError('Unsupported listing image URL')
+                response = session.get(url, timeout=30)
+                response.raise_for_status()
+                content = response.content
+                with Image.open(BytesIO(content)) as picture:
+                    width, height = picture.size
+                    extension = {'JPEG': '.jpg', 'PNG': '.png', 'WEBP': '.webp'}.get(picture.format)
+                    picture.verify()
+                if not extension:
+                    raise ValueError('Unsupported photo format')
+                # Keep filenames short: this project already lives in a long
+                # Windows Downloads path. Full SHA256 + .tmp exceeded MAX_PATH.
+                name = hashlib.sha256(content).hexdigest()[:24] + extension
+                path = folder / name
+                temporary = folder / (name + '.tmp')
+                temporary.write_bytes(content)
+                os.replace(temporary, path)
+                if any(item['name'] == name for item in images):
+                    continue
+                images.append({'name': name, 'path': str(path.resolve()), 'url': url, 'width': width, 'height': height})
+            except Exception as exc:
+                errors.append(str(exc))
+    return images, errors
 
 
 def _record_key(record):
+    if record.get('source_deleted'):
+        return 'backup:' + str(record.get('id') or '')
+    facebook_id = _extract_listing_id(record.get('url') or record.get('edit_url') or '')
+    if facebook_id:
+        return 'url:https://www.facebook.com/marketplace/item/' + facebook_id
+    url = str(record.get('url') or '').strip().split('?', 1)[0].rstrip('/')
+    if '/marketplace/item/' in url:
+        return 'url:' + url.lower()
     text = "|".join(str(record.get(field) or "").strip().lower() for field in ("year", "make", "model"))
     if text.replace("|", ""):
         return "title:" + text
@@ -200,6 +234,13 @@ def _listing_from_candidate(candidate):
 def _matching_record_key(records_by_key, record):
     """Find an existing record even when Facebook adds/removes trim text."""
     key = _record_key(record)
+    facebook_id = _extract_listing_id(record.get('url') or record.get('edit_url') or '')
+    if facebook_id:
+        for existing_key, existing in records_by_key.items():
+            if existing.get('source_deleted') and existing.get('facebook_reposted'):
+                continue  # The stored URL belongs to the deleted pre-repost source.
+            if _extract_listing_id(existing.get('url') or existing.get('edit_url') or '') == facebook_id:
+                return existing_key
     if key in records_by_key:
         return key
     year = str(record.get("year") or "").strip().lower()
@@ -208,6 +249,12 @@ def _matching_record_key(records_by_key, record):
     if not (year and make and model):
         return key
     for existing_key, existing in records_by_key.items():
+        pending_repost = existing.get('source_deleted') and existing.get('facebook_reposted')
+        if existing.get('source_deleted') and not pending_repost:
+            continue
+        old_id = _extract_listing_id(existing.get('url') or existing.get('edit_url') or '')
+        if facebook_id and old_id and not pending_repost:
+            continue
         if str(existing.get("year") or "").strip().lower() != year:
             continue
         if str(existing.get("make") or "").strip().lower() != make:
@@ -440,20 +487,41 @@ def _click_manage_listings(driver, settle_seconds=5):
     return False
 
 
-def import_listings_from_facebook(account, stop_event=None, progress_callback=None, replace_existing=False):
-    """Scroll listings and persist a deduplicated snapshot for one account."""
+def import_listings_from_facebook(account, stop_event=None, progress_callback=None, replace_existing=False, only_new=False):
+    """Merge live listings into saved backups; never discard absent listings."""
     if not account:
         raise ValueError("Account is required")
     stop_event = stop_event or threading.Event()
-    existing = [] if replace_existing else (load_listings(account).get("listings") or [])
-    by_key = {_record_key(item): item for item in existing if isinstance(item, dict)}
+    existing = load_listings(account).get("listings") or []
+    by_key = {}
+    by_identity = {}
+    for item in existing:
+        if not isinstance(item, dict):
+            continue
+        key = _record_key(item)
+        facebook_id = _extract_listing_id(item.get('url') or item.get('edit_url') or '')
+        identity = ('facebook', facebook_id) if facebook_id and not (item.get('source_deleted') and item.get('facebook_reposted')) else ('local', str(item.get('id')))
+        if identity in by_identity:
+            kept = by_identity[identity]
+            for field, value in item.items():
+                if value and not kept.get(field):
+                    kept[field] = value
+            continue
+        by_identity[identity] = item
+        if key in by_key:
+            # Preserve every existing backup even when older imports used
+            # identical vehicle titles without a Facebook item URL.
+            key += ':' + str(item['id'])
+        by_key[key] = item
+    visible_keys = set()
+    visible_ids = set()
     # A Facebook card can appear through several nested DOM candidates and
     # again on later scroll scans. The first candidate containing a confirmed
     # metric is the card-local value; never let a later duplicate overwrite it.
     clicks_confirmed_this_import = set()
     driver = None
     try:
-        driver = _open_prelogged_facebook(account)
+        driver = _open_prelogged_facebook(account, force_headless=True) if only_new else _open_prelogged_facebook(account)
         with _active_import_drivers_lock:
             _active_import_drivers[account] = driver
         if stop_event.is_set():
@@ -483,7 +551,12 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                 else:
                     record.pop("clicks_checked_at", None)
                 key = _matching_record_key(by_key, record)
+                visible_keys.add(key)
                 if key not in by_key:
+                    if any(item.get('id') == record['id'] for item in by_key.values()):
+                        # An archived source and its new repost can share a title
+                        # and generic card URL. Give the new live record its own ID.
+                        record['id'] = hashlib.sha1(f"{record['id']}|{time.time_ns()}".encode()).hexdigest()[:20]
                     by_key[key] = record
                     if record.get("clicks_confirmed"):
                         clicks_confirmed_this_import.add(key)
@@ -500,6 +573,10 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                     # Enrich an existing deduplicated record with fields that
                     # may only appear after the listing card finishes loading.
                     existing_record = by_key[key]
+                    if existing_record.get('source_deleted') and existing_record.get('facebook_reposted'):
+                        existing_record['url'] = record.get('url') or ''
+                        existing_record['edit_url'] = ''
+                    existing_record.update(source_deleted=False, facebook_present=True)
                     changed = False
                     for field in ("year", "make", "model", "price", "listed_date", "url", "images", "image"):
                         if record.get(field) and not existing_record.get(field):
@@ -534,6 +611,7 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                             f"image={'yes' if existing_record.get('image') else 'no'}",
                             flush=True,
                         )
+                visible_ids.add(str(by_key[key]['id']))
             if new_count:
                 save_listings(account, list(by_key.values()))
             if progress_callback:
@@ -549,14 +627,57 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                     "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);"
                 ) or 0)
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            except Exception:
-                height = previous_height
+            except Exception as exc:
+                raise RuntimeError('Listing scan could not finish; missing-listing statuses were not changed.') from exc
             time.sleep(1)
             idle_rounds = idle_rounds + 1 if height <= previous_height else 0
             previous_height = height
 
         if stop_event.is_set():
             raise ListingImportCancelled()
+        # Collect cards first so opening edit pages cannot disrupt scroll discovery.
+        for index, record in enumerate(by_key.values(), 1):
+            if stop_event.is_set():
+                raise ListingImportCancelled()
+            if str(record['id']) not in visible_ids or record.get('source_deleted'):
+                continue
+            if only_new and record.get('details') and record.get('downloaded_images') and not record.get('detail_error') and not record.get('image_errors') and all(os.path.isfile(photo['path']) for photo in record['downloaded_images']):
+                continue
+            if progress_callback:
+                progress_callback({'total_count': len(by_key), 'message': f'Reading full details and photos {index}/{len(by_key)}...'})
+            try:
+                result = read_listing_from_manage(account, record, driver=driver)
+                details = result['posts'][0]
+                photos, errors = download_listing_images(driver, account, record['id'], details.get('image_urls') or [], stop_event)
+                if (errors or not photos) and record.get('downloaded_images'):
+                    # A transient download error must not erase an existing backup.
+                    raise RuntimeError('Photo refresh failed; previously saved details and photos were kept.')
+                record.update(details=details, downloaded_images=photos, edit_url=result.get('edit_url'),
+                              details_imported_at=datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                              detail_error='', image_errors=errors)
+                if not photos:
+                    record['detail_error'] = 'No photos downloaded; re-import before reposting.'
+            except Exception as exc:
+                if stop_event.is_set():
+                    raise ListingImportCancelled() from exc
+                record['detail_error'] = str(exc)
+            save_listings(account, list(by_key.values()))
+        # Absence is meaningful only after a successful complete inventory scan.
+        current_url = str(driver.current_url or '')
+        if any(part in current_url for part in ('/login', '/checkpoint', '/recover')):
+            raise RuntimeError('Facebook session needs verification; missing-listing statuses were not changed.')
+        confirmed_empty = False
+        if not visible_ids:
+            confirmed_empty = driver.execute_script("return /(?:you haven.t listed anything|you have no listings|no listings yet|no listings found)/i.test(document.querySelector('[role=main]')?.innerText || '');") is True
+        if visible_ids or confirmed_empty:
+            checked_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
+            for record in by_key.values():
+                present = str(record['id']) in visible_ids
+                record['facebook_present'] = present
+                record['facebook_presence_checked_at'] = checked_at
+                if not present:
+                    record['source_deleted'] = True
+                    record['facebook_reposted'] = False
         save_listings(account, list(by_key.values()))
         return list(by_key.values())
     finally:
@@ -659,7 +780,8 @@ def refresh_listing_clicks_from_facebook(account, progress_callback=None):
                 target["clicks_checked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 # Save after every confirmed row so the polling UI updates
                 # progressively instead of waiting for the entire page scan.
-                save_listings(account, listings)
+                listing_store.update_fields(account, target['id'], {
+                    'clicks': clicks, 'clicks_confirmed': True, 'clicks_checked_at': target['clicks_checked_at']})
                 print(
                     f"[RefreshClicks] confirmed id={target.get('id') or '-'} "
                     f"title={target.get('year','')} {target.get('make','')} {target.get('model','')} "
@@ -724,8 +846,13 @@ def _same_listing(stored, visible):
     """Match a stored selection to a Marketplace card without CSS classes."""
     stored_url = str(stored.get("url") or "").split("?", 1)[0].rstrip("/").lower()
     visible_url = str(visible.get("url") or "").split("?", 1)[0].rstrip("/").lower()
-    if stored_url and visible_url and stored_url == visible_url:
+    if '/marketplace/item/' in stored_url and stored_url == visible_url:
         return True
+    if stored.get('_require_source_url'):
+        return False
+    if stored.get('_source_listing_id') and stored.get('price') and visible.get('price'):
+        if _normalize_price(stored['price']) != _normalize_price(visible['price']):
+            return False
     sy, sm, sx = _listing_text_key(stored)
     vy, vm, vx = _listing_text_key(visible)
     if not (sy and sm and sx and vy and vm and vx):
@@ -733,6 +860,14 @@ def _same_listing(stored, visible):
     if sy != vy or sm != vm:
         return False
     return sx == vx or sx.startswith(vx) or vx.startswith(sx)
+
+
+def _verify_repost_source(driver, stored):
+    source_id = stored.get('_source_listing_id')
+    if not source_id:
+        return True
+    link = _find_edit_listing_link(driver, timeout=10, clickable=False)
+    return bool(link and _extract_listing_id(link.get_attribute('href')) == str(source_id))
 
 
 def _click_element_safely(driver, element):
@@ -807,10 +942,11 @@ def _complete_facebook_delete_dialog(driver):
         raise RuntimeError("Delete confirmation could not be clicked")
     print("[DeleteListings] clicked confirmation Delete; waiting 5 seconds", flush=True)
     time.sleep(5)
+    WebDriverWait(driver, 15).until(EC.invisibility_of_element(confirm_button))
 
 
 def delete_selected_listings_from_facebook(account, selected_listings, stop_event=None, progress_callback=None):
-    """Open and click each selected Marketplace listing; confirmation comes later."""
+    """Find each selected source, verify its ID and complete Facebook deletion."""
     if not account:
         raise ValueError("Account is required")
     selected = [item for item in (selected_listings or []) if isinstance(item, dict)]
@@ -838,6 +974,7 @@ def delete_selected_listings_from_facebook(account, selected_listings, stop_even
             idle_rounds = 0
             previous_height = -1
             while not stop_event.is_set() and idle_rounds < 4 and not found:
+                retry_source = False
                 candidates = _extract_visible_listing_candidates(driver)
                 match_occurrence = max(1, int(stored.get("_match_occurrence") or 1))
                 if match_occurrence > 1:
@@ -889,6 +1026,15 @@ def delete_selected_listings_from_facebook(account, selected_listings, stop_even
                         )
                         if stop_event.wait(10):
                             break
+                        if not _verify_repost_source(driver, stored):
+                            # Several listings can share a title. Try the next
+                            # card, always verifying its Edit listing ID first.
+                            stored['_match_occurrence'] = match_occurrence + 1
+                            driver.get(SELLING_URL)
+                            WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.XPATH, "//div[@role='main']")))
+                            _click_manage_listings(driver)
+                            retry_source = True
+                            break
                         clicked += 1
                         _complete_facebook_delete_dialog(driver)
                         deleted += 1
@@ -901,6 +1047,9 @@ def delete_selected_listings_from_facebook(account, selected_listings, stop_even
                         print(f"[DeleteListings] delete sequence failed for matched listing: {exc}", flush=True)
                         found = True
                     break
+                if retry_source:
+                    idle_rounds = 0
+                    continue
                 if found or stop_event.is_set():
                     break
                 try:

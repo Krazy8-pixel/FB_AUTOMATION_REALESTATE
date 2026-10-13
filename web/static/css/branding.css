@@ -1,0 +1,16 @@
+.tayyara-wordmark { display:inline-flex; align-items:center; justify-content:center; gap:7px; padding:10px 13px; background:var(--app-blue, #0b3d91); border-radius:7px; white-space:nowrap; font-family:Arial, Helvetica, sans-serif; font-style:italic; font-weight:900; font-size:21px; letter-spacing:.35px; line-height:1.2; }
+.tayyara-wordmark > span:first-child { color:#db3c18; }
+.tayyara-wordmark > span:last-child { color:#fff; }
+.topbar .topbar-brand { padding:6px; gap:10px; flex:0 0 auto; width:auto; min-width:max-content; }
+@media(max-width:400px) { .tayyara-wordmark { font-size:18px; gap:5px; padding:10px; } }
+
+@media(min-width:901px) {
+  .topbar .topbar-inner { gap:20px; }
+  .topbar .accounts { margin-left:auto; flex:0 1 auto; }
+  .topbar .topbar-identity { margin-left:auto; }
+}
+@media(max-width:900px) {
+  .topbar .topbar-brand { flex:1 1 100%; width:100%; min-width:0; }
+}
+.app-brand-logo { width:42px; height:42px; object-fit:contain; flex-shrink:0; }
+@media(max-width:400px) { .app-brand-logo { width:30px; height:30px; }.topbar .tayyara-wordmark { font-size:15px; }.brand .tayyara-wordmark { font-size:17px; } }
