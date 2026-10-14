@@ -34,6 +34,9 @@ def main():
     run(str(compiler), '/DGENERATE_UNINSTALLER', '/DAPP_VERSION=' + args.version, str(ROOT / 'packaging/installer.nsi'))
     run(str(ROOT / 'build/uninstall/MakeUninstaller.exe'), '/S')
     run(sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile', '--noconsole', '--name', 'TayyaraUpdater', '--distpath', 'build/updater', '--workpath', 'build/updater-work', '--specpath', 'packaging', 'updater.py')
+    # PyInstaller can reuse the EXE when only the icon file contents change.
+    # Rebuild its resource container while retaining the dependency cache.
+    (ROOT / 'build/desktop/EXE-00.toc').unlink(missing_ok=True)
     run(sys.executable, '-m', 'PyInstaller', '--noconfirm', 'desktop.spec')
     shutil.copy2(ROOT / 'build/uninstall/Uninstall.exe', ROOT / 'dist/TayyaraMotors/Uninstall.exe')
     # Selenium exposes browser drivers through lazy imports, which PyInstaller
