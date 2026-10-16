@@ -1787,7 +1787,8 @@ def settings_page():
 @web_bp.route('/settings/desktop', methods=['POST'])
 def desktop_preferences_save():
     from automation.desktop_preferences import save
-    save(request.form.get('background_sync') == '1', request.form.get('start_with_windows') == '1')
+    save(request.form.get('background_sync') == '1', request.form.get('start_with_windows') == '1',
+         automatic_updates=request.form.get('automatic_updates') == '1')
     return redirect(url_for('web.settings_page'))
 
 

@@ -5,14 +5,18 @@ from automation.runtime_paths import data_dir
 
 
 def load():
+    defaults = {'background_sync': True, 'start_with_windows': True, 'automatic_updates': True}
     path = data_dir() / 'desktop_preferences.json'
     if path.exists():
-        return json.loads(path.read_text(encoding='utf-8'))
-    return {'background_sync': True, 'start_with_windows': True}
+        return dict(defaults, **json.loads(path.read_text(encoding='utf-8')))
+    return defaults
 
 
-def save(background_sync, start_with_windows):
-    payload = {'background_sync': bool(background_sync), 'start_with_windows': bool(start_with_windows)}
+def save(background_sync, start_with_windows, automatic_updates=None):
+    payload = load()
+    payload.update(background_sync=bool(background_sync), start_with_windows=bool(start_with_windows))
+    if automatic_updates is not None:
+        payload['automatic_updates'] = bool(automatic_updates)
     if getattr(sys, 'frozen', False):
         import winreg
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\Run') as key:

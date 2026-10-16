@@ -20,12 +20,13 @@
     <form method="post" action="{{ url_for('web.desktop_preferences_save') }}" class="desktop-preferences">
       <label><input type="checkbox" name="background_sync" value="1" {% if desktop_preferences.background_sync %}checked{% endif %}><span><strong>Keep listings and clicks up to date</strong><small>Missed checks run once after your PC wakes. Background sync waits for your posting work.</small></span></label>
       <label><input type="checkbox" name="start_with_windows" value="1" {% if desktop_preferences.start_with_windows %}checked{% endif %}><span><strong>Start with Windows</strong><small>The desktop app starts quietly in the system tray when you sign in.</small></span></label>
+      <label><input type="checkbox" name="automatic_updates" value="1" {% if desktop_preferences.automatic_updates %}checked{% endif %}><span><strong>Update the app automatically</strong><small>Checks on startup and every 6 hours. Downloads, installs and restarts when automation is idle. Updates that clear saved listings need your confirmation.</small></span></label>
       <p>Closing the desktop window keeps sync running. Use the tray menu's Exit App to stop it. Your PC can sleep normally.</p>
       <button type="submit">Save preferences</button>
       {% if not desktop_mode %}<p class="settings-caption">Tray mode and Windows startup take effect in the installed desktop edition.</p>{% endif %}
     </form>
   </section>
-  <section class="hub-section desktop-panel" aria-labelledby="updates-title"><div class="hub-section-head"><h2 id="updates-title">App updates <span class="update-version">Version {{ app_version }}</span></h2><p>When notified, check here to download and install the latest release.</p></div>
+  <section class="hub-section desktop-panel" aria-labelledby="updates-title"><div class="hub-section-head"><h2 id="updates-title">App updates <span class="update-version">Version {{ app_version }}</span></h2><p>The installed app can update automatically while idle. You can also check and install updates here.</p></div>
     <p id="update-message" role="status" aria-live="polite">Updates preserve saved accounts, groups, listings, and media unless a release explicitly resets listings.</p>
     <p id="update-reset-notice" hidden>A database reset is included in this release. Saved listings will be cleared; accounts and groups are kept.</p>
     <div class="guide-actions"><button type="button" id="update-check">Check for Updates</button><button type="button" id="update-install" hidden>Download &amp; Install</button></div>
@@ -39,11 +40,12 @@
 (function(){
   const message=document.getElementById('update-message'), check=document.getElementById('update-check'), install=document.getElementById('update-install'), reset=document.getElementById('update-reset-notice');
   let timer;
-  function show(data){message.textContent=data.message;check.disabled=['checking','downloading','installing'].includes(data.state);install.hidden=!data.available;reset.hidden=!data.resets_listings;install.disabled=check.disabled;if(!check.disabled)clearTimeout(timer);else timer=setTimeout(poll,1500);}
+  function show(data){message.textContent=data.message;check.disabled=['checking','downloading','installing'].includes(data.state);install.hidden=!data.available;reset.hidden=!data.resets_listings;install.disabled=check.disabled;clearTimeout(timer);timer=setTimeout(poll,check.disabled?1500:10000);}
   async function poll(){try{const response=await fetch('{{ url_for("web.desktop_update_status") }}');show(await response.json());}catch(error){message.textContent='The app is restarting. Please wait.';}}
   async function action(url){check.disabled=true;try{const response=await fetch(url,{method:'POST'});const data=await response.json();if(!response.ok){message.textContent=data.message;check.disabled=false;return;}show(data);}catch(error){message.textContent='Could not contact the app. Try again.';check.disabled=false;}}
   check.addEventListener('click',()=>action('{{ url_for("web.desktop_update_check") }}'));
   install.addEventListener('click',()=>{if(!reset.hidden&&!window.confirm('This release clears saved listing backups. Continue?'))return;action('{{ url_for("web.desktop_update_install") }}');});
+  poll();
 })();
 </script>
 {% endblock %}

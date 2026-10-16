@@ -96,7 +96,7 @@ def main(plan_path):
                 child.wait(timeout=15)
                 raise RuntimeError('New version failed startup; restoring previous version')
             time.sleep(1)
-    except Exception:
+    except Exception as exc:
         if root.exists():
             root.rename(staging)
         previous.rename(root)
@@ -104,6 +104,10 @@ def main(plan_path):
             for suffix in ['', '-wal', '-shm']:
                 (data / ('listings.db' + suffix)).unlink(missing_ok=True)
             shutil.copy2(backup, data / 'listings.db')
+        try:
+            (folder / 'last-update.json').write_text(json.dumps({'version': manifest['version'], 'success': False, 'error': str(exc)}), encoding='utf-8')
+        except OSError:
+            pass
         subprocess.Popen([str(root / 'TayyaraMotors.exe')])
         raise
 

@@ -122,6 +122,11 @@ def cancellable_sleep(seconds):
         check_cancelled()
 
 
+def has_active_tasks():
+    with _lock:
+        return bool(_tasks)
+
+
 def active_tasks(account):
     with _lock:
         return [{key: value for key, value in task.items() if key not in {'cancel', 'drivers'}} |

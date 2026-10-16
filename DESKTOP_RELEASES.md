@@ -6,6 +6,14 @@ On first launch, the client creates their portal login and adds their Facebook a
 
 ## Saved data
 
+The desktop edition checks for updates after startup and every six hours, with
+15-minute retry backoff after network or download failures. Automatic updates
+are enabled by default, including for existing preferences files, and can be
+disabled in Settings. Installation waits for automation to finish and verifies
+the signed manifest and archive checksum. Releases that reset listing data
+require manual confirmation. A version rolled back after failed startup is
+not automatically retried; it can be retried manually in Settings.
+
 Installed program files live in `%LOCALAPPDATA%\Programs\TayyaraMotors`. Client accounts, sessions, groups, listings, media, preferences, and schedules live separately in `%LOCALAPPDATA%\TayyaraMotors\data`.
 
 Ordinary updates replace program files only. From version 1.0.11, uninstalling also deletes saved accounts, sessions, listings, groups, media, preferences, schedules, and caches. Facebook itself can still expire a session or request verification.

@@ -83,8 +83,10 @@ def main():
     tray = pystray.Icon('TayyaraMotors', Image.open(resource_root() / 'assets/app-logo.png'), 'Tayyara Motors — background sync', menu=pystray.Menu(pystray.MenuItem('Open Tayyara Motors', show, default=True), pystray.MenuItem('Exit App', lambda icon, item: quit_app(icon, item))))
     tray.run_detached()
     app_updates.exit_callback = lambda: quit_app(updating=True)
+    ui_loaded = threading.Event()
 
     def monitor():
+        next_update_check = 0
         while not shutting_down.wait(1):
             uninstall_signal = folder / 'exit-for-uninstall'
             if uninstall_signal.exists():
@@ -95,6 +97,13 @@ def main():
             if signal.exists():
                 signal.unlink(missing_ok=True)
                 show()
+            import time
+            if ui_loaded.is_set() and not args.smoke_test and time.monotonic() >= next_update_check:
+                next_update_check = time.monotonic() + 60
+                try:
+                    app_updates.automatic_tick()
+                except Exception as exc:
+                    print(f'[Updates] Automatic check deferred: {exc}', flush=True)
 
     def loaded():
         if args.health_file:
@@ -103,6 +112,7 @@ def main():
                 health.write_text(json.dumps({'version': app_updates.config()['version']}), encoding='utf-8')
         if args.smoke_test:
             threading.Timer(3, lambda: quit_app(updating=True)).start()
+        ui_loaded.set()
     window.events.loaded += loaded
     threading.Thread(target=monitor, daemon=True).start()
     try:
