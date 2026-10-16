@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 import json
 import threading
+from contextlib import contextmanager
 from automation.task_control import cancellable
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -2719,6 +2720,20 @@ def _render_delete_listings_page(message=None, message_type=None):
     )
 
 
+@contextmanager
+def _listing_import_account_lock(account, stop_event):
+    lock = _get_post_lock(account)
+    while not lock.acquire(timeout=0.2):
+        if stop_event.is_set():
+            raise ListingImportCancelled()
+    try:
+        if stop_event.is_set():
+            raise ListingImportCancelled()
+        yield
+    finally:
+        lock.release()
+
+
 def _start_listing_import_job(account, automatic=False):
     if not account:
         return False, "No active account selected."
@@ -2730,6 +2745,8 @@ def _start_listing_import_job(account, automatic=False):
         return False, "Wait for scheduled reposting to finish."
     with listing_import_jobs_lock:
         current = listing_import_jobs.get(account) or {}
+        if automatic and current.get('stop_requested'):
+            return False, 'Automatic import paused after Stop Import. Start a manual import to resume.'
         if current.get("running"):
             return True, "Import listings started."
         stop_event = threading.Event()
@@ -2748,6 +2765,8 @@ def _start_listing_import_job(account, automatic=False):
     def _progress(event):
         with listing_import_jobs_lock:
             job = listing_import_jobs.get(account) or {}
+            if job.get('stop_requested'):
+                return
             job["new_count"] = int(event.get("new_count") or 0)
             job["total_count"] = int(event.get("total_count") or 0)
             job["message"] = event.get("message") or job.get("message")
@@ -2756,7 +2775,9 @@ def _start_listing_import_job(account, automatic=False):
     def _runner():
         try:
             # Imports merge into the backup collection; absent sources stay saved.
-            with _get_post_lock(account):
+            with _listing_import_account_lock(account, stop_event):
+                if stop_event.is_set():
+                    raise ListingImportCancelled()
                 import_listings_from_facebook(
                     account,
                     stop_event=stop_event,

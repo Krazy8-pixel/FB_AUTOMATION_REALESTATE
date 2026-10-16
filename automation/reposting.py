@@ -1426,7 +1426,7 @@ def _resolve_session_file(session_dir, account):
     )
 
 
-def _open_prelogged_facebook(account, force_headless=False):
+def _open_prelogged_facebook(account, force_headless=False, on_driver_ready=None):
     session_file = _resolve_session_file(SESSION_DIR, account)
     with open(session_file, "rb") as f:
         cookies = pickle.load(f)
@@ -1448,6 +1448,8 @@ def _open_prelogged_facebook(account, force_headless=False):
 
     driver = build_chrome_driver(options)
     try:
+        if on_driver_ready is not None:
+            on_driver_ready(driver)
         return _restore_facebook_cookies(driver, cookies, account)
     except Exception:
         try:

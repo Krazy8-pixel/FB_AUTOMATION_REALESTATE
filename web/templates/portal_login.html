@@ -22,11 +22,11 @@
     .error { padding:11px 12px; margin-bottom:14px; border-radius:0; background:#fee2e2; color:#991b1b; font-size:14px; }
     .setup-note { margin-top:18px; color:#64748b; font-size:13px; line-height:1.45; }
   </style>
-<link rel="icon" href="{{ url_for('static', filename='app-logo.png') }}">
+<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='app.ico', v='tayyara-motors-only') }}">
 </head>
 <body>
   <main class="login-card">
-    <div class="brand"><img class="app-brand-logo" src="{{ url_for('static', filename='app-logo.png') }}" alt="Tayyara Motors app logo"><strong class="app-brand-name">Tayyara Motors</strong></div>
+    <div class="brand"><img class="app-brand-logo" src="{{ url_for('static', filename='tayyara-logo.png', v='transparent-2') }}" width="300" height="100" alt="Tayyara Motors Auto Sales"></div>
     <h1>{% if setup_mode %}CREATE LOGIN{% else %}SIGN IN{% endif %}</h1>
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
     <form method="POST" action="{{ url_for('web.portal_setup') if setup_mode else url_for('web.portal_login') }}">

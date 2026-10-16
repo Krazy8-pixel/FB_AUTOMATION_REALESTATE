@@ -6,14 +6,14 @@
 .sidebar .menu li,.sidebar .menu-link-wrap,.sidebar .menu-icon { border-radius:8px; }
 .sidebar .sidebar-tip { border-radius:10px; }
 .sidebar .sidebar-tip > span { border-radius:6px; }
-.topbar { background:#fff; border-bottom:1px solid #dbe3ee; box-shadow:0 3px 14px rgba(21,44,80,.04); }
-.topbar .topbar-inner { min-height:84px; padding:12px 26px; gap:24px; align-items:center; }
+.topbar { min-height:0; padding:0 18px; background:#fff; border-bottom:1px solid #dbe3ee; box-shadow:0 3px 14px rgba(21,44,80,.04); }
+.topbar .topbar-inner { min-height:68px; padding:6px 26px; gap:24px; align-items:center; }
 .topbar .topbar-brand { padding:0; border:0; box-shadow:none; background:transparent; }
 .header-brand-link { display:flex; flex-direction:row; align-items:center; gap:12px; text-decoration:none; }
-.header-app-logo { width:64px; height:64px; object-fit:contain; flex-shrink:0; }
+.header-app-logo { display:block; width:180px; height:60px; object-fit:contain; flex-shrink:0; border-radius:6px; }
 .header-brand-text { display:flex; flex-direction:column; gap:5px; }
 .header-brand-text strong { color:#123d83; font-size:22px; }
-@media(max-width:1200px) { .header-app-logo { width:56px; height:56px; }.header-brand-text strong { font-size:19px; } }
+@media(max-width:1200px) { .header-app-logo { width:168px; height:56px; }.header-brand-text strong { font-size:19px; } }
 .topbar .tayyara-wordmark { padding:0; background:transparent; font-size:30px; gap:7px; letter-spacing:.3px; }
 .topbar .tayyara-wordmark > span:last-child { color:#123d83; }
 .header-brand-caption { font-size:10px; color:#6b7d95; letter-spacing:1.35px; text-transform:uppercase; }
@@ -43,9 +43,9 @@
 .topbar .junk-pill { min-width:58px; padding:0; gap:5px; }
 .topbar .junk-pill .junk-label { font-size:10px; }
 .topbar .junk-pill .junk-value { font-size:12px; }
-@media(min-width:901px) and (max-width:1200px) { .topbar .topbar-inner { padding:12px 18px; gap:16px; }.topbar .accounts { gap:12px; }.topbar .header-account-box { width:170px; }.topbar .header-utility-group { padding-left:12px; }.topbar .junk-pill { min-width:48px; padding:0 6px; }.topbar .tayyara-wordmark { font-size:24px; } }
+@media(min-width:901px) and (max-width:1200px) { .topbar .topbar-inner { padding:6px 18px; gap:16px; }.topbar .accounts { gap:12px; }.topbar .header-account-box { width:170px; }.topbar .header-utility-group { padding-left:12px; }.topbar .junk-pill { min-width:48px; padding:0 6px; }.topbar .tayyara-wordmark { font-size:24px; } }
 @media(max-width:900px) {
-  .topbar .topbar-inner { display:flex; flex-wrap:wrap; min-height:0; padding:14px 16px; gap:14px; }
+  .topbar .topbar-inner { display:flex; flex-wrap:wrap; min-height:0; padding:8px 16px; gap:10px; }
   .topbar .topbar-brand { width:100%; flex:1 1 100%; justify-content:space-between; }
   .topbar .tayyara-wordmark { font-size:26px; }
   .topbar .accounts { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; width:100%; flex:1 1 100%; margin:0; }

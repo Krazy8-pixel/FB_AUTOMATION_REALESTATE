@@ -10,6 +10,152 @@ from automation import reposting
 
 
 class ImportDetailsTests(unittest.TestCase):
+    def test_status_badges_do_not_confuse_actions_or_description_with_sold(self):
+        for text in ('Sold', '2020 Ford Focus\nSold · Listed on Monday'):
+            self.assertEqual(importer._candidate_listing_status({'text': text}), 'sold')
+        for text in ('Mark as sold', '2020 Ford Focus\nActive\nMark as sold',
+                     'Pending\nMark as sold', 'Available\nNever sold at auction'):
+            self.assertNotEqual(importer._candidate_listing_status({'text': text}), 'sold')
+
+    def test_import_skips_sold_duplicates_but_reads_active_and_pending(self):
+        driver = MagicMock()
+        driver.current_url = importer.SELLING_URL
+        driver.execute_script.return_value = 100
+        candidates = [
+            {'href': f'https://www.facebook.com/marketplace/item/{number}/',
+             'title': '2020 Ford Focus', 'text': status}
+            for number, status in [(123, ''), (123, 'Sold'), (124, 'Active'), (125, 'Pending')]
+        ]
+        with patch.object(importer, '_open_prelogged_facebook', return_value=driver), \
+             patch.object(importer, 'load_listings', return_value={'listings': []}), \
+             patch.object(importer, 'WebDriverWait'), patch.object(importer, '_click_manage_listings'), \
+             patch.object(importer, '_extract_visible_listing_candidates', return_value=candidates), \
+             patch.object(importer, 'read_listing_from_manage', return_value={'posts': [{'image_urls': ['photo']}], 'edit_url': 'edit'}) as reader, \
+             patch.object(importer, 'download_listing_images', return_value=([{'path': 'photo'}], [])), \
+             patch.object(importer, 'save_listings'), patch.object(importer.time, 'sleep'):
+            result = importer.import_listings_from_facebook('account')
+        self.assertEqual({item['listing_status'] for item in result}, {'active', 'pending'})
+        self.assertEqual(reader.call_count, 2)
+        self.assertTrue(all('/123/' not in call.args[1]['url'] for call in reader.call_args_list))
+
+    def test_already_saved_sold_backup_is_kept_without_reading(self):
+        candidate = {'href': 'https://www.facebook.com/marketplace/item/123/',
+                     'title': '2020 Ford Focus', 'text': 'Sold'}
+        record = dict(importer._listing_from_candidate(candidate), details={'price': '100'})
+        driver = MagicMock()
+        driver.current_url = importer.SELLING_URL
+        driver.execute_script.return_value = 100
+        with patch.object(importer, '_open_prelogged_facebook', return_value=driver), \
+             patch.object(importer, 'load_listings', return_value={'listings': [record]}), \
+             patch.object(importer, 'WebDriverWait'), patch.object(importer, '_click_manage_listings'), \
+             patch.object(importer, '_extract_visible_listing_candidates', return_value=[candidate]), \
+             patch.object(importer, 'read_listing_from_manage') as reader, \
+             patch.object(importer, 'save_listings'), patch.object(importer.time, 'sleep'):
+            result = importer.import_listings_from_facebook('account')
+        reader.assert_not_called()
+        self.assertEqual(result[0]['details'], {'price': '100'})
+        self.assertTrue(result[0]['facebook_present'])
+        self.assertFalse(result[0]['source_deleted'])
+
+    def test_stop_before_start_does_not_launch_browser(self):
+        stop = threading.Event()
+        stop.set()
+        with patch.object(importer, 'load_listings', return_value={'listings': []}), \
+             patch.object(importer, '_open_prelogged_facebook') as launch:
+            with self.assertRaises(importer.ListingImportCancelled):
+                importer.import_listings_from_facebook('account', stop_event=stop)
+        launch.assert_not_called()
+
+    def test_stop_closes_only_registered_account_import_driver(self):
+        driver, other = MagicMock(), MagicMock()
+        driver.service.process.poll.return_value = None
+        closed = threading.Event()
+        driver.quit.side_effect = lambda: closed.set()
+        with patch.dict(importer._active_import_drivers, {'account': driver, 'other': other}, clear=True):
+            self.assertTrue(importer.stop_listing_import_driver('account'))
+            self.assertFalse(importer.stop_listing_import_driver('missing'))
+            self.assertTrue(closed.wait(2))
+        driver.quit.assert_called_once()
+        driver.service.process.terminate.assert_called_once()
+        other.quit.assert_not_called()
+
+    def test_stop_returns_while_quit_is_blocked(self):
+        driver = MagicMock()
+        entered, release = threading.Event(), threading.Event()
+        driver.quit.side_effect = lambda: (entered.set(), release.wait(3))
+        try:
+            with patch.dict(importer._active_import_drivers, {'account': driver}, clear=True):
+                self.assertTrue(importer.stop_listing_import_driver('account'))
+                self.assertTrue(entered.wait(1))
+                self.assertFalse(release.is_set())
+        finally:
+            release.set()
+
+    def test_stop_signal_escapes_detail_reader_retry_and_keeps_saved_progress(self):
+        driver = MagicMock()
+        driver.current_url = importer.SELLING_URL
+        driver.execute_script.return_value = 100
+        stop = threading.Event()
+        candidate = {'href': 'https://www.facebook.com/marketplace/item/123/', 'title': '2020 Ford Focus'}
+
+        def read(*args, **kwargs):
+            stop.set()
+            try:
+                driver.execute('findElement', {})
+            except Exception:
+                self.fail('Cancellation was swallowed by a normal retry handler')
+            self.fail('A cancelled browser command was allowed')
+
+        with patch.object(importer, '_open_prelogged_facebook', return_value=driver), \
+             patch.object(importer, 'load_listings', return_value={'listings': []}), \
+             patch.object(importer, 'WebDriverWait'), patch.object(importer, '_click_manage_listings'), \
+             patch.object(importer, '_extract_visible_listing_candidates', return_value=[candidate]), \
+             patch.object(importer, 'read_listing_from_manage', side_effect=read), \
+             patch.object(importer, 'save_listings') as save, \
+             patch.object(importer, '_shutdown_import_driver'), patch.object(importer.time, 'sleep'):
+            with self.assertRaises(importer.ListingImportCancelled):
+                importer.import_listings_from_facebook('account', stop_event=stop)
+        self.assertTrue(save.called)
+        self.assertNotIn('account', importer._active_import_drivers)
+
+    def test_stop_during_cookie_restore_registers_browser_early(self):
+        driver = MagicMock()
+        stop = threading.Event()
+
+        def open_browser(*args, **kwargs):
+            kwargs['on_driver_ready'](driver)
+            self.assertIs(importer._active_import_drivers['account'], driver)
+            stop.set()
+            driver.execute('get', {})
+
+        with patch.object(importer, 'load_listings', return_value={'listings': []}), \
+             patch.object(importer, '_open_prelogged_facebook', side_effect=open_browser), \
+             patch.object(importer, '_shutdown_import_driver'):
+            with self.assertRaises(importer.ListingImportCancelled):
+                importer.import_listings_from_facebook('account', stop_event=stop)
+        self.assertNotIn('account', importer._active_import_drivers)
+
+    def test_stop_during_photo_download_closes_response_without_saving(self):
+        stop = threading.Event()
+        response = MagicMock()
+
+        def chunks(*args):
+            stop.set()
+            yield b'partial image'
+
+        response.iter_content.side_effect = chunks
+        session = MagicMock()
+        session.__enter__.return_value = session
+        session.get.return_value = response
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(importer, 'IMPORT_DIR', Path(folder)), \
+             patch.object(importer.requests, 'Session', return_value=session):
+            with self.assertRaises(importer.ListingImportCancelled):
+                importer.download_listing_images(MagicMock(), 'account', '123',
+                    ['https://scontent.fbcdn.net/photo.jpg'], stop)
+            self.assertFalse(list(Path(folder).rglob('*.jpg')))
+        response.close.assert_called_once()
+
     def test_fallback_fills_only_unreadable_fields_once(self):
         post = {'price': '100', 'description': '', 'model': '',
                 'field_states': {'price': 'read', 'description': 'empty', 'model': 'unavailable'}}
@@ -98,6 +244,7 @@ class ImportDetailsTests(unittest.TestCase):
         Image.new('RGB', (1000, 800), 'blue').save(stream, format='JPEG')
         content = stream.getvalue()
         response = MagicMock(content=content)
+        response.iter_content.return_value = [content]
         session = MagicMock()
         session.get.return_value = response
         session.__enter__.return_value = session
@@ -126,6 +273,7 @@ class ImportDetailsTests(unittest.TestCase):
         session = MagicMock()
         session.__enter__.return_value = session
         session.get.return_value = MagicMock(content=content)
+        session.get.return_value.iter_content.return_value = [content]
         driver = MagicMock()
         driver.execute_script.return_value = 'test-agent'
         driver.get_cookies.return_value = []
@@ -168,7 +316,9 @@ class ImportDetailsTests(unittest.TestCase):
         self.assertEqual(result[1]['details']['title'], 'Absent but saved')
         reader.assert_called_once()
         self.assertNotEqual(reader.call_args.args[1]['id'], old['id'])
-        opener.assert_called_once_with('account', force_headless=True)
+        self.assertEqual(opener.call_args.args, ('account',))
+        self.assertTrue(opener.call_args.kwargs['force_headless'])
+        self.assertTrue(callable(opener.call_args.kwargs['on_driver_ready']))
 
     def test_daily_import_skips_complete_existing_details(self):
         driver = MagicMock()

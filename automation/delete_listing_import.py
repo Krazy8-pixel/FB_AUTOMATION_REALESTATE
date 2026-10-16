@@ -6,6 +6,7 @@ import json
 import os
 import re
 import threading
+import subprocess
 import time
 from datetime import datetime, timezone
 
@@ -30,24 +31,33 @@ _active_delete_drivers_lock = threading.Lock()
 _active_delete_drivers = {}
 
 
-def stop_listing_import_driver(account):
-    """Close an active import browser immediately, if one is registered."""
-    with _active_import_drivers_lock:
-        driver = _active_import_drivers.get(account)
-    if driver is None:
-        return False
+def _shutdown_import_driver(driver):
+    """Interrupt a stuck WebDriver request before attempting graceful cleanup."""
+    try:
+        process = getattr(getattr(driver, 'service', None), 'process', None)
+        if process is not None and process.poll() is None:
+            if os.name == 'nt' and isinstance(process.pid, int):
+                subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                               capture_output=True, timeout=5,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            else:
+                process.terminate()
+    except Exception:
+        pass
     try:
         driver.quit()
     except Exception:
         pass
-    # On Windows, quit() can close the tab while chromedriver remains alive.
-    # Terminate only this registered driver process as a final cleanup step.
-    try:
-        process = getattr(getattr(driver, "service", None), "process", None)
-        if process is not None and process.poll() is None:
-            process.terminate()
-    except Exception:
-        pass
+
+
+def stop_listing_import_driver(account):
+    """Request browser shutdown without blocking the Stop Import HTTP request."""
+    with _active_import_drivers_lock:
+        driver = _active_import_drivers.get(account)
+    if driver is None:
+        return False
+    threading.Thread(target=_shutdown_import_driver, args=(driver,), daemon=True,
+                     name='stop-listing-import').start()
     return True
 
 
@@ -72,6 +82,21 @@ def stop_listing_delete_driver(account):
 
 class ListingImportCancelled(RuntimeError):
     pass
+
+
+class _ImportStopSignal(BaseException):
+    """Escape browser retry handlers that catch Exception, like CancelledError."""
+
+
+def _guard_import_driver(driver, stop_event):
+    original = driver.execute
+
+    def execute(command, params=None):
+        if command not in {'quit', 'close'} and stop_event.is_set():
+            raise _ImportStopSignal()
+        return original(command, params)
+
+    driver.execute = execute
 
 
 def _safe_key(value):
@@ -119,9 +144,20 @@ def download_listing_images(driver, account, listing_id, urls, stop_event):
                 host = (urlsplit(url).hostname or '').lower()
                 if not host.endswith('.fbcdn.net') or not url.startswith('https://'):
                     raise ValueError('Unsupported listing image URL')
-                response = session.get(url, timeout=30)
-                response.raise_for_status()
-                content = response.content
+                response = session.get(url, timeout=(5, 5), stream=True)
+                try:
+                    response.raise_for_status()
+                    chunks = []
+                    for chunk in response.iter_content(64 * 1024):
+                        if stop_event.is_set():
+                            raise ListingImportCancelled()
+                        if chunk:
+                            chunks.append(chunk)
+                    content = b''.join(chunks)
+                finally:
+                    response.close()
+                if stop_event.is_set():
+                    raise ListingImportCancelled()
                 with Image.open(BytesIO(content)) as picture:
                     width, height = picture.size
                     extension = {'JPEG': '.jpg', 'PNG': '.png', 'WEBP': '.webp'}.get(picture.format)
@@ -138,6 +174,8 @@ def download_listing_images(driver, account, listing_id, urls, stop_event):
                 if any(item['name'] == name for item in images):
                     continue
                 images.append({'name': name, 'path': str(path.resolve()), 'url': url, 'width': width, 'height': height})
+            except ListingImportCancelled:
+                raise
             except Exception as exc:
                 errors.append(str(exc))
     return images, errors
@@ -182,6 +220,18 @@ def _parse_click_count(*values):
     return next(iter(unique)) if len(unique) == 1 else None
 
 
+def _candidate_listing_status(candidate):
+    """Read card status badges, never action labels such as 'Mark as sold'."""
+    explicit = str(candidate.get('status') or '').strip().casefold()
+    text = str(candidate.get('text') or '')
+    badges = [explicit] + [line.strip().casefold() for line in text.splitlines()]
+    for status in ('sold', 'pending', 'active', 'available'):
+        if any(re.match(r'^' + status + r'(?:$|\s*[·•|–—-]\s*|\s+on\s+)', badge)
+               for badge in badges):
+            return status
+    return ''
+
+
 def _listing_from_candidate(candidate):
     href = str(candidate.get("href") or "").strip()
     if href.startswith("/"):
@@ -216,6 +266,7 @@ def _listing_from_candidate(candidate):
     listing_id = hashlib.sha1(raw_id.lower().encode("utf-8", "ignore")).hexdigest()[:20]
     record = {
         "id": listing_id,
+        "listing_status": _candidate_listing_status(candidate),
         "year": year,
         "make": make,
         "model": model,
@@ -517,15 +568,30 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
         by_key[key] = item
     visible_keys = set()
     visible_ids = set()
+    original_ids = {str(record['id']) for record in by_key.values()}
+    sold_keys = set()
     # A Facebook card can appear through several nested DOM candidates and
     # again on later scroll scans. The first candidate containing a confirmed
     # metric is the card-local value; never let a later duplicate overwrite it.
     clicks_confirmed_this_import = set()
     driver = None
-    try:
-        driver = _open_prelogged_facebook(account, force_headless=True) if only_new else _open_prelogged_facebook(account)
+
+    def register_driver(opened):
+        nonlocal driver
+        driver = opened
+        _guard_import_driver(opened, stop_event)
         with _active_import_drivers_lock:
-            _active_import_drivers[account] = driver
+            _active_import_drivers[account] = opened
+        if stop_event.is_set():
+            raise _ImportStopSignal()
+
+    try:
+        if stop_event.is_set():
+            raise ListingImportCancelled()
+        opened = _open_prelogged_facebook(account, force_headless=bool(only_new), on_driver_ready=register_driver)
+        # Also support injected browser factories that do not invoke the hook.
+        if driver is None:
+            register_driver(opened)
         if stop_event.is_set():
             raise ListingImportCancelled()
         driver.get(SELLING_URL)
@@ -538,7 +604,28 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
         previous_height = 0
         while not stop_event.is_set() and idle_rounds < 4:
             new_count = 0
-            for candidate in _extract_visible_listing_candidates(driver):
+            candidates = _extract_visible_listing_candidates(driver)
+            # Full rows carry status badges; nested links may omit them. Inspect
+            # all candidates first so an unlabelled duplicate cannot import sold.
+            for candidate in candidates:
+                if _candidate_listing_status(candidate) != 'sold':
+                    continue
+                sold_record = _listing_from_candidate(candidate)
+                if not sold_record:
+                    continue
+                key = _matching_record_key(by_key, sold_record)
+                sold_keys.add(key)
+                saved = by_key.get(key)
+                if saved and str(saved['id']) in original_ids:
+                    # Keep previous backups without rereading sold details/photos.
+                    saved.update(listing_status='sold', facebook_present=True, source_deleted=False)
+                    visible_ids.add(str(saved['id']))
+                elif saved:
+                    # A partial card from an earlier scroll may lack its badge.
+                    visible_ids.discard(str(saved['id']))
+                    by_key.pop(key)
+                new_count += 1
+            for candidate in candidates:
                 record = _listing_from_candidate(candidate)
                 if not record:
                     continue
@@ -553,6 +640,8 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                 else:
                     record.pop("clicks_checked_at", None)
                 key = _matching_record_key(by_key, record)
+                if key in sold_keys or record.get('listing_status') == 'sold':
+                    continue
                 visible_keys.add(key)
                 if key not in by_key:
                     if any(item.get('id') == record['id'] for item in by_key.values()):
@@ -575,6 +664,7 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                     # Enrich an existing deduplicated record with fields that
                     # may only appear after the listing card finishes loading.
                     existing_record = by_key[key]
+                    existing_record['listing_status'] = record.get('listing_status') or existing_record.get('listing_status', '')
                     if existing_record.get('source_deleted') and existing_record.get('facebook_reposted'):
                         existing_record['url'] = record.get('url') or ''
                         existing_record['edit_url'] = ''
@@ -641,7 +731,7 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
         for index, record in enumerate(by_key.values(), 1):
             if stop_event.is_set():
                 raise ListingImportCancelled()
-            if str(record['id']) not in visible_ids or record.get('source_deleted'):
+            if str(record['id']) not in visible_ids or record.get('source_deleted') or record.get('listing_status') == 'sold':
                 continue
             if only_new and record.get('details') and record.get('downloaded_images') and not record.get('detail_error') and not record.get('image_errors') and all(os.path.isfile(photo['path']) for photo in record['downloaded_images']):
                 continue
@@ -669,6 +759,8 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                 if stop_event.is_set():
                     raise ListingImportCancelled() from exc
                 record['detail_error'] = str(exc)
+            if stop_event.is_set():
+                raise ListingImportCancelled()
             save_listings(account, list(by_key.values()))
         # Absence is meaningful only after a successful complete inventory scan.
         current_url = str(driver.current_url or '')
@@ -686,22 +778,22 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                 if not present:
                     record['source_deleted'] = True
                     record['facebook_reposted'] = False
+        if stop_event.is_set():
+            raise ListingImportCancelled()
         save_listings(account, list(by_key.values()))
         return list(by_key.values())
+    except _ImportStopSignal:
+        raise ListingImportCancelled() from None
     finally:
         with _active_import_drivers_lock:
             if _active_import_drivers.get(account) is driver:
                 _active_import_drivers.pop(account, None)
         if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
             if stop_event.is_set():
+                threading.Thread(target=_shutdown_import_driver, args=(driver,), daemon=True).start()
+            else:
                 try:
-                    process = getattr(getattr(driver, "service", None), "process", None)
-                    if process is not None and process.poll() is None:
-                        process.terminate()
+                    driver.quit()
                 except Exception:
                     pass
 

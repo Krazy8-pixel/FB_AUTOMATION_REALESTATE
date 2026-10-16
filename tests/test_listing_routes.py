@@ -10,6 +10,37 @@ from automation import listing_store
 
 
 class ListingRouteTests(unittest.TestCase):
+    def test_stopping_import_interrupts_wait_for_account_lock(self):
+        lock = threading.Lock()
+        lock.acquire()
+        stop = threading.Event()
+        stop.set()
+        try:
+            with patch.object(self.routes, '_get_post_lock', return_value=lock):
+                with self.assertRaises(self.routes.ListingImportCancelled):
+                    with self.routes._listing_import_account_lock('test-account', stop):
+                        self.fail('Cancelled import acquired the account lock')
+        finally:
+            lock.release()
+
+    def test_automatic_import_does_not_restart_user_stopped_job(self):
+        self.routes.listing_import_jobs['test-account'] = {'running': False, 'stop_requested': True}
+        ok, message = self.routes._start_listing_import_job('test-account', automatic=True)
+        self.assertFalse(ok)
+        self.assertIn('paused', message)
+
+    def test_stop_import_sets_account_event_and_closes_its_browser(self):
+        stop = threading.Event()
+        self.routes.listing_import_jobs['test-account'] = {'running': True}
+        with patch.dict(self.routes.listing_import_cancel_events, {'test-account': stop}, clear=True), \
+             patch.object(self.routes, 'stop_listing_import_driver') as close:
+            response = self.client.post('/delete_listings/import/stop',
+                headers={'X-Requested-With': 'XMLHttpRequest'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(stop.is_set())
+        self.assertTrue(self.routes.listing_import_jobs['test-account']['stop_requested'])
+        close.assert_called_once_with('test-account')
+
     def test_cancel_pending_repost_is_account_scoped(self):
         self.routes.repost_jobs['cancel-me'] = {'job_id': 'cancel-me', 'account': 'test-account', 'status': 'pending'}
         response = self.client.post('/reposting/cancel', json={'job_id': 'cancel-me'})

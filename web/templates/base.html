@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app_theme.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/branding.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/header.css') }}">
-<link rel="icon" href="{{ url_for('static', filename='app-logo.png') }}">
+<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='app.ico', v='tayyara-motors-only') }}">
 </head>
 <body>
 
@@ -86,7 +86,7 @@
     <header class="topbar">
       <div class="topbar-inner">
         <div class="topbar-brand">
-          <a class="header-brand-link" href="{{ url_for('web.dashboard') }}" aria-label="Tayyara Motors dashboard"><img class="header-app-logo" src="{{ url_for('static', filename='app-logo.png') }}" alt="Tayyara Motors"><span class="header-brand-text"><strong>Tayyara Motors</strong><span class="header-brand-caption">Marketplace workspace</span></span></a>
+          <a class="header-brand-link" href="{{ url_for('web.dashboard') }}" aria-label="Tayyara Motors dashboard"><img class="header-app-logo" src="{{ url_for('static', filename='tayyara-logo.png', v='transparent-2') }}" width="240" height="80" alt="Tayyara Motors Auto Sales"></a>
           <button
             type="button"
             class="mobile-header-toggle"

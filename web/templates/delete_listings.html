@@ -190,10 +190,10 @@
     if (importBtn) {
       importBtn.disabled = !!status.running || !!clickStatus.running;
       importBtn.innerHTML = status.running
-        ? '<span class="button-operation-spinner" aria-hidden="true"></span>Importing...'
+        ? '<span class="button-operation-spinner" aria-hidden="true"></span>' + (status.stop_requested ? 'Stopping...' : 'Importing...')
         : 'Import Listings';
     }
-    if (stopBtn) stopBtn.disabled = !status.running;
+    if (stopBtn) stopBtn.disabled = !status.running || !!status.stop_requested;
     if (refreshClicksBtn) {
       refreshClicksBtn.disabled = !items.length || !!status.running || !!clickStatus.running || !!facebookStatus.running;
       refreshClicksBtn.innerHTML = clickStatus.running
@@ -276,6 +276,8 @@
   });
   if (stopForm) stopForm.addEventListener('submit', async e => {
     e.preventDefault();
+    if (stopBtn) stopBtn.disabled = true;
+    if (importBtn) importBtn.innerHTML = '<span class="button-operation-spinner" aria-hidden="true"></span>Stopping...';
     let message = 'Stop requested.';
     try {
       const response = await fetch(stopForm.action, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}});
