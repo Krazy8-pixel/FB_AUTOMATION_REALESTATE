@@ -10,6 +10,48 @@ from automation import reposting
 
 
 class ImportDetailsTests(unittest.TestCase):
+    def test_five_active_listings_survive_later_same_title_sold_cards_without_ids(self):
+        driver = MagicMock()
+        driver.current_url = importer.SELLING_URL
+        driver.execute_script.return_value = 100
+        titles = ['1971 Chevrolet El camino', '2018 Dodge Challenger SCAT PACK V8',
+                  '2021 Dodge Challenger SXT', '2015 Lexus RC 350', '2022 Dodge Charger SXT V6']
+        active = [{'title': title, 'text': 'Active\n$11,800'} for title in titles]
+        sold = [{'title': title, 'text': 'Sold\n$9,000'} for title in titles[:3]]
+        scans = iter([active, active + sold, active + sold, active + sold, active + sold])
+        counts = []
+        with patch.object(importer, '_open_prelogged_facebook', return_value=driver), \
+             patch.object(importer, 'load_listings', return_value={'listings': []}), \
+             patch.object(importer, 'WebDriverWait'), patch.object(importer, '_click_manage_listings'), \
+             patch.object(importer, '_extract_visible_listing_candidates', side_effect=lambda driver: next(scans)), \
+             patch.object(importer, 'read_listing_from_manage', return_value={'posts': [{'image_urls': ['photo']}], 'edit_url': ''}) as reader, \
+             patch.object(importer, 'download_listing_images', return_value=([{'path': 'photo'}], [])), \
+             patch.object(importer, 'save_listings', side_effect=lambda account, items: counts.append(len(items))), \
+             patch.object(importer.time, 'sleep'):
+            result = importer.import_listings_from_facebook('account')
+        self.assertEqual(len(result), 5)
+        self.assertEqual(set(counts), {5})
+        self.assertEqual(reader.call_count, 5)
+        self.assertTrue(all(item['listing_status'] == 'active' for item in result))
+
+    def test_sold_without_id_does_not_remove_same_title_active_with_id(self):
+        driver = MagicMock()
+        driver.current_url = importer.SELLING_URL
+        driver.execute_script.return_value = 100
+        active = {'href': 'https://www.facebook.com/marketplace/item/123/',
+                  'title': '2021 Dodge Challenger SXT', 'text': 'Pending'}
+        sold = {'title': '2021 Dodge Challenger', 'text': 'Sold'}
+        with patch.object(importer, '_open_prelogged_facebook', return_value=driver), \
+             patch.object(importer, 'load_listings', return_value={'listings': []}), \
+             patch.object(importer, 'WebDriverWait'), patch.object(importer, '_click_manage_listings'), \
+             patch.object(importer, '_extract_visible_listing_candidates', return_value=[sold, active]), \
+             patch.object(importer, 'read_listing_from_manage', return_value={'posts': [{'image_urls': ['photo']}], 'edit_url': ''}), \
+             patch.object(importer, 'download_listing_images', return_value=([{'path': 'photo'}], [])), \
+             patch.object(importer, 'save_listings'), patch.object(importer.time, 'sleep'):
+            result = importer.import_listings_from_facebook('account')
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['listing_status'], 'pending')
+
     def test_status_badges_do_not_confuse_actions_or_description_with_sold(self):
         for text in ('Sold', '2020 Ford Focus\nSold · Listed on Monday'):
             self.assertEqual(importer._candidate_listing_status({'text': text}), 'sold')

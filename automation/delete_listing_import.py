@@ -569,7 +569,7 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
     visible_keys = set()
     visible_ids = set()
     original_ids = {str(record['id']) for record in by_key.values()}
-    sold_keys = set()
+    sold_facebook_ids = set()
     # A Facebook card can appear through several nested DOM candidates and
     # again on later scroll scans. The first candidate containing a confirmed
     # metric is the card-local value; never let a later duplicate overwrite it.
@@ -613,18 +613,26 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                 sold_record = _listing_from_candidate(candidate)
                 if not sold_record:
                     continue
-                key = _matching_record_key(by_key, sold_record)
-                sold_keys.add(key)
-                saved = by_key.get(key)
-                if saved and str(saved['id']) in original_ids:
-                    # Keep previous backups without rereading sold details/photos.
-                    saved.update(listing_status='sold', facebook_present=True, source_deleted=False)
-                    visible_ids.add(str(saved['id']))
-                elif saved:
-                    # A partial card from an earlier scroll may lack its badge.
-                    visible_ids.discard(str(saved['id']))
-                    by_key.pop(key)
-                new_count += 1
+                sold_id = _extract_listing_id(sold_record.get('url') or '')
+                # A title (even an exact title) is not evidence that a sold
+                # vehicle is the same listing as an active vehicle. Never use
+                # the fuzzy/title matching path for exclusion or removal.
+                if sold_id:
+                    sold_facebook_ids.add(sold_id)
+                    for key, saved in list(by_key.items()):
+                        if saved.get('source_deleted') and saved.get('facebook_reposted'):
+                            continue  # Its URL identifies the old deleted source.
+                        saved_id = _extract_listing_id(saved.get('url') or saved.get('edit_url') or '')
+                        if saved_id != sold_id:
+                            continue
+                        if str(saved['id']) in original_ids:
+                            saved.update(listing_status='sold', facebook_present=True, source_deleted=False)
+                            visible_ids.add(str(saved['id']))
+                        else:
+                            visible_ids.discard(str(saved['id']))
+                            by_key.pop(key)
+                            print(f"[ListingImport] Excluded confirmed sold listing id={sold_id}; saved_count={len(by_key)}", flush=True)
+                        new_count += 1
             for candidate in candidates:
                 record = _listing_from_candidate(candidate)
                 if not record:
@@ -639,9 +647,10 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                     record["clicks_checked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 else:
                     record.pop("clicks_checked_at", None)
-                key = _matching_record_key(by_key, record)
-                if key in sold_keys or record.get('listing_status') == 'sold':
+                facebook_id = _extract_listing_id(record.get('url') or '')
+                if record.get('listing_status') == 'sold' or (facebook_id and facebook_id in sold_facebook_ids):
                     continue
+                key = _matching_record_key(by_key, record)
                 visible_keys.add(key)
                 if key not in by_key:
                     if any(item.get('id') == record['id'] for item in by_key.values()):
