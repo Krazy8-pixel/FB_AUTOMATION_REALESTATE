@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 import os
 import sys
 
-from automation.reposting import EDIT_FIELDS, _safe_image_urls, wait_for_edit_form_ready, read_edit_form_snapshot
+from automation.reposting import EDIT_FIELDS, ITEM_EDIT_FIELDS, EXTRA_VEHICLE_FIELDS, _safe_image_urls, wait_for_edit_form_ready, read_edit_form_snapshot
 
 OPTIONAL_COLOR_FIELDS = {'exterior_color', 'interior_color'}
 
@@ -30,7 +30,7 @@ def recognition_proposals(path, ocr, vision, warnings):
     if vision:
         try:
             for key, value in vision(path).items():
-                if key in EDIT_FIELDS and isinstance(value, str) and value.strip():
+                if key in dict(EDIT_FIELDS, **ITEM_EDIT_FIELDS, **EXTRA_VEHICLE_FIELDS) and isinstance(value, str) and value.strip():
                     proposals.setdefault(key, {'value': value.strip(), 'state': 'needs_review',
                                                'confidence': None, 'evidence': ['vision proposal']})
         except Exception as exc:
@@ -45,7 +45,7 @@ def tesseract_ocr(path):
     if not executable:
         raise RuntimeError('Local OCR runtime is missing. Install Tesseract OCR or set TESSERACT_PATH.')
     result = subprocess.run([executable, str(path), 'stdout', '-l', 'eng', '--psm', '11', 'tsv'],
-                            capture_output=True, text=True, encoding='utf-8', timeout=45,
+                            capture_output=True, text=True, encoding='utf-8', timeout=10,
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if result.returncode:
         raise RuntimeError('OCR failed: ' + result.stderr.strip())
@@ -64,7 +64,7 @@ def tesseract_ocr(path):
 
 def parse_ocr_fields(lines):
     """Conservative label/value pairing. Preserve confidence and raw evidence."""
-    aliases = {field: [label] for field, label in EDIT_FIELDS.items()}
+    aliases = {field: [label] for field, label in dict(EDIT_FIELDS, **ITEM_EDIT_FIELDS, **EXTRA_VEHICLE_FIELDS).items()}
     aliases['exterior_color'].append('Exterior colour')
     aliases['interior_color'].append('Interior colour')
     aliases['mileage'].append('Odometer')
@@ -114,6 +114,8 @@ def parse_ocr_fields(lines):
                     continue
                 if field in ('year', 'mileage', 'price') and not re.search(r'\d', value):
                     continue
+                if field == 'model' and value.isdecimal() and len(value) > 8:
+                    continue  # Facebook internal ID, not a model name.
                 found[field] = {'value': value, 'state': 'needs_review', 'confidence': confidence, 'evidence': evidence}
     return found
 
@@ -125,9 +127,11 @@ def merge_control_fields(fields, snapshot, screenshot):
     for empty controls. Unavailable controls remain explicit.
     """
     for key, control in snapshot.items():
-        if key not in EDIT_FIELDS or control.get('state') == 'unavailable':
+        if key not in dict(EDIT_FIELDS, **ITEM_EDIT_FIELDS, **EXTRA_VEHICLE_FIELDS) or control.get('state') == 'unavailable':
             continue
         value = str(control.get('value') or '').strip()
+        if key == 'model' and value.isdecimal() and len(value) > 8:
+            continue
         previous = fields.get(key)
         proposal = {'value': value, 'state': control.get('state', 'read'),
                     'confidence': None, 'source': 'form_control',
@@ -158,7 +162,34 @@ def extract_video_sources(driver):
     return direct, unresolved
 
 
-def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=None, max_captures=12):
+def capture_description_scroll(driver, output_dir, max_captures=24):
+    """Capture the textarea's own viewport without losing its full DOM value."""
+    captures = []
+    controls = driver.find_elements('xpath', "//textarea | //*[@contenteditable='true' and @role='textbox']")
+    for control in controls:
+        if not control.is_displayed():
+            continue
+        sizes = driver.execute_script('return [arguments[0].scrollTop,arguments[0].scrollHeight,arguments[0].clientHeight];', control)
+        if not isinstance(sizes, list) or len(sizes) != 3 or sizes[1] <= sizes[2] + 2:
+            continue
+        try:
+            driver.execute_script('arguments[0].scrollIntoView({block:"center"}); arguments[0].scrollTop=0;', control)
+            for index in range(max_captures):
+                path = Path(output_dir) / f'description-{index:02d}.png'
+                if control.screenshot(str(path)):
+                    captures.append({'path': str(path.resolve()), 'kind': 'description_scroll'})
+                before, after = driver.execute_script('const el=arguments[0],before=el.scrollTop; el.scrollTop+=Math.max(30,el.clientHeight*.7); return [before,el.scrollTop];', control)
+                if before == after:
+                    break
+                time.sleep(.2)
+        finally:
+            driver.execute_script('arguments[0].scrollTop=arguments[1];', control, sizes[0])
+        break
+    return captures
+
+
+def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=None, max_captures=12,
+                             allow_unstructured=False, max_seconds=90):
     """Read the already-open edit page without changing or submitting fields.
 
     Returns the existing posts structure plus review evidence. `vision`, when
@@ -175,7 +206,8 @@ def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=No
     output.mkdir(parents=True, exist_ok=True)
     # An unrelated search input exists while Facebook is still loading.
     # Wait for populated, stable listing controls before choosing the panel.
-    wait_for_edit_form_ready(driver, timeout=45)
+    if not allow_unstructured:
+        wait_for_edit_form_ready(driver, timeout=45)
     # Find the edit form's scroll container; Facebook may scroll a panel rather
     # than the document. This examines layout only, not field values.
     scroll = driver.execute_script(r"""
@@ -183,7 +215,12 @@ def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=No
         [...(el.labels || [])].map(node=>node.textContent).join(' ') ||
         (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id=>document.getElementById(id)?.textContent || '').join(' ');
       let el=[...document.querySelectorAll('input')].find(node=>/\bprice\b/i.test(label(node)));
-      if (!el) throw new Error('Loaded listing price control was not found');
+      if (!el) {
+        const roots=[...document.querySelectorAll('[role="dialog"],[role="main"]')];
+        const root=roots.reverse().find(node => /edit listing/i.test(node.innerText || ''));
+        if (!root) throw new Error('A listing edit panel was not found');
+        return root.querySelector('[role="form"]') || root;
+      }
       for(let node=el;node;node=node.parentElement)
         if(node.clientHeight>100 && node.scrollHeight>node.clientHeight+2 && /auto|scroll/.test(getComputedStyle(node).overflowY)) return node;
       return el.closest('form') || el.closest('[role="dialog"]') || el.closest('[role="main"]') || document.scrollingElement;
@@ -191,10 +228,14 @@ def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=No
     original = driver.execute_script('return arguments[0].scrollTop;', scroll)
     fields, images, videos, unresolved, captures, warnings = {}, [], [], [], [], []
     complete = False
+    deadline = time.monotonic() + max_seconds
     print(f'[ListingImport][OCR] Starting edit-page read: {driver.current_url}', flush=True)
     try:
         driver.execute_script('arguments[0].scrollTop=0;', scroll)
         for index in range(max_captures):
+            if time.monotonic() >= deadline:
+                warnings.append('Visual read time limit reached; continuing with recovered fields.')
+                break
             print(f'[ListingImport][OCR] Capture {index + 1}/{max_captures}: waiting for page, then taking screenshot', flush=True)
             time.sleep(.5)
             path = output / f'edit-{index:02d}.png'
@@ -252,12 +293,14 @@ def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=No
             print(f'[ListingImport][OCR] Scrolled from {before} to {after}', flush=True)
         if not complete:
             warnings.append('Capture limit reached or scrolling stalled; some fields may not be visible.')
+        captures.extend(capture_description_scroll(driver, output))
     finally:
         driver.execute_script('arguments[0].scrollTop=arguments[1];', scroll, original)
         print('[ListingImport][OCR] Original scroll position restored', flush=True)
-    post = {field: fields.get(field, {}).get('value', '') for field in EDIT_FIELDS}
+    output_fields = dict(EDIT_FIELDS, **ITEM_EDIT_FIELDS, **EXTRA_VEHICLE_FIELDS)
+    post = {field: fields.get(field, {}).get('value', '') for field in output_fields}
     post.update(image_urls=list(dict.fromkeys(images)), video_urls=list(dict.fromkeys(videos)),
-                field_states={field: fields.get(field, {}).get('state', 'unreadable') for field in EDIT_FIELDS})
+                field_states={field: fields.get(field, {}).get('state', 'unreadable') for field in output_fields})
     # Optional colours never determine whether the listing read succeeded.
     # 'not_detected' deliberately does not claim absence: detection may fail.
     for field in OPTIONAL_COLOR_FIELDS - fields.keys():
@@ -266,7 +309,7 @@ def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=No
     if missing:
         warnings.append('Fields not detected (may be absent from this form): ' + ', '.join(missing))
     print(f'[ListingImport][OCR] Finished: {len(fields)}/{len(EDIT_FIELDS)} fields found; unreadable={", ".join(field for field in EDIT_FIELDS if field not in fields) or "none"}', flush=True)
-    usable = bool(post['price']) and any(post[field] for field in ('year', 'make', 'model'))
+    usable = bool(post['price']) and bool(post.get('title') or any(post[field] for field in ('year', 'make', 'model')))
     if not usable:
         warnings.append('Listing price and vehicle identity were not recovered; this read failed.')
     return {'ok': usable, 'experimental': True, 'requires_review': True, 'edit_url': driver.current_url,
@@ -280,7 +323,7 @@ def read_import_edit_page(driver, *, require_usable=True):
     from uuid import uuid4
     from automation.runtime_paths import data_dir
     output = data_dir('visual-listing-reader') / uuid4().hex[:12]
-    result = read_listing_edit_visual(driver, output)
+    result = read_listing_edit_visual(driver, output, allow_unstructured=True, max_captures=6, max_seconds=60)
     result['posts'][0]['visual_read_requires_review'] = True
     result['posts'][0]['visual_read_report'] = str((output / 'report.json').resolve())
     (output / 'report.json').write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding='utf-8')

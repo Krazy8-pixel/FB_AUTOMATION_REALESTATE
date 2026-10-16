@@ -9,7 +9,7 @@ from automation.remote_login import (
     get_remote_login_session,
 )
 from automation.auto_listing_excel_poster import read_excel_flexible, post_to_fb_marketplace
-from automation.reposting import _normalize_price, _extract_listing_id
+from automation.reposting import _normalize_price, _extract_listing_id, validate_repost_fields, REPOST_REQUIRED_FIELDS
 from automation.delete_listing_import import (
       ListingImportCancelled,
       delete_selected_listings_from_facebook,
@@ -433,6 +433,7 @@ def _build_repost_payloads(read_result):
             "vehicle_type", "year", "make", "model", "mileage", "body_style",
             "exterior_color", "interior_color", "vehicle_condition", "fuel_type",
             "transmission", "location", "clean_title",
+            "vin", "trim",
         ):
             payload[field] = str(post.get(field, "") or "").strip()
 
@@ -440,7 +441,7 @@ def _build_repost_payloads(read_result):
 
         image_urls = post.get("image_urls") or []
         if isinstance(image_urls, list):
-            for idx, image_url in enumerate(image_urls[:10], start=1):
+            for idx, image_url in enumerate(image_urls[:20], start=1):
                 payload[f"image_path{idx}"] = str(image_url or "").strip()
 
         payloads.append(payload)
@@ -645,12 +646,13 @@ def _run_saved_listing_repost(listing, account, job_id=None):
                     raise ValueError('Saved listing data is incomplete.')
 
                 # Validate every payload before removing the Facebook source.
+                validate_repost_fields(post, set(edited_fields) | set(preferences.get('reviewed_fields') or []))
                 for payload in payloads:
                     title = str(payload.get("title") or "").strip()
                     price = str(payload.get("price") or "").strip()
                     has_image = any(
                         str(payload.get(f"image_path{index}") or "").strip()
-                        for index in range(1, 11)
+                        for index in range(1, 21)
                     )
                     if not title or not price or not has_image:
                         raise Exception(
@@ -682,6 +684,7 @@ def _run_saved_listing_repost(listing, account, job_id=None):
                 for payload in payloads:
                     try:
                         payload['_require_publish_confirmation'] = True
+                        payload['_require_exact_fields'] = True
                         result = post_to_fb_marketplace(payload, account)
                         if not result:
                             raise RuntimeError('Posting did not return a success signal')
@@ -2785,7 +2788,7 @@ def _start_listing_import_job(account, automatic=False):
                     progress_callback=_progress,
                     replace_existing=False,
                     only_new=(automatic and not DESKTOP_MODE),
-                    use_visual_reader=not automatic,
+                    use_visual_reader=True,
                 )
             if stop_event.is_set():
                 raise ListingImportCancelled()
@@ -3022,7 +3025,7 @@ def delete_listings_data():
 
 REPOST_EDIT_FIELDS = ('title', 'vehicle_type', 'year', 'make', 'model', 'mileage', 'price',
                      'body_style', 'exterior_color', 'interior_color', 'vehicle_condition',
-                     'fuel_type', 'transmission', 'description', 'location', 'clean_title')
+                     'fuel_type', 'transmission', 'description', 'location', 'clean_title', 'vin', 'trim')
 
 
 def _repost_preferences(listing, data):
@@ -3033,7 +3036,8 @@ def _repost_preferences(listing, data):
     if not isinstance(order, list) or any(not isinstance(name, str) for name in order) or len(order) != len(names) or set(order) != set(names):
         raise ValueError('Image order must contain every imported photo once.')
     source = listing.get('details') or {}
-    return {'fields': {key: value for key, value in fields.items() if value != str(source.get(key) or '')}, 'image_order': order}
+    return {'fields': {key: value for key, value in fields.items() if value != str(source.get(key) or '')},
+            'reviewed_fields': list(fields), 'image_order': order}
 
 
 def _repost_listing_status(account, listing):
@@ -3072,6 +3076,7 @@ def listing_detail(listing_id):
         save_preferences(account, listing_id, preferences)
         return jsonify(ok=True, message='Repost preferences saved.')
     return render_template('listing_detail.html', listing=listing, fields=REPOST_EDIT_FIELDS,
+                           required_fields=REPOST_REQUIRED_FIELDS,
                            busy=busy, repost_status=_repost_listing_status(account, listing),
                            accounts=get_all_accounts(), active_account=account, active_page='delete')
 
@@ -3299,6 +3304,11 @@ def delete_listings_repost():
     effective = dict(listing['details'], **listing.get('repost_preferences', {}).get('fields', {}))
     if not str(effective.get('title') or '').strip() or not str(effective.get('price') or '').strip():
         return jsonify(ok=False, message='Title and price are required for reposting.'), 400
+    try:
+        preferences = listing.get('repost_preferences') or {}
+        validate_repost_fields(effective, set(preferences.get('fields') or {}) | set(preferences.get('reviewed_fields') or []))
+    except ValueError as exc:
+        return jsonify(ok=False, message=str(exc)), 400
 
     delay_seconds = delay_value * {"minutes": 60, "hours": 3600, "days": 86400}[delay_unit]
     run_at = datetime.now() + timedelta(seconds=delay_seconds if not immediate else 1)

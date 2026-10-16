@@ -10,6 +10,69 @@ from automation import reposting
 
 
 class ImportDetailsTests(unittest.TestCase):
+    def test_read_timeout_escapes_retry_handlers_and_restores_driver(self):
+        driver = MagicMock()
+        original = driver.execute
+        with patch.object(importer.time, 'monotonic', side_effect=[0, 121]):
+            with self.assertRaisesRegex(RuntimeError, '120-second'):
+                with importer._listing_read_deadline(driver):
+                    try:
+                        driver.execute('findElement', {})
+                    except Exception:
+                        self.fail('The retry handler swallowed the listing timeout')
+        self.assertIs(driver.execute, original)
+
+    def test_failed_first_listing_does_not_stop_next_layout(self):
+        driver = MagicMock()
+        driver.current_url = importer.SELLING_URL
+        driver.execute_script.return_value = 100
+        candidates = [{'href': f'https://www.facebook.com/marketplace/item/{number}/',
+                       'title': f'{year} Ford Focus', 'text': 'Active'}
+                      for number, year in [(123, 2020), (124, 2021)]]
+        with patch.object(importer, '_open_prelogged_facebook', return_value=driver), \
+             patch.object(importer, 'load_listings', return_value={'listings': []}), \
+             patch.object(importer, 'WebDriverWait'), patch.object(importer, '_click_manage_listings'), \
+             patch.object(importer, '_extract_visible_listing_candidates', return_value=candidates), \
+             patch.object(importer, 'read_listing_from_manage', side_effect=[RuntimeError('Unsupported layout'),
+                 {'posts': [{'title': '2021 Ford Focus', 'image_urls': ['photo']}], 'edit_url': 'edit'}]) as reader, \
+             patch.object(importer, 'download_listing_images', return_value=([{'path': 'photo'}], [])), \
+             patch.object(importer, 'save_listings'), patch.object(importer.time, 'sleep'):
+            result = importer.import_listings_from_facebook('account')
+        self.assertEqual(reader.call_count, 2)
+        self.assertTrue(all(call.kwargs.get('visual_fallback') for call in reader.call_args_list))
+        self.assertEqual(result[0]['detail_error'], 'Unsupported layout')
+        self.assertEqual(result[1]['details']['title'], '2021 Ford Focus')
+
+    def test_item_editor_import_preserves_exact_title_without_vehicle_fallback(self):
+        driver = MagicMock()
+        driver.current_url = 'https://www.facebook.com/marketplace/edit/?listing_id=123'
+        link = MagicMock()
+        link.get_attribute.return_value = driver.current_url
+        snapshot = {key: {'value': '', 'state': 'unavailable'} for key in reposting.EDIT_FIELDS}
+        snapshot.update({key: {'value': value, 'state': 'read' if value else 'empty'}
+            for key, value in {'title': '1971 Chevrolet El camino - project', 'price': '$9,800',
+                              'description': 'Full description\nSecond line', 'category': '',
+                              'item_condition': '', 'sku': ''}.items()})
+        fallback = MagicMock()
+        with patch.object(reposting, '_open_manage_listings', return_value=True), \
+             patch.object(reposting, '_find_listing_card_with_scroll', return_value=MagicMock()), \
+             patch.object(reposting, '_safe_click', return_value=True), \
+             patch.object(reposting, '_model_from_visible_listing_heading', return_value=''), \
+             patch.object(reposting, '_find_edit_listing_link', return_value=link), \
+             patch.object(reposting, 'WebDriverWait'), \
+             patch.object(reposting, 'wait_for_edit_form_ready', return_value=snapshot), \
+             patch.object(reposting, 'read_edit_form_snapshot', return_value=snapshot), \
+             patch.object(reposting, '_scroll_down_page'), \
+             patch.object(reposting, '_safe_image_urls', return_value=['photo1', 'photo2']), \
+             patch.object(reposting, '_safe_input_value') as vehicle_reader:
+            result = reposting.read_listing_from_manage('account',
+                {'year': '1971', 'make': 'Chevrolet', 'model': 'El camino'}, driver=driver, visual_fallback=fallback)
+        self.assertEqual(result['posts'][0]['title'], '1971 Chevrolet El camino - project')
+        self.assertEqual(result['posts'][0]['image_urls'], ['photo1', 'photo2'])
+        self.assertEqual(result['posts'][0]['listing_format'], 'item')
+        fallback.assert_not_called()
+        vehicle_reader.assert_not_called()
+
     def test_five_active_listings_survive_later_same_title_sold_cards_without_ids(self):
         driver = MagicMock()
         driver.current_url = importer.SELLING_URL

@@ -4,6 +4,12 @@ from automation import auto_listing_excel_poster as poster
 
 
 class OptionalColorsTests(unittest.TestCase):
+    def test_repost_color_failure_is_not_silently_ignored(self):
+        with patch.object(poster, 'WebDriverWait') as wait:
+            wait.return_value.until.side_effect = TimeoutError('missing')
+            with self.assertRaisesRegex(RuntimeError, 'could not be retained'):
+                poster._fill_optional_color(MagicMock(), 'Exterior colour', 'White', strict=True)
+
     def test_missing_field_skips_without_aborting(self):
         with patch.object(poster, 'WebDriverWait') as wait:
             wait.return_value.until.side_effect = TimeoutError('missing')

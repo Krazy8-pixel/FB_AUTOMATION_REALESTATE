@@ -4,6 +4,28 @@ from automation.visual_listing_reader import parse_ocr_fields, extract_video_sou
 
 
 class VisualReaderTests(unittest.TestCase):
+    def test_internal_numeric_model_id_never_replaces_real_model(self):
+        self.assertNotIn('model', parse_ocr_fields([{'text': 'Model: 985374995825728', 'confidence': 99}]))
+        fields = {'model': {'value': 'RC 350', 'state': 'needs_review'}}
+        merge_control_fields(fields, {'model': {'value': '985374995825728', 'state': 'read'}}, 'form.png')
+        self.assertEqual(fields['model']['value'], 'RC 350')
+
+    def test_fallback_can_read_screenshot_without_successful_dom_readiness(self):
+        import tempfile
+        driver = MagicMock(current_url='https://www.facebook.com/marketplace/edit/?listing_id=123')
+        driver.execute_script.side_effect = [object(), 0, None, None, {}, [], [0, 0, True], None]
+        driver.save_screenshot.return_value = True
+        with tempfile.TemporaryDirectory() as folder, \
+             patch('automation.visual_listing_reader.time.sleep'), \
+             patch('automation.visual_listing_reader.wait_for_edit_form_ready') as readiness:
+            result = read_listing_edit_visual(driver, folder, allow_unstructured=True,
+                ocr=lambda path: [{'text': 'Title: Project car', 'confidence': 95},
+                                  {'text': 'Price: $9800', 'confidence': 95}])
+        readiness.assert_not_called()
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['posts'][0]['title'], 'Project car')
+        self.assertTrue(result['requires_review'])
+
     def test_observed_label_errors_and_location_icon(self):
         result = parse_ocr_fields([
             {'text': text, 'confidence': 95, 'top': top, 'left': left}

@@ -473,7 +473,7 @@ def _select_marketplace_combo(driver, label, desired, fallback=None, timeout=20,
                        f'Visible choices: {", ".join(available) or "none"}') from last_error
 
 
-def _fill_optional_color(driver, label, value, timeout=15):
+def _fill_optional_color(driver, label, value, timeout=15, strict=False):
     """Use one shared time budget for finding, opening and selecting a color."""
     deadline = time.monotonic() + timeout
     combo = None
@@ -492,7 +492,7 @@ def _fill_optional_color(driver, label, value, timeout=15):
         driver.execute_script("arguments[0].scrollIntoView({block:'center'}); arguments[0].click();", combo)
         choices = WebDriverWait(driver, remaining()).until(lambda d: _marketplace_combo_choices(d, label))
         match = next(((el, text) for el, text in choices if text.casefold() == desired.casefold()), None)
-        if match is None:
+        if match is None and not strict:
             match = next(((el, text) for el, text in choices if text.casefold() == 'gray'), None)
         if match is None:
             raise ValueError('No matching color option available')
@@ -514,7 +514,24 @@ def _fill_optional_color(driver, label, value, timeout=15):
             except Exception:
                 pass
         print(f'[AutoListing][FIELD SKIPPED] {label}: {exc}', flush=True)
+        if strict:
+            raise RuntimeError(f'Saved {label} could not be retained: {value}') from exc
         return None
+
+
+def _fill_saved_text_field(driver, label, value):
+    value = _norm_text(value)
+    if not value:
+        return
+    controls = driver.find_elements(By.XPATH, _input_for_label_xpath(label))
+    control = next((item for item in controls if item.is_displayed()), None)
+    if control is None:
+        _select_marketplace_combo(driver, label, value, timeout=8, exact_only=True)
+        return
+    control.clear()
+    control.send_keys(value)
+    if _norm_text(control.get_attribute('value')) != value:
+        raise RuntimeError(f'Saved {label} could not be retained.')
 
 
 def _input_for_label_xpath(label_text):
@@ -1062,6 +1079,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         print("❌ Invalid post data: expected dict.")
         return False
     data = _normalize_marketplace_vehicle_settings(data)
+    strict_fields = bool(data.get('_require_exact_fields'))
 
     if not post_mode:
         post_mode = "simple"
@@ -1531,6 +1549,8 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
 
         debug_field_success("Vehicle type", selected_vehicle_type)
 
+        _fill_saved_text_field(driver, 'VIN', data.get('vin'))
+
         active_field = "Year"
         year_value = _norm_text(data.get("year"))
         if not year_value:
@@ -1654,6 +1674,8 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         else:
             raise Exception("Mandatory model is missing.")
 
+        _fill_saved_text_field(driver, 'Trim', data.get('trim'))
+
         active_field = "Mileage"
         mileage_value_raw = _norm_text(data.get("mileage"))
         if mileage_value_raw:
@@ -1696,7 +1718,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             if not body_style_value:
                 raise Exception("Mandatory body style is missing.")
             body_style_selected = _select_case_insensitive_combo(
-                "Body style", body_style_value, fallback="Other", timeout=25
+                "Body style", body_style_value, fallback=None if strict_fields else "Other", timeout=25
             )
             debug_field_success("Body style", body_style_selected)
         else:
@@ -1705,60 +1727,67 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         for color_label, color_key in (("Exterior colour", "exterior_color"),
                                        ("Interior colour", "interior_color")):
             active_field = color_label
-            _fill_optional_color(driver, color_label, data.get(color_key), timeout=15)
+            _fill_optional_color(driver, color_label, data.get(color_key), timeout=15, strict=strict_fields)
 
-        # Everything below is optional. Each field gets its own 15-second
-        # attempt and can never abort an otherwise valid listing.
+        # Reposts must retain supplied fields. Fresh manual posts keep their
+        # existing optional-field behavior.
 
         try:
             active_field = "Clean title"
-            clean_title_checkbox = WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located(
-                    (By.XPATH, "//input[@type='checkbox' and @aria-label='This vehicle has a clean title.']")
+            if not strict_fields or _norm_text(data.get('clean_title')):
+                clean_title_checkbox = WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located(
+                        (By.XPATH, "//input[@type='checkbox' and @aria-label='This vehicle has a clean title.']")
+                    )
                 )
-            )
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", clean_title_checkbox)
-            is_checked = (clean_title_checkbox.get_attribute("aria-checked") or "").lower() == "true" or clean_title_checkbox.is_selected()
-            clean_title_requested = _norm_text(data.get('clean_title', 'Yes')).casefold() not in {'no', 'false', '0'}
-            if is_checked != clean_title_requested:
-                try:
-                    clean_title_checkbox.click()
-                except Exception:
-                    driver.execute_script("arguments[0].click();", clean_title_checkbox)
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", clean_title_checkbox)
+                is_checked = (clean_title_checkbox.get_attribute("aria-checked") or "").lower() == "true" or clean_title_checkbox.is_selected()
+                clean_title_requested = _norm_text(data.get('clean_title', 'Yes')).casefold() not in {'no', 'false', '0'}
+                if is_checked != clean_title_requested:
+                    try:
+                        clean_title_checkbox.click()
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", clean_title_checkbox)
                 debug_field_success("Clean title", "checked" if clean_title_requested else "unchecked")
-            else:
-                debug_field_success("Clean title", "checked" if is_checked else "unchecked")
         except Exception as exc:
             debug_field_failure("Clean title", exc)
+            if strict_fields and str(data.get('clean_title') or '').strip():
+                raise
 
         try:
             active_field = "Vehicle condition"
             condition_selected = _select_case_insensitive_combo(
-                "Vehicle condition", data.get('vehicle_condition') or "Excellent", fallback="Very good", timeout=15
+                "Vehicle condition", data.get('vehicle_condition') or "Excellent", fallback=None if strict_fields else "Very good", timeout=15
             )
             debug_field_success("Vehicle condition", condition_selected)
         except Exception as exc:
             debug_field_failure("Vehicle condition (optional)", exc)
+            if strict_fields:
+                raise
 
         fuel_type_value = _norm_text(data.get("fuel_type")) or "Other"
         try:
             active_field = "Fuel type"
             fuel_selected = _select_case_insensitive_combo(
-                "Fuel type", fuel_type_value, fallback="Other", timeout=15
+                "Fuel type", fuel_type_value, fallback=None if strict_fields else "Other", timeout=15
             )
             debug_field_success("Fuel type", fuel_selected)
         except Exception as exc:
             debug_field_failure("Fuel type (optional)", exc)
+            if strict_fields:
+                raise
 
         transmission_value = _norm_text(data.get("transmission")) or "Automatic transmission"
         try:
             active_field = "Transmission"
             transmission_selected = _select_case_insensitive_combo(
-                "Transmission", transmission_value, fallback="Automatic transmission", timeout=15
+                "Transmission", transmission_value, fallback=None if strict_fields else "Automatic transmission", timeout=15
             )
             debug_field_success("Transmission", transmission_selected)
         except Exception as exc:
             debug_field_failure("Transmission (optional)", exc)
+            if strict_fields:
+                raise
 
         try:
             active_field = "Description"
@@ -1850,12 +1879,16 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 ok = _try_set_description()
                 if not ok:
                     debug_field_failure("Description", "field not found; skipped")
+                    if strict_fields:
+                        raise RuntimeError('Saved description could not be filled.')
                 else:
                     debug_field_success("Description")
             else:
                 print("[AutoListing][FIELD SKIPPED] Description: no value supplied.", flush=True)
         except Exception as exc:
             debug_field_failure("Description", exc)
+            if strict_fields:
+                raise
 
         cancellable_sleep(1)
         try:

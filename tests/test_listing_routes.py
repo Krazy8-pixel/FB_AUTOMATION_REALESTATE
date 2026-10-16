@@ -10,6 +10,63 @@ from automation import listing_store
 
 
 class ListingRouteTests(unittest.TestCase):
+    def test_missing_mandatory_color_is_rejected_before_queuing(self):
+        response = self.client.post('/delete_listings/repost', json={
+            'listing_id': 'one', 'post_mode': 'now',
+            'fields': {'exterior_color': ''}, 'image_order': ['first.jpg', 'second.jpg']})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('exterior_color', response.get_json()['message'])
+        self.assertEqual(self.routes.repost_jobs, {})
+
+    def test_repost_form_requires_user_fields_but_vin_and_trim_are_optional(self):
+        import re
+        html = self.client.get('/delete_listings/detail/one').data.decode()
+        for field in ('exterior_color', 'interior_color', 'year', 'make', 'model', 'price',
+                      'body_style', 'fuel_type', 'vehicle_condition', 'description'):
+            tag = re.search(r'<(?:input|select|textarea)\b[^>]*name="' + field + r'"[^>]*>', html).group()
+            self.assertIn('required', tag)
+        for field in ('vin', 'trim'):
+            tag = re.search(r'<input\b[^>]*name="' + field + r'"[^>]*>', html).group()
+            self.assertNotIn('required', tag)
+
+    def test_repost_payload_keeps_twenty_photos_vin_trim_and_colors(self):
+        post = {'title': '2015 Lexus RC 350', 'price': '18500',
+                'description': 'Full\nmultiline description', 'vin': 'TESTVIN1234567890',
+                'trim': 'F Sport', 'exterior_color': 'White', 'interior_color': 'Black',
+                'image_urls': [f'photo-{i}.jpg' for i in range(20)]}
+        payload = self.routes._build_repost_payloads({'posts': [post]})[0]
+        for field in ('description', 'vin', 'trim', 'exterior_color', 'interior_color'):
+            self.assertEqual(payload[field], post[field])
+        self.assertEqual(payload['image_path20'], 'photo-19.jpg')
+
+    def test_repost_blocks_missing_core_and_unreadable_colors_before_delete(self):
+        for field in ('mileage', 'fuel_type', 'transmission', 'location', 'body_style', 'year', 'exterior_color'):
+            with self.subTest(field=field):
+                listing = listing_store.load('test-account')['listings'][0]
+                if field == 'exterior_color':
+                    listing['details']['field_states'] = {'exterior_color': 'unreadable'}
+                else:
+                    listing['details'][field] = ''
+                with patch.object(self.routes, 'post_to_fb_marketplace') as poster, \
+                     patch.object(self.routes, 'delete_selected_listings_from_facebook') as delete, \
+                     patch.object(self.routes, '_record_repost_history'), patch.object(self.routes, '_runtime_log'):
+                    self.routes._run_saved_listing_repost(listing, 'test-account')
+                delete.assert_not_called()
+                poster.assert_not_called()
+
+    def test_item_format_missing_vehicle_fields_is_not_deleted_for_reposting(self):
+        listing = listing_store.load('test-account')['listings'][0]
+        listing['details']['listing_format'] = 'item'
+        listing['details']['mileage'] = ''
+        with patch.object(self.routes, 'post_to_fb_marketplace') as poster, \
+             patch.object(self.routes, 'delete_selected_listings_from_facebook') as delete, \
+             patch.object(self.routes, '_record_repost_history'), patch.object(self.routes, '_runtime_log'):
+            self.routes._run_saved_listing_repost(listing, 'test-account')
+        delete.assert_not_called()
+        poster.assert_not_called()
+        saved = listing_store.load('test-account')['listings'][0]
+        self.assertIn('details are incomplete', saved['repost_error'])
+
     def test_stopping_import_interrupts_wait_for_account_lock(self):
         lock = threading.Lock()
         lock.acquire()
@@ -89,7 +146,12 @@ class ListingRouteTests(unittest.TestCase):
         photo = self.root / 'photo.jpg'
         photo.write_bytes(b'test-photo')
         listing_store.save('test-account', [{'id': 'one', 'year': '2020', 'make': 'Ford', 'model': 'Focus',
-                    'clicks': 5, 'edit_url': 'https://www.facebook.com/marketplace/edit/?listing_id=123', 'details': {'title': '2020 Ford Focus', 'price': '100', 'description': '<original>'},
+                    'clicks': 5, 'edit_url': 'https://www.facebook.com/marketplace/edit/?listing_id=123', 'details': {
+                        'title': '2020 Ford Focus', 'price': '100', 'description': '<original>',
+                        'vehicle_type': 'Car', 'year': '2020', 'make': 'Ford', 'model': 'Focus',
+                        'mileage': '50000', 'body_style': 'Sedan', 'vehicle_condition': 'Excellent',
+                        'exterior_color': 'White', 'interior_color': 'Black',
+                        'fuel_type': 'Petrol', 'transmission': 'Automatic', 'location': 'Garland'},
                     'downloaded_images': [{'name': 'first.jpg', 'path': str(photo), 'width': 1000, 'height': 800},
                                           {'name': 'second.jpg', 'path': str(photo), 'width': 1000, 'height': 800}]}])
 

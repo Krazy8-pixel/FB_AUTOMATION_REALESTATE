@@ -1,9 +1,22 @@
 # Experimental visual listing reader
 
-Manual Import Listings uses the original reader first, then runs this reader
-once if important fields are unreadable. Successful and empty primary fields
-are preserved. Missing colours alone never trigger recovery. Automatic background
-imports keep the original reader. Desktop releases include the OCR runtime.
+Imports recognize the original vehicle editor first, then the item-style editor
+(Title, Price, Category, Condition, Description and SKU). Screenshot/OCR recovery
+runs once if important fields remain unreadable, including in background imports.
+Successful and empty primary fields are preserved. Missing colours alone never
+trigger recovery. The recovery adapter allows screenshots when DOM readiness
+fails, with at most six captures and a 60-second capture budget. Each listing's
+DOM work has a 120-second deadline and Chrome requests have short timeouts;
+failures are logged before the importer moves on. Desktop releases include OCR.
+No cloud vision provider is configured; recovery uses local Tesseract screenshots.
+Scrollable description controls are read in full through their value/text content;
+their internal scroll positions also get separate screenshots (up to 24), then
+are restored. Numeric Facebook model IDs are rejected rather than reposted as
+model names. Failed detail reads keep the backup, pause for two cancellable
+seconds, and continue with the next listing. VIN, Trim, and up to 20 attached
+photos are preserved. Reposting checks complete core vehicle data before source
+deletion and refuses unreviewed/conflicting fields; supplied colours and other
+fields cannot silently fail during posting.
 Import reports are saved in the app data folder under `visual-listing-reader`.
 The standalone test
 script still does not write listing records. All proposed field values require

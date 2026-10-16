@@ -214,6 +214,7 @@
     event.preventDefault();
     if (submitting) return;
     finishDrag();
+    if (!form.reportValidity()) return;
     const postMode = form.elements.post_mode.value;
     if (postMode === 'schedule' && (!Number.isInteger(Number(delay.value)) || Number(delay.value)<1 || Number(delay.value)>Number(delay.max))) {
       message(`Enter a delay from 1 to ${delay.max}.`, true); return;

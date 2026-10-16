@@ -26,6 +26,11 @@ EDIT_FIELDS = {
     'transmission': 'Transmission', 'description': 'Description', 'location': 'Location',
     'clean_title': 'This vehicle has a clean title.',
 }
+ITEM_EDIT_FIELDS = {'title': 'Title', 'category': 'Category', 'item_condition': 'Condition', 'sku': 'SKU'}
+EXTRA_VEHICLE_FIELDS = {'vin': 'VIN', 'trim': 'Trim'}
+REPOST_REQUIRED_FIELDS = ('title', 'vehicle_type', 'year', 'make', 'model', 'mileage', 'price',
+                          'body_style', 'exterior_color', 'interior_color', 'vehicle_condition',
+                          'fuel_type', 'transmission', 'description', 'location')
 
 
 def read_edit_form_snapshot(driver):
@@ -71,7 +76,41 @@ def read_edit_form_snapshot(driver):
             result[key] = {value:String(value).trim(), state:disabled ? 'disabled' : String(value).trim() ? 'read' : 'empty'};
         }
         return result;
-    ''', EDIT_FIELDS) or {}
+    ''', dict(EDIT_FIELDS, **ITEM_EDIT_FIELDS, **EXTRA_VEHICLE_FIELDS)) or {}
+
+
+def _item_edit_details(snapshot, listing, image_urls):
+    """Read the item-style editor without inventing absent vehicle controls."""
+    if (snapshot.get('title', {}).get('state', 'unavailable') == 'unavailable'
+            or snapshot.get('category', {}).get('state', 'unavailable') == 'unavailable'
+            or any(snapshot.get(field, {}).get('state', 'unavailable') != 'unavailable'
+                   for field in ('vehicle_type', 'mileage', 'body_style', 'transmission'))):
+        return None
+    post = {field: value.get('value') or '' for field, value in snapshot.items()}
+    for field in ('year', 'make', 'model'):
+        post[field] = post.get(field) or str(listing.get(field) or '')
+    post.update(listing_format='item', image_urls=image_urls,
+                field_states={field: value.get('state', 'unavailable') for field, value in snapshot.items()})
+    return post
+
+
+def validate_repost_fields(post, edited_fields=None):
+    """Fail before deleting a source when vehicle data is incomplete/unverified."""
+    edited_fields = edited_fields or {}
+    required = REPOST_REQUIRED_FIELDS
+    missing = [field for field in required if not str(post.get(field) or '').strip()]
+    uncertain = [field for field, state in (post.get('field_states') or {}).items()
+                 if (field in EDIT_FIELDS or (field in EXTRA_VEHICLE_FIELDS and post.get(field))) and field not in edited_fields
+                 and state in {'unreadable', 'conflict', 'needs_review'}]
+    if missing or uncertain:
+        fields = ', '.join(dict.fromkeys(missing + uncertain))
+        raise ValueError(f'Vehicle details are incomplete or need review: {fields}. The Facebook source was not deleted.')
+    try:
+        mileage = float(str(post['mileage']).replace(',', ''))
+    except (TypeError, ValueError):
+        mileage = 0
+    if mileage <= 300:
+        raise ValueError('Mileage must be greater than 300 for vehicle posting. The Facebook source was not deleted.')
 
 
 def wait_for_edit_form_ready(driver, timeout=30):
@@ -239,16 +278,22 @@ def _safe_image_urls(driver):
 
     urls = []
 
+    # Item-style editors expose all attached photos with semantic alt text.
+    # Read this form-scoped collection first: Preview repeats the first image
+    # and page-wide scans can include the seller's profile photo.
+    attached = driver.find_elements(By.XPATH,
+        "//*[@role='form' and @aria-label='Marketplace']//img[starts-with(@alt,'Listing photo:')]")
+    for img in attached:
+        src = _srcset_best(img) or _img_src(img)
+        if src and not src.startswith(('data:', 'blob:')) and _is_listing_cdn_url(src):
+            urls.append(src)
+    if urls:
+        return list(dict.fromkeys(urls))
+
     # Priority 1: exact edit-page Preview region provided by user.
     try:
-        preview_imgs = WebDriverWait(driver, 20).until(
-            EC.presence_of_all_elements_located(
-                (
-                    By.XPATH,
-                    "//div[@role='region' and @aria-label='Preview']//img[@src or @srcset]",
-                )
-            )
-        )
+        preview_imgs = driver.find_elements(By.XPATH,
+            "//div[@role='region' and @aria-label='Preview']//img[@src or @srcset]")
         for img in preview_imgs:
             src = _srcset_best(img) or _img_src(img)
             if not src:
@@ -264,15 +309,10 @@ def _safe_image_urls(driver):
     try:
         # Prefer images from listing-photos section near Add photos / Add photo uploader controls.
         candidates.extend(
-            WebDriverWait(driver, 20).until(
-                EC.presence_of_all_elements_located(
-                    (
-                        By.XPATH,
+            driver.find_elements(By.XPATH,
                         "((//span[normalize-space()='Add photos']/ancestor::*[.//img][1]) | "
                         "(//div[@aria-label='Add photo']/ancestor::*[.//img][1]) | "
                         "(//input[@type='file']/ancestor::*[.//img][1]))//img[@src]",
-                    )
-                )
             )
         )
     except Exception:
@@ -286,14 +326,9 @@ def _safe_image_urls(driver):
     if not candidates and not urls:
         try:
             # Fallback 1: edit page listing canvas/media region.
-            candidates = WebDriverWait(driver, 20).until(
-                EC.presence_of_all_elements_located(
-                    (
-                        By.XPATH,
+            candidates = driver.find_elements(By.XPATH,
                         "//a[contains(@href,'/marketplace/edit/?listing_id=')]/ancestor::*[.//img][1]//img[@src] | "
                         "//div[@role='main']//img[@src]",
-                    )
-                )
             )
         except Exception:
             candidates = []
@@ -301,11 +336,7 @@ def _safe_image_urls(driver):
     if not candidates and not urls:
         try:
             # Fallback 2: broad page scan, later filtered.
-            candidates = WebDriverWait(driver, 20).until(
-                EC.presence_of_all_elements_located(
-                    (By.XPATH, "//img[@src or @srcset]")
-                )
-            )
+            candidates = driver.find_elements(By.XPATH, "//img[@src or @srcset]")
         except Exception:
             candidates = []
 
@@ -329,11 +360,7 @@ def _safe_image_urls(driver):
     if not urls:
         # Last-resort parse of Preview region HTML for direct src links.
         try:
-            preview_regions = WebDriverWait(driver, 20).until(
-                EC.presence_of_all_elements_located(
-                    (By.XPATH, "//div[@role='region' and @aria-label='Preview']")
-                )
-            )
+            preview_regions = driver.find_elements(By.XPATH, "//div[@role='region' and @aria-label='Preview']")
             for region in preview_regions:
                 region_html = region.get_attribute("outerHTML") or ""
                 for match in re.findall(r"https?://[^\"'\\s>]+", region_html):
@@ -547,7 +574,7 @@ def _read_marketplace_summary(driver):
 def _valid_model_text(value, allow_numeric=True):
     """Reject inventory containers and edit-form internal IDs as model names."""
     value = " ".join(str(value or "").split()).strip()
-    if not value or len(value) > 100 or (not allow_numeric and value.isdecimal()):
+    if not value or len(value) > 100 or (value.isdecimal() and (not allow_numeric or len(value) > 8)):
         return ""
     if re.search(r"[$€£]|\b(?:MAD|USD|CAD|GBP|EUR|PKR)\s*[\d,]|\b(?:listed on|clicks on listing|listed on marketplace|renew your listing)\b", value, re.IGNORECASE):
         return ""
@@ -1029,14 +1056,15 @@ def _print_reposting_read_summary(post_data, edit_url=""):
             print(f"[Reposting]   image_{index}={image_url!r}", flush=True)
 
 
-def recover_unreadable_fields(driver, post, fallback):
+def recover_unreadable_fields(driver, post, fallback, fields=None):
     """Run one fallback pass, preserving every successful or empty primary field."""
     states = post.setdefault('field_states', {})
     protected = {'read', 'empty', 'disabled'}
     optional = {'exterior_color', 'interior_color'}
-    missing = [key for key in EDIT_FIELDS if states.get(key) not in protected
+    fields = fields or EDIT_FIELDS
+    missing = [key for key in fields if states.get(key) not in protected
                and (not post.get(key) or states.get(key) in {'unavailable', 'unreadable', 'conflict'})]
-    post['field_sources'] = {key: 'primary' for key in EDIT_FIELDS if key not in missing}
+    post['field_sources'] = {key: 'primary' for key in fields if key not in missing}
     if not fallback or not any(key not in optional for key in missing):
         return
     try:
@@ -1079,6 +1107,15 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
         raise ValueError("Listing title is required")
 
     owns_driver = driver is None
+    fallback_used = False
+
+    def visual_once(current):
+        nonlocal fallback_used
+        if fallback_used or visual_fallback is None:
+            raise RuntimeError('Visual recovery was already attempted for this listing.')
+        fallback_used = True
+        return visual_fallback(current)
+
     try:
         if owns_driver:
             driver = _open_prelogged_facebook(account)
@@ -1167,10 +1204,31 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
             ):
                 snapshot[field] = value
 
+        item_post = _item_edit_details(snapshot, listing, [])
+        if item_post is not None:
+            item_post['image_urls'] = _safe_image_urls(driver)
+            if visual_fallback is not None:
+                recover_unreadable_fields(driver, item_post, visual_once,
+                                          fields=('title', 'price', 'description'))
+            if not item_post.get('title') or not item_post.get('price'):
+                raise RuntimeError('Item editor title or price could not be read; saved details were not replaced.')
+            print('[ListingImport] Read item-style editor: title, price, description, category, condition, SKU and attached photos.', flush=True)
+            return {'ok': True, 'edit_url': edit_href, 'listing': dict(listing), 'posts': [item_post]}
+
+        if not any(snapshot.get(field, {}).get('state', 'unavailable') != 'unavailable'
+                   for field in ('vehicle_type', 'year', 'make', 'model', 'mileage', 'body_style')):
+            raise RuntimeError('Neither vehicle nor item edit controls were recognized; trying the visual reader.')
+        print('[ListingImport] Using original vehicle editor reader.', flush=True)
+
         def read_value(field, reader):
             try:
                 if field in snapshot and snapshot[field].get('state') != 'unavailable':
                     return snapshot[field].get('value') or ''
+                if field in EDIT_FIELDS:
+                    # The stable, scrolled snapshot already searched all control
+                    # layouts. Do not spend 20 seconds per absent field retrying
+                    # equivalent selectors; visual recovery runs once below.
+                    return ''
                 value = reader() or ""
                 if value not in (None, "", [], {}):
                     if field in EDIT_FIELDS:
@@ -1184,6 +1242,8 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
                 return ""
 
         post_data = {
+            'vin': snapshot.get('vin', {}).get('value') or '',
+            'trim': snapshot.get('trim', {}).get('value') or '',
             "vehicle_type": read_value("vehicle_type", lambda: _safe_combobox_text(driver, "Vehicle type")),
             "image_urls": read_value("image_urls", lambda: _safe_image_urls(driver)),
             "year": read_value("year", lambda: _safe_combobox_text(driver, "Year") or _safe_input_value(driver, "Year")) or str(listing.get("year") or ""),
@@ -1205,7 +1265,7 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
         if heading_model:
             post_data['field_states']['model'] = 'read'
         if visual_fallback is not None:
-            recover_unreadable_fields(driver, post_data, visual_fallback)
+            recover_unreadable_fields(driver, post_data, visual_once)
         _print_reposting_read_summary(post_data, edit_url=edit_href)
         post_data["title"] = " ".join(
             str(post_data.get(field) or "").strip()
@@ -1219,14 +1279,15 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
             "listing": dict(listing),
             "posts": [post_data],
         }
-    except Exception:
-        if visual_fallback is not None and driver is not None and '/marketplace/edit/' in str(driver.current_url or ''):
-            result = visual_fallback(driver)
+    except Exception as primary_error:
+        if not fallback_used and visual_fallback is not None and driver is not None and '/marketplace/edit/' in str(driver.current_url or ''):
+            print(f'[ListingImport] DOM readers could not complete ({type(primary_error).__name__}); trying screenshot/OCR once.', flush=True)
+            result = visual_once(driver)
             if not result.get('ok'):
                 raise RuntimeError('Primary and visual listing readers failed; saved details were not replaced.')
             post = result['posts'][0]
             post['field_sources'] = {key: 'visual_fallback' for key in EDIT_FIELDS}
-            post['title'] = ' '.join(str(post.get(key) or '').strip() for key in ('year', 'make', 'model')).strip() or listing_name
+            post['title'] = post.get('title') or ' '.join(str(post.get(key) or '').strip() for key in ('year', 'make', 'model')).strip() or listing_name
             return result
         raise
     finally:

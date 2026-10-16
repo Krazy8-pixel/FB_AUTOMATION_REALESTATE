@@ -57,13 +57,15 @@
         <p class="ld-note">Choose up to 19 accounts. Posts run one at a time; the next account starts after the previous attempt finishes.</p>
         <div class="ld-cross-accounts">{% for account in accounts if account != active_account %}<label><input type="checkbox" data-cross-account value="{{ account }}"> {{ account }}</label>{% endfor %}</div>
       </section>
-      <section class="ld-panel"><div class="ld-section-heading"><h2><span class="ld-step">1</span> Listing details</h2></div><div class="ld-edit-grid">
+      <section class="ld-panel"><div class="ld-section-heading"><h2><span class="ld-step">1</span> Listing details</h2></div><p class="ld-note">Review or choose every required value before reposting. VIN and Trim are optional.</p><div class="ld-edit-grid">
+      {% set select_options = {'vehicle_type':['Car','Other'], 'body_style':['Convertible','Coupe','Hatchback','Minivan','Pickup truck','Sedan','Station wagon','SUV','Van','Other'], 'vehicle_condition':['Excellent','Very good','Good','Fair','Poor'], 'fuel_type':['Gasoline','Petrol','Diesel','Electric','Hybrid','Flex','Plug-in hybrid','Other'], 'transmission':['Automatic transmission','Manual transmission']} %}
       {% for field in fields %}{% set value = listing.repost_preferences.get('fields', {}).get(field, source.get(field, '')) %}
-        <label class="ld-field{% if field == 'description' %} ld-wide{% endif %}"><span>{{ field|replace('_',' ')|title }}</span>
-        {% if field == 'description' %}<textarea name="{{ field }}" rows="5">{{ value }}</textarea>
-        {% elif field in ['exterior_color', 'interior_color'] %}<select name="{{ field }}">{{ color_options(value) }}</select>
+        <label class="ld-field{% if field == 'description' %} ld-wide{% endif %}"><span>{{ 'Body shape' if field == 'body_style' else ('VIN' if field == 'vin' else field|replace('_',' ')|title) }}{{ ' *' if field in required_fields else ' (optional)' }}</span>
+        {% if field == 'description' %}<textarea name="{{ field }}" rows="5" required>{{ value }}</textarea>
+        {% elif field in ['exterior_color', 'interior_color'] %}<select name="{{ field }}" required>{{ color_options(value) }}</select>
+        {% elif field in select_options %}<select name="{{ field }}" required><option value="">Select {{ field|replace('_',' ') }}</option>{% if value and value not in select_options[field] %}<option value="{{ value }}" selected>{{ value }}</option>{% endif %}{% for option in select_options[field] %}<option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select>
         {% elif field == 'clean_title' %}<select name="{{ field }}"><option value="" {% if not value %}selected{% endif %}>Not specified</option><option value="Yes" {% if value == 'Yes' %}selected{% endif %}>Yes</option><option value="No" {% if value == 'No' %}selected{% endif %}>No</option></select>
-        {% else %}<input name="{{ field }}" value="{{ value }}" {% if field in ['title','price'] %}required{% endif %}>{% endif %}</label>
+        {% else %}<input name="{{ field }}" value="{{ value }}" {% if field in required_fields %}required{% endif %}>{% endif %}</label>
       {% endfor %}</div></section>
       <section class="ld-panel"><div class="ld-section-heading"><h2><span class="ld-step">2</span> Photo order</h2><span>First photo becomes the cover</span></div>
         <p id="photo-order-help" class="ld-photo-help">Drag photos to reorder them. On touch screens, use the grip in the corner. You can also use the buttons below.</p>

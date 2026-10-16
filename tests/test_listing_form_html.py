@@ -3,10 +3,71 @@ from unittest.mock import MagicMock
 from urllib.parse import quote
 from selenium.webdriver.chrome.options import Options
 from automation.chromedriver import build_chrome_driver
-from automation.reposting import read_edit_form_snapshot, wait_for_edit_form_ready, highest_resolution_listing_images, _find_edit_listing_link, _model_from_visible_listing_heading, _valid_model_text
+from automation.reposting import read_edit_form_snapshot, wait_for_edit_form_ready, highest_resolution_listing_images, _find_edit_listing_link, _model_from_visible_listing_heading, _valid_model_text, _item_edit_details, _safe_image_urls
 
 
 class ListingFormTests(unittest.TestCase):
+    def test_long_scrolling_description_colors_vin_and_trim_are_read_in_full(self):
+        from automation.visual_listing_reader import capture_description_scroll
+        from html import escape
+        import tempfile
+        description = '2015 Lexus RC 350 3.5L V6\n\n' + '\n'.join(f'Feature line {i}' for i in range(60)) + '\nPrice 18,500 NON-NEGOTIABLE'
+        html = f'''<div role="dialog"><main role="main"><h1>Edit listing</h1>
+            <label><span>VIN</span><input value="TESTVIN1234567890"></label>
+            <label role="combobox"><span>Vehicle type</span><span>Car/Truck</span></label>
+            <label><span>Model</span><input value="985374995825728"></label>
+            <label><span>Trim</span><input value="F Sport"></label>
+            <label><span>Price</span><input value="$18,500"></label>
+            <label role="combobox"><span>Exterior color</span><span>White</span></label>
+            <label role="combobox"><span>Interior color</span><span>Black</span></label>
+            <label><span>Description</span><textarea style="width:400px;height:80px">{escape(description)}</textarea></label>
+            </main></div>'''
+        self.driver.get('data:text/html,' + quote(html))
+        values = wait_for_edit_form_ready(self.driver, timeout=5)
+        self.assertEqual(values['description']['value'], description)
+        self.assertEqual(values['exterior_color']['value'], 'White')
+        self.assertEqual(values['interior_color']['value'], 'Black')
+        self.assertEqual(values['vin']['value'], 'TESTVIN1234567890')
+        self.assertEqual(values['trim']['value'], 'F Sport')
+        with tempfile.TemporaryDirectory() as folder:
+            captures = capture_description_scroll(self.driver, folder)
+        self.assertGreater(len(captures), 1)
+        self.assertEqual(self.driver.execute_script('return document.querySelector("textarea").scrollTop'), 0)
+
+    def test_vehicle_layout_takes_precedence_over_item_labels(self):
+        snapshot = {key: {'value': value, 'state': 'read'} for key, value in {
+            'title': '2020 Ford Focus', 'category': 'Vehicles', 'vehicle_type': 'Car', 'mileage': '50000'}.items()}
+        self.assertIsNone(_item_edit_details(snapshot, {}, []))
+
+    def test_item_style_dialog_reads_textarea_and_all_attached_photos(self):
+        # Same semantic structure as the supplied Facebook dialog, anonymized.
+        photos = ''.join(f'<div><div role="button" aria-label="Remove photo {i} of 10"></div>'
+            f'<img alt="Listing photo: No photo description available." src="https://scontent.test.fbcdn.net/{i}.jpg"></div>'
+            for i in range(1, 11))
+        description = 'Project car.\n\nNeeds a frame and front end.'
+        html = f'''<div role="dialog"><div role="main"><h1>Edit listing</h1>
+          <div role="form" aria-label="Marketplace">{photos}
+          <label><input type="file" accept="image/*" multiple></label>
+          <label><div><span>Title</span><input value="1971 Chevrolet El camino"></div></label>
+          <label><div><span>Price</span><input value="$9,800"></div></label>
+          <label role="combobox" aria-labelledby="category"><div><span id="category">Category</span><div><span>&nbsp;</span></div></div></label>
+          <label role="combobox" aria-labelledby="condition"><span id="condition">Condition</span><div><span>&nbsp;</span></div></label>
+          <label><div><span>Description</span><div aria-hidden="true">Mirror must not be duplicated</div><textarea>{description}</textarea></div></label>
+          <label><span>SKU</span><input value=""></label></div></div>
+          <div role="region" aria-label="Preview"><img src="https://scontent.test.fbcdn.net/1.jpg"><img src="https://scontent.test.fbcdn.net/avatar.jpg"></div></div>'''
+        self.driver.get('data:text/html,' + quote(html))
+        snapshot = wait_for_edit_form_ready(self.driver, timeout=5)
+        photos = _safe_image_urls(self.driver)
+        post = _item_edit_details(snapshot, {'year': '1971', 'make': 'Chevrolet', 'model': 'El camino'}, photos)
+        self.assertEqual(post['title'], '1971 Chevrolet El camino')
+        self.assertEqual(post['price'], '$9,800')
+        self.assertEqual(post['description'], description)
+        for field in ('category', 'item_condition', 'sku'):
+            self.assertEqual(post['field_states'][field], 'empty')
+        self.assertEqual(post['field_states']['mileage'], 'unavailable')
+        self.assertEqual(post['mileage'], '')
+        self.assertEqual(photos, [f'https://scontent.test.fbcdn.net/{i}.jpg' for i in range(1, 11)])
+
     @classmethod
     def setUpClass(cls):
         options = Options()

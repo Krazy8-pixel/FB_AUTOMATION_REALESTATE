@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import subprocess
+from contextlib import contextmanager
 import time
 from datetime import datetime, timezone
 
@@ -86,6 +87,29 @@ class ListingImportCancelled(RuntimeError):
 
 class _ImportStopSignal(BaseException):
     """Escape browser retry handlers that catch Exception, like CancelledError."""
+
+
+class _ListingReadTimedOut(BaseException):
+    """Escape nested retry loops so one listing cannot consume the whole import."""
+
+
+@contextmanager
+def _listing_read_deadline(driver, seconds=120):
+    deadline = time.monotonic() + seconds
+    original = driver.execute
+
+    def execute(command, params=None):
+        if command not in {'quit', 'close'} and time.monotonic() >= deadline:
+            raise _ListingReadTimedOut()
+        return original(command, params)
+
+    driver.execute = execute
+    try:
+        yield
+    except _ListingReadTimedOut:
+        raise RuntimeError('Listing read exceeded its 120-second limit; continuing to the next listing.') from None
+    finally:
+        driver.execute = original
 
 
 def _guard_import_driver(driver, stop_event):
@@ -580,6 +604,12 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
         nonlocal driver
         driver = opened
         _guard_import_driver(opened, stop_event)
+        opened.set_page_load_timeout(30)
+        opened.set_script_timeout(15)
+        # Bound a hung ChromeDriver HTTP call as well as our polling loops.
+        client_config = getattr(opened.command_executor, '_client_config', None)
+        if client_config is not None:
+            client_config.timeout = 15
         with _active_import_drivers_lock:
             _active_import_drivers[account] = opened
         if stop_event.is_set():
@@ -748,12 +778,13 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                 progress_callback({'total_count': len(by_key), 'message': f'Reading full details and photos {index}/{len(by_key)}...'})
             try:
                 import sys
-                visual = not getattr(sys, 'frozen', False) if use_visual_reader is None else use_visual_reader
-                if visual:
-                    from automation.visual_listing_reader import read_import_fallback_page
-                    result = read_listing_from_manage(account, record, driver=driver, visual_fallback=read_import_fallback_page)
-                else:
-                    result = read_listing_from_manage(account, record, driver=driver)
+                visual = True if use_visual_reader is None else use_visual_reader
+                with _listing_read_deadline(driver):
+                    if visual:
+                        from automation.visual_listing_reader import read_import_fallback_page
+                        result = read_listing_from_manage(account, record, driver=driver, visual_fallback=read_import_fallback_page)
+                    else:
+                        result = read_listing_from_manage(account, record, driver=driver)
                 details = result['posts'][0]
                 photos, errors = download_listing_images(driver, account, record['id'], details.get('image_urls') or [], stop_event)
                 if (errors or not photos) and record.get('downloaded_images'):
@@ -768,6 +799,9 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                 if stop_event.is_set():
                     raise ListingImportCancelled() from exc
                 record['detail_error'] = str(exc)
+                print(f"[ListingImport] Could not read listing {record['id']}: {exc}. Keeping saved backup and continuing to the next listing.", flush=True)
+                if stop_event.wait(2):
+                    raise ListingImportCancelled()
             if stop_event.is_set():
                 raise ListingImportCancelled()
             save_listings(account, list(by_key.values()))
