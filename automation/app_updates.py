@@ -163,7 +163,7 @@ def install(automatic=False):
             from automation.desktop_state import checkpoint
             checkpoint()
             set_status(state='installing', message='Installing update. The app will restart.')
-            subprocess.Popen([str(updater), str(folder / 'plan.json')], creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            subprocess.Popen([str(updater), str(folder / 'plan.json')], cwd=str(folder), creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             exit_callback()
         except Exception as exc:
             routes.desktop_update_pending = False

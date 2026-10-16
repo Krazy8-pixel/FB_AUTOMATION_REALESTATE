@@ -129,7 +129,8 @@ class DesktopRuntimeTests(unittest.TestCase):
             plan.write_text(json.dumps({'package': str(package), 'public_key': self.public, 'install_dir': str(root), 'data_dir': str(data), 'pid': 1}))
             launches = []
 
-            def launch(args):
+            def launch(args, **kwargs):
+                self.assertEqual(kwargs['cwd'], str(data.resolve()))
                 launches.append(args)
                 if '--health-file' in args and not fail:
                     Path(args[-1]).write_text(json.dumps({'version': '1.1.0'}))
@@ -150,6 +151,28 @@ class DesktopRuntimeTests(unittest.TestCase):
 
     def test_update_replaces_program_and_preserves_client_data(self):
         self.run_update_scenario()
+
+    def test_updater_leaves_inherited_install_working_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / 'app'
+            updates = Path(folder) / 'updates'
+            with patch.object(updater.Path, 'cwd', return_value=root / '_internal'), patch.object(updater.os, 'chdir') as change:
+                updater.release_install_directory(root, updates)
+            change.assert_called_once_with(updates)
+
+    def test_folder_swap_retries_windows_sharing_violation(self):
+        error = OSError('File is in use')
+        error.winerror = 32
+        with patch.object(updater.Path, 'rename', side_effect=[error, None]) as rename, patch.object(updater.time, 'sleep'):
+            updater.rename_with_retry(Path('app'), Path('previous'))
+        self.assertEqual(rename.call_count, 2)
+
+    def test_folder_swap_timeout_explains_recovery(self):
+        error = OSError('File is in use')
+        error.winerror = 32
+        with patch.object(updater.Path, 'rename', side_effect=error), patch.object(updater.time, 'monotonic', side_effect=[0, 31]):
+            with self.assertRaisesRegex(RuntimeError, 'restart Windows'):
+                updater.rename_with_retry(Path('app'), Path('previous'))
 
     def test_update_installs_updated_uninstaller(self):
         self.run_update_scenario(include_new_uninstaller=True)

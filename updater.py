@@ -40,6 +40,31 @@ def startup_healthy(path, version):
         return False
 
 
+def release_install_directory(root, folder):
+    # Windows also locks a directory used as a process's current directory.
+    # Older launchers inherited the installed app's working directory.
+    if Path.cwd().resolve().is_relative_to(root.resolve()):
+        os.chdir(folder)
+
+
+def rename_with_retry(source, destination, timeout=30):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            source.rename(destination)
+            return
+        except OSError as exc:
+            if getattr(exc, 'winerror', None) not in (5, 32, 33):
+                raise
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    'Windows is still using the app folder. Close all Tayyara Motors '
+                    'windows and try again, or restart Windows and run the latest installer. '
+                    'Your saved listings are stored separately.'
+                ) from exc
+            time.sleep(.5)
+
+
 def main(plan_path):
     from automation.release_security import verify_manifest
     plan_path = Path(plan_path).resolve()
@@ -54,6 +79,7 @@ def main(plan_path):
     data = Path(plan['data_dir']).resolve()
     if not (root / 'TayyaraMotors.exe').is_file() or data.is_relative_to(root):
         raise ValueError('Invalid installation/data layout')
+    release_install_directory(root, folder)
     staging = root.with_name(root.name + '.staging-' + str(os.getpid()))
     previous = root.with_name(root.name + '.previous-' + str(os.getpid()))
     if staging.exists() or previous.exists():
@@ -75,7 +101,7 @@ def main(plan_path):
     if not (staging / 'Uninstall.exe').exists() and (root / 'Uninstall.exe').exists():
         shutil.copy2(root / 'Uninstall.exe', staging / 'Uninstall.exe')
     backup = folder / ('listings-before-' + manifest['version'] + '.db')
-    root.rename(previous)
+    rename_with_retry(root, previous)
     reset_done = False
     try:
         if manifest.get('reset_databases') and (data / 'listings.db').exists():
@@ -88,7 +114,7 @@ def main(plan_path):
         staging.rename(root)
         health = folder / 'healthy.json'
         health.unlink(missing_ok=True)
-        child = subprocess.Popen([str(root / 'TayyaraMotors.exe'), '--health-file', str(health)])
+        child = subprocess.Popen([str(root / 'TayyaraMotors.exe'), '--health-file', str(health)], cwd=str(data))
         deadline = time.monotonic() + 90
         while not startup_healthy(health, manifest['version']):
             if child.poll() is not None or time.monotonic() > deadline:
@@ -108,7 +134,7 @@ def main(plan_path):
             (folder / 'last-update.json').write_text(json.dumps({'version': manifest['version'], 'success': False, 'error': str(exc)}), encoding='utf-8')
         except OSError:
             pass
-        subprocess.Popen([str(root / 'TayyaraMotors.exe')])
+        subprocess.Popen([str(root / 'TayyaraMotors.exe')], cwd=str(data))
         raise
 
     # The new app is healthy. Cleanup errors must never trigger rollback.
