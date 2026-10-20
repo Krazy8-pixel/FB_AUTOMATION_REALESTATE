@@ -157,13 +157,14 @@
 
         <div class="manual-actions">
           <button type="submit" name="post_action" value="simple" class="manual-action-button">Simple Post</button>
-          <button type="button" id="manual-group-trigger" class="manual-action-button">Group Post</button>
+          {% if group_ui_enabled %}<button type="button" id="manual-group-trigger" class="manual-action-button">Group Post</button>{% endif %}
           <button type="button" id="manual-account-trigger" class="manual-action-button">Accounts Post</button>
         </div>
         <input type="hidden" id="multi-account-hidden" name="multi_account" value="0">
         <div id="manual-group-hidden" hidden></div>
       </fieldset>
     </form>
+    {% if group_ui_enabled %}
     <div
       id="manual-group-modal"
       class="manual-group-modal"
@@ -216,6 +217,7 @@
         </div>
       </div>
     </div>
+    {% endif %}
     <div id="manual-account-modal" class="manual-group-modal" hidden>
       <div class="manual-group-backdrop" data-account-close="1"></div>
       <div class="manual-group-dialog" role="dialog" aria-modal="true" aria-labelledby="manual-account-title">

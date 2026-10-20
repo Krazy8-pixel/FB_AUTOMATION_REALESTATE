@@ -1,4 +1,6 @@
-from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify, send_from_directory
+from automation.diagnostics import event as diagnostic_event
+from automation.listing_videos import saved_paths as saved_video_paths
+from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify, send_from_directory, Response
 import copy
 import sys
 from automation.fb_login import MAX_ACCOUNTS
@@ -60,6 +62,15 @@ from automation.groups import (
     summarize_groups,
 )
 web_bp = Blueprint("web", __name__)
+
+# Keep group automation available internally while hiding its UI.
+GROUP_UI_ENABLED = False
+
+
+@web_bp.app_context_processor
+def group_ui_visibility():
+    return {'group_ui_enabled': GROUP_UI_ENABLED}
+
 
 DESKTOP_MODE = os.getenv("FB_AUTOMATION_DESKTOP") == "1"
 if DESKTOP_MODE:
@@ -444,6 +455,7 @@ def _build_repost_payloads(read_result):
             for idx, image_url in enumerate(image_urls[:20], start=1):
                 payload[f"image_path{idx}"] = str(image_url or "").strip()
 
+        payload["video_paths"] = list(post.get("video_paths") or [])
         payloads.append(payload)
 
     return payloads
@@ -627,7 +639,9 @@ def _run_saved_listing_repost(listing, account, job_id=None):
                     raise ValueError('Saved listing details are missing. Import this listing first.')
                 if not listing.get('source_deleted') and not _extract_listing_id(listing.get('edit_url') or listing.get('url') or ''):
                     raise ValueError('The saved Facebook listing ID is missing. Import this listing again before reposting.')
+                diagnostic_event('REPOST', 'START', account=account, listing_id=listing.get('id'), job_id=job_id)
                 post = dict(listing['details'])
+                post['video_paths'] = saved_video_paths(listing)
                 preferences = listing.get('repost_preferences') or {}
                 post.update(preferences.get('fields') or {})
                 edited_fields = preferences.get('fields') or {}
@@ -670,6 +684,7 @@ def _run_saved_listing_repost(listing, account, job_id=None):
                     update_listing_fields(account, str(listing['id']), {'repost_status': 'deleting'})
                     source = dict(listing)
                     source['_source_listing_id'] = _extract_listing_id(listing.get('edit_url') or listing.get('url') or '')
+                    diagnostic_event('REPOST', 'DELETING_SOURCE', account=account, listing_id=listing.get('id'))
                     result = delete_selected_listings_from_facebook(account, [source])
                     if int((result or {}).get('deleted') or 0) != 1:
                         raise RuntimeError('The original Facebook listing could not be deleted. Reposting was stopped; the saved backup was kept.')
@@ -694,6 +709,7 @@ def _run_saved_listing_repost(listing, account, job_id=None):
                             'the saved backup was kept and can be reposted again.'
                         ) from exc
 
+            diagnostic_event('REPOST', 'PUBLISH_CONFIRMED', account=account, listing_id=listing.get('id'))
             reposted_at = datetime.now(timezone.utc)
             posted_details = dict(post)
             posted_details.pop('image_urls', None)
@@ -729,6 +745,7 @@ def _run_saved_listing_repost(listing, account, job_id=None):
             _runtime_log(
                 f"[Reposting] Failed job={job_id or '-'} account={account} listing={listing.get('id') if isinstance(listing, dict) else '-'} | {e}"
             )
+            diagnostic_event("REPOST", "FAILED", account=account, listing_id=listing.get("id"), error=str(e))
             _record_repost_history(account, listing, "failed", error=e)
             update_listing_fields(account, str(listing.get('id') or ''), {'repost_status': 'failed', 'repost_error': str(e)})
 
@@ -1280,13 +1297,12 @@ def _render_groups_page(message=None, message_type=None):
 
 @web_bp.route("/groups", methods=["GET"])
 def groups_page():
+    if not GROUP_UI_ENABLED:
+        return redirect(url_for('web.settings_page'))
     return _render_groups_page()
 
 
 def _start_groups_import_job(account_email: str) -> tuple[bool, str]:
-    if DESKTOP_MODE:
-        from automation.maintenance import pause_groups
-        pause_groups(account_email, False)
     if not account_email:
         return False, "No active account selected."
 
@@ -1340,10 +1356,8 @@ def _start_groups_import_job(account_email: str) -> tuple[bool, str]:
         try:
             with groups_jobs_lock:
                 cancel_event = groups_cancel_events.get(account_email)
-            import_groups_from_facebook(account_email, progress_callback=_progress, stop_event=cancel_event)
-            if DESKTOP_MODE:
-                from automation.maintenance import record
-                record(account_email, 'groups', True)
+            with _get_post_lock(account_email):
+                import_groups_from_facebook(account_email, progress_callback=_progress, stop_event=cancel_event)
             with groups_jobs_lock:
                 job = groups_jobs.get(account_email) or {}
                 job["running"] = False
@@ -1415,10 +1429,6 @@ def groups_import_stop():
         ev = groups_cancel_events.get(active_account)
         if ev is not None:
             ev.set()
-
-    if DESKTOP_MODE:
-        from automation.maintenance import pause_groups
-        pause_groups(active_account)
 
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return jsonify({"ok": True, "message": "Stop requested."})
@@ -1537,6 +1547,8 @@ def groups_delete():
 
 @web_bp.route("/posting_in_groups", methods=["GET", "POST"])
 def posting_in_groups_page():
+    if request.method == 'GET' and not GROUP_UI_ENABLED:
+        return redirect(url_for('web.settings_page'))
     accounts = get_all_accounts()
     active_account = get_active_account()
 
@@ -1717,14 +1729,10 @@ def active_browser_tasks():
 
 @web_bp.route('/tasks/cancel', methods=['POST'])
 def cancel_browser_task():
-    from automation.task_control import cancel, active_tasks
+    from automation.task_control import cancel
     data = request.get_json(silent=True) or {}
-    task = next((item for item in active_tasks(get_active_account()) if item['id'] == str(data.get('id') or '')), None)
     if not cancel(str(data.get('id') or ''), get_active_account()):
         return jsonify(ok=False, message='Task has finished or belongs to another account.'), 404
-    if DESKTOP_MODE and task and task['action'] == 'import_groups_from_facebook':
-        from automation.maintenance import pause_groups
-        pause_groups(get_active_account())
     return jsonify(ok=True, message='Cancellation requested. Completed Facebook actions cannot be undone; review Facebook before retrying.')
 
 
@@ -1787,11 +1795,34 @@ def settings_page():
     )
 
 
+@web_bp.route('/settings/terminal')
+def terminal_page():
+    return render_template('terminal.html', active_page='settings',
+                           accounts=get_all_accounts(), active_account=get_active_account())
+
+
+@web_bp.route('/settings/diagnostics/download')
+def diagnostics_download():
+    from automation.terminal_log import export_text
+    response = Response(export_text(), content_type='text/plain; charset=utf-8')
+    response.headers['Content-Disposition'] = 'attachment; filename="tayyara-diagnostics.txt"'
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@web_bp.route('/settings/terminal/data')
+def terminal_data():
+    from automation.terminal_log import snapshot
+    after = max(0, request.args.get('after', default=0, type=int) or 0)
+    response = jsonify(snapshot(after))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 @web_bp.route('/settings/desktop', methods=['POST'])
 def desktop_preferences_save():
     from automation.desktop_preferences import save
-    save(request.form.get('background_sync') == '1', request.form.get('start_with_windows') == '1',
-         automatic_updates=request.form.get('automatic_updates') == '1')
+    save(request.form.get('background_sync') == '1', request.form.get('start_with_windows') == '1')
     return redirect(url_for('web.settings_page'))
 
 
@@ -2099,10 +2130,14 @@ def set_active_account():
     return redirect(referrer or url_for("web.dashboard"))
 
 
-@web_bp.route("/set_background_mode", methods=["POST"])
+@web_bp.route("/set_background_mode", methods=["GET", "POST"])
 def set_background_mode():
+    if request.method == 'GET':
+        return redirect(url_for('web.delete_listings_page'))
     enabled = request.form.get("run_in_background") == "1"
     set_run_in_background_enabled(enabled)
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify(ok=True, enabled=enabled)
     return redirect(request.referrer or url_for("web.dashboard"))
 
 # -------------------------
@@ -2741,6 +2776,9 @@ def _listing_import_account_lock(account, stop_event):
 def _start_listing_import_job(account, automatic=False):
     if not account:
         return False, "No active account selected."
+    with groups_jobs_lock:
+        if (groups_jobs.get(account) or {}).get('running'):
+            return False, 'Group import is running for this account. Stop it or wait for it to finish, then import listings.'
     if _listing_click_snapshot(account).get("running"):
         return False, "Wait for the click refresh to finish."
     if _facebook_delete_snapshot(account).get("running"):
@@ -3091,6 +3129,16 @@ def listing_photo(listing_id, name):
     return send_from_directory(os.path.dirname(photo['path']), os.path.basename(photo['path']))
 
 
+@web_bp.route('/delete_listings/video/<listing_id>/<name>')
+def listing_video(listing_id, name):
+    account = get_active_account()
+    listing = next((item for item in load_listings(account).get('listings', []) if item.get('id') == listing_id), None) if account else None
+    video = next((item for item in (listing or {}).get('downloaded_videos', []) if item.get('name') == name), None)
+    if not video:
+        return 'Video not found', 404
+    return send_from_directory(os.path.dirname(video['path']), os.path.basename(video['path']), conditional=True)
+
+
 def _save_confirmed_cross_post(meta):
     import hashlib
     import shutil
@@ -3107,6 +3155,17 @@ def _save_confirmed_cross_post(meta):
         shutil.copy2(photo['path'], destination)
         copied['path'] = str(destination.resolve())
         copied_photos.append(copied)
+    copied_videos = []
+    for video in record.get('downloaded_videos') or []:
+        try:
+            destination = folder / os.path.basename(video['name'])
+            shutil.copy2(video['path'], destination)
+            copied_videos.append(dict(video, path=str(destination.resolve())))
+        except Exception as exc:
+            _runtime_log(f'[Video] Could not copy optional target backup: {exc}')
+    record['downloaded_videos'] = copied_videos
+    record['video_paths'] = [video['path'] for video in copied_videos]
+    record.setdefault('details', {})['video_paths'] = record['video_paths']
     record.update({
         'id': listing_id, 'downloaded_images': copied_photos,
         'listed_date': confirmed_at.astimezone(timezone(timedelta(hours=5))).date().isoformat(),
@@ -3136,6 +3195,7 @@ def _run_cross_post_batch(job_ids):
                 meta['status'] = 'waiting'
                 account = meta['account']
                 payload = copy.deepcopy(meta['post_data'])
+                diagnostic_event('CROSS_POST', 'START', source_account=meta.get('source_account'), target_account=account, job_id=job_id)
             # Reserve the target's posting lock before marking it started.
             # The posting function returns only after its browser work finishes.
             with _get_post_lock(account):
@@ -3151,7 +3211,7 @@ def _run_cross_post_batch(job_ids):
                     if account not in get_all_accounts():
                         raise RuntimeError('Target account is no longer saved.')
                     if not _cross_post_payload(payload, account, job_id):
-                        raise RuntimeError('Facebook did not confirm posting.')
+                        raise RuntimeError('Facebook Publish could not be clicked successfully.')
                     with scheduled_posts_lock:
                         meta['status'] = 'posted'
                         meta['posted_at'] = datetime.now()
@@ -3159,7 +3219,7 @@ def _run_cross_post_batch(job_ids):
                         _save_confirmed_cross_post(meta)
                     except Exception as storage_error:
                         with scheduled_posts_lock:
-                            meta['error'] = f'Facebook posting was confirmed, but saving the target listing failed: {storage_error}'
+                            meta['error'] = f'Facebook Publish was clicked, but saving the target listing failed: {storage_error}'
                         _runtime_log(f'[CrossPosting] Target backup failed job={job_id}: {storage_error}')
                 except Exception as exc:
                     with scheduled_posts_lock:
@@ -3167,6 +3227,7 @@ def _run_cross_post_batch(job_ids):
                         meta['error'] = str(exc)
                         meta['posted_at'] = datetime.now()
                     _runtime_log(f'[CrossPosting] Failed job={job_id} account={account}: {exc}')
+            diagnostic_event('CROSS_POST', meta['status'].upper(), target_account=account, job_id=job_id, error=meta.get('error', ''))
             _runtime_log(f'[CrossPosting] Completed job={job_id} account={account} status={meta["status"]}')
 
 
@@ -3207,6 +3268,7 @@ def cross_post_listing():
         if not listing.get('details') or not photos or listing.get('image_errors'):
             raise ValueError('Import the listing details and photos first.')
         post = dict(listing['details'], **preferences['fields'])
+        post['video_paths'] = saved_video_paths(listing)
         if 'title' not in preferences['fields'] and any(key in preferences['fields'] for key in ('year', 'make', 'model')):
             post['title'] = ' '.join(str(post.get(key) or '').strip() for key in ('year', 'make', 'model')).strip()
         by_name = {photo['name']: photo['path'] for photo in photos}
@@ -3224,7 +3286,8 @@ def cross_post_listing():
     with scheduled_posts_lock:
         for index, target in enumerate(targets):
             job_id = f'{batch_id}_{index}'
-            payload = dict(payloads[0], _require_publish_confirmation=True)
+            # Use simple posting's successful Publish click and post-click wait.
+            payload = dict(payloads[0], _require_publish_confirmation=False)
             scheduled_posts[job_id] = {
                 'job_id': job_id, 'account': target, 'source_account': account,
                 'source_listing_id': listing_id, 'source': 'Cross posting', 'platform': 'facebook',
@@ -3236,6 +3299,7 @@ def cross_post_listing():
                     **{key: listing.get(key, '') for key in ('year', 'make', 'model')},
                     **{key: value for key, value in post.items() if key != 'image_urls'},
                     'details': {key: value for key, value in post.items() if key != 'image_urls'},
+                    'downloaded_videos': copy.deepcopy(listing.get('downloaded_videos') or []),
                     'downloaded_images': [copy.deepcopy(next(photo for photo in photos if photo['name'] == name))
                                           for name in preferences['image_order'][:10]],
                 },
@@ -3253,7 +3317,7 @@ def cross_post_listing():
         from automation.desktop_state import checkpoint
         checkpoint()
     return jsonify(ok=True, job_ids=job_ids, run_at=run_at.strftime('%Y-%m-%d %H:%M:%S'),
-                   message=f'Cross posting queued for {len(targets)} account(s), one at a time. See Scheduled Posts for results.')
+                   message=f'Cross posting queued for {len(targets)} account(s), one at a time. See Posting Results for results.')
 
 
 @web_bp.route("/delete_listings/repost", methods=["POST"])

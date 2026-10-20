@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import zipfile
+from automation.update_process import launch_independent
 
 
 def safe_extract(archive, destination):
@@ -47,7 +48,7 @@ def release_install_directory(root, folder):
         os.chdir(folder)
 
 
-def rename_with_retry(source, destination, timeout=30):
+def rename_with_retry(source, destination, timeout=60):
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -58,11 +59,35 @@ def rename_with_retry(source, destination, timeout=30):
                 raise
             if time.monotonic() >= deadline:
                 raise RuntimeError(
-                    'Windows is still using the app folder. Close all Tayyara Motors '
+                    f'Windows is still using {source.name}. Close all Tayyara Motors '
                     'windows and try again, or restart Windows and run the latest installer. '
                     'Your saved listings are stored separately.'
                 ) from exc
             time.sleep(.5)
+
+
+def move_program_files(source, destination, moved, executable_last=False):
+    """Move files individually so an open folder cannot block the update."""
+    paths = [path for path in source.rglob('*') if path.is_file()]
+    paths.sort(key=lambda path: (
+        (path.name.casefold() == 'tayyaramotors.exe') == executable_last, str(path)))
+    for path in paths:
+        relative = path.relative_to(source)
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        rename_with_retry(path, target)
+        moved.append(relative)
+
+
+def restore_program_files(root, staging, previous, installed, backed_up):
+    for relative in reversed(installed):
+        target = staging / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        rename_with_retry(root / relative, target)
+    for relative in reversed(backed_up):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        rename_with_retry(previous / relative, target)
 
 
 def main(plan_path):
@@ -101,9 +126,11 @@ def main(plan_path):
     if not (staging / 'Uninstall.exe').exists() and (root / 'Uninstall.exe').exists():
         shutil.copy2(root / 'Uninstall.exe', staging / 'Uninstall.exe')
     backup = folder / ('listings-before-' + manifest['version'] + '.db')
-    rename_with_retry(root, previous)
+    previous.mkdir()
+    backed_up, installed = [], []
     reset_done = False
     try:
+        move_program_files(root, previous, backed_up)
         if manifest.get('reset_databases') and (data / 'listings.db').exists():
             import sqlite3
             with closing(sqlite3.connect(data / 'listings.db')) as source, closing(sqlite3.connect(backup)) as target:
@@ -111,10 +138,11 @@ def main(plan_path):
             reset_done = True
             for suffix in ['', '-wal', '-shm']:
                 (data / ('listings.db' + suffix)).unlink(missing_ok=True)
-        staging.rename(root)
+        # Expose the new launcher only after its libraries are in place.
+        move_program_files(staging, root, installed, executable_last=True)
         health = folder / 'healthy.json'
         health.unlink(missing_ok=True)
-        child = subprocess.Popen([str(root / 'TayyaraMotors.exe'), '--health-file', str(health)], cwd=str(data))
+        child = launch_independent([str(root / 'TayyaraMotors.exe'), '--health-file', str(health)], data)
         deadline = time.monotonic() + 90
         while not startup_healthy(health, manifest['version']):
             if child.poll() is not None or time.monotonic() > deadline:
@@ -123,9 +151,7 @@ def main(plan_path):
                 raise RuntimeError('New version failed startup; restoring previous version')
             time.sleep(1)
     except Exception as exc:
-        if root.exists():
-            root.rename(staging)
-        previous.rename(root)
+        restore_program_files(root, staging, previous, installed, backed_up)
         if reset_done and backup.exists():
             for suffix in ['', '-wal', '-shm']:
                 (data / ('listings.db' + suffix)).unlink(missing_ok=True)
@@ -134,12 +160,13 @@ def main(plan_path):
             (folder / 'last-update.json').write_text(json.dumps({'version': manifest['version'], 'success': False, 'error': str(exc)}), encoding='utf-8')
         except OSError:
             pass
-        subprocess.Popen([str(root / 'TayyaraMotors.exe')], cwd=str(data))
+        launch_independent([str(root / 'TayyaraMotors.exe')], data)
         raise
 
     # The new app is healthy. Cleanup errors must never trigger rollback.
     try:
         (folder / 'last-update.json').write_text(json.dumps({'version': manifest['version'], 'success': True}), encoding='utf-8')
+        shutil.rmtree(staging)
         # Keep one previous program version; remove only verified sibling backups.
         for old in root.parent.glob(root.name + '.previous-*'):
             if old != previous and (old / 'TayyaraMotors.exe').is_file():

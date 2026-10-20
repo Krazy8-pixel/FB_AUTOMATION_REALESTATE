@@ -7,6 +7,15 @@ from automation.reposting import read_edit_form_snapshot, wait_for_edit_form_rea
 
 
 class ListingFormTests(unittest.TestCase):
+    def test_vehicle_condition_accepts_short_condition_label(self):
+        self.driver.get('data:text/html,' + quote('''<main role="main">
+            <label>Price<input value="15500"></label>
+            <label role="combobox"><span>Condition</span><span>Good</span></label>
+            </main>'''))
+        snapshot = read_edit_form_snapshot(self.driver)
+        self.assertEqual(snapshot['vehicle_condition']['value'], 'Good')
+        self.assertEqual(snapshot['vehicle_condition']['state'], 'read')
+
     def test_long_scrolling_description_colors_vin_and_trim_are_read_in_full(self):
         from automation.visual_listing_reader import capture_description_scroll
         from html import escape

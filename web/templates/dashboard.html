@@ -20,26 +20,28 @@
     <a href="{{ url_for('web.activity_log_page') }}"><span class="shortcut-number">03</span><span><strong>Review recent activity</strong><small>Check results and resolve errors</small></span><b aria-hidden="true">↗</b></a>
   </nav>
 
-  <div class="dashboard-tools-head"><div><h2>Explore your tools</h2><p>Find the next step for your workflow.</p></div><label class="dashboard-search"><span>Find a tool</span><input id="dashboard-tool-search" type="search" placeholder="Search listings, groups, help…" autocomplete="off" aria-controls="dashboard-tools"></label></div>
+  <div class="dashboard-tools-head"><div><h2>Explore your tools</h2><p>Find the next step for your workflow.</p></div><label class="dashboard-search"><span>Find a tool</span><input id="dashboard-tool-search" type="search" placeholder="Search listings, accounts, help…" autocomplete="off" aria-controls="dashboard-tools"></label></div>
 
   <div class="simple-dashboard-groups" id="dashboard-tools">
     <section class="simple-dashboard-section">
-      <div class="simple-section-head"><h2>Listings</h2><span>3 features</span></div>
+      <div class="simple-section-head"><h2>Listings</h2><span>{{ 3 if group_ui_enabled else 1 }} features</span></div>
       <nav class="simple-feature-list" aria-label="Listing features">
         <a href="{{ url_for('web.auto_listing_page') }}"><span><strong>Create Listings</strong><small>Create listings manually or through Excel.</small></span><b>Open</b></a>
         <a href="{{ url_for('web.delete_listings_page') }}"><span><strong>Manage Listings</strong><small>Import, review, delete, or schedule existing listings for reposting.</small></span><b>Open</b></a>
-        <a href="{{ url_for('web.post_schedular') }}"><span><strong>Scheduled Posts</strong><small>Review upcoming listing jobs and posting times.</small></span><b>Open</b></a>
+        <a href="{{ url_for('web.post_schedular') }}"><span><strong>Posting Results</strong><small>Review upcoming listing jobs and posting times.</small></span><b>Open</b></a>
       </nav>
     </section>
 
 
 
     <section class="simple-dashboard-section">
-      <div class="simple-section-head"><h2>Accounts and Groups</h2><span>3 features</span></div>
-      <nav class="simple-feature-list" aria-label="Account and group features">
+      <div class="simple-section-head"><h2>Accounts</h2><span>{{ 3 if group_ui_enabled else 1 }} features</span></div>
+      <nav class="simple-feature-list" aria-label="Account features">
         <a href="{{ url_for('web.account_page') }}"><span><strong>Accounts</strong><small>Add Facebook accounts and check saved sessions.</small></span><b>Open</b></a>
+        {% if group_ui_enabled %}
         <a href="{{ url_for('web.groups_page') }}"><span><strong>Groups</strong><small>Import and organize Facebook groups for the active account.</small></span><b>Open</b></a>
         <a href="/posting_in_groups"><span><strong>Group Posting</strong><small>Publish a listing to selected Facebook groups.</small></span><b>Open</b></a>
+        {% endif %}
       </nav>
     </section>
 

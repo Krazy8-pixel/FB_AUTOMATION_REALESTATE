@@ -6,6 +6,8 @@ import sys
 import subprocess
 import tempfile
 import traceback
+from automation.terminal_log import install as install_terminal_log
+install_terminal_log()
 from automation.keep_awake import enable_keep_awake_from_env, enable_button_sleep_block_from_env
 
 

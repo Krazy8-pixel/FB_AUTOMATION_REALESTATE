@@ -6,13 +6,9 @@ On first launch, the client creates their portal login and adds their Facebook a
 
 ## Saved data
 
-The desktop edition checks for updates after startup and every six hours, with
-15-minute retry backoff after network or download failures. Automatic updates
-are enabled by default, including for existing preferences files, and can be
-disabled in Settings. Installation waits for automation to finish and verifies
-the signed manifest and archive checksum. Releases that reset listing data
-require manual confirmation. A version rolled back after failed startup is
-not automatically retried; it can be retried manually in Settings.
+Updates are manual: use Check for Updates and Download & Install in Settings.
+Installation verifies the signed manifest and archive checksum. Finish running
+automation before installing an update.
 
 Installed program files live in `%LOCALAPPDATA%\Programs\TayyaraMotors`. Client accounts, sessions, groups, listings, media, preferences, and schedules live separately in `%LOCALAPPDATA%\TayyaraMotors\data`.
 
@@ -20,24 +16,27 @@ Ordinary updates replace program files only. From version 1.0.11, uninstalling a
 
 ## Background operation
 
-Closing the window cancels foreground automation and queued posts/reposts permanently. Group fetching, listing imports, click refresh, and daily cookie checks continue in the tray. Exit App also hides the tray icon while these maintenance tasks keep running. Launching the app again restores the window and tray icon. Start With Windows and Background Sync are enabled by default and can be changed in Settings.
+Closing the window cancels foreground automation and queued posts/reposts permanently. Manually started group fetching, listing imports, click refresh, and daily cookie checks continue in the tray. Exit App stops the process, including background maintenance, so program files can be replaced during installation. Start With Windows and Background Sync are enabled by default and can be changed in Settings.
 
 Imports run once every 24 hours and click refreshes every 4 hours for each account. Maintenance runs one task at a time and waits for manual automation. Sleeping or powered-off PCs cannot run tasks. Each overdue maintenance task runs once after the app resumes. Pending schedules are restored; interrupted posting jobs require review to avoid duplicate posts.
 
-Groups are fetched once per account after startup (or after a new account is
-added). The completion marker is saved, including successful empty results.
-Failed attempts retry after backoff. Cancelling group fetching pauses automatic
-retries; starting a manual group import enables it again.
+Groups are imported only when the user starts Import Groups. Startup, adding an
+account, and background maintenance do not fetch groups or retry failed group
+imports automatically.
 
 Scheduled Posts and Repost Status show running actions with
 Cancel controls. Queued schedules can be cancelled before they start. Running
 cancellation prevents further browser commands and interrupts posting delays;
 an action already submitted to Facebook cannot be undone. Updates and uninstall
-stop the actual app process; closing the window and Exit App retain maintenance.
+stop the actual app process; closing the window alone retains maintenance.
 
 ## Publish a code update from this PC
 
 Use a higher version for every release. From this project's PowerShell terminal:
+
+For quicker local builds, add `--fast` to `tools/build_desktop.py`. This reuses
+the dependency cache and uses faster ZIP/installer compression; downloads are
+larger, but contain the same application and signed update verification.
 
 ```powershell
 $releasePython = 'C:/Users/hp/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe'
@@ -61,3 +60,53 @@ For an intentional listing-database reset, add `--reset-listings` to the build c
 Use Python 3.12 on Windows, install `requirements-desktop.txt`, restore the private signing key, then run `tools/prepare_desktop.py` and `tools/build_desktop.py --version VERSION`. Authenticate GitHub CLI before publishing. Do not include developer data in the bundle.
 
 The Windows installer is not Authenticode-signed. Manifest signatures protect the app's update channel; a commercial Windows signing certificate is a separate optional distribution step.
+
+Setup requests the running app to shut down and waits for the executable to become writable before extracting program files. If Windows keeps the file locked, setup offers Retry or Cancel before replacing any program files. Installation preserves saved app data.
+
+In-app updates launch an independent updater from the data directory without
+inheriting file handles or the app's DLL search path. The updater waits for app
+shutdown, backs up and replaces files individually with sharing-violation retries,
+and restores the backup if installation or startup fails. The new executable is
+installed last, after its libraries. Existing installations must first receive
+this updater through a rebuilt installer; older versions still run their bundled
+updater when starting an update.
+
+## Optional listing video backups
+
+Run Import Listings again to recover videos for existing saved listings. The
+normal edit-page reader checks HTML video/currentSrc/source URLs, independently
+of OCR. Direct HTTPS Facebook CDN videos with MP4, WebM, or QuickTime content
+types are downloaded without recompression (up to five, 150 MB each, with a
+60-second download deadline per video). Blob and streaming-only sources are
+skipped; this does not claim every Facebook video can be recovered.
+
+Saved videos play on the listing detail page. Reposts and cross-posts submit
+existing local video files using the optional video uploader. Cross-post target
+backups receive their own copies. Missing files, unsupported upload controls,
+and video download/upload failures do not make videos required for posting.
+Previously saved video files are retained if a refresh cannot recover a video.
+Source changes require a new desktop build before installed EXEs include them.
+
+## Remote test diagnostic report
+
+After installing a build with diagnostics, reproduce one workflow at a time:
+Import Listings, post to another account, then repost only a disposable listing.
+Reposting deletes the original first. Note the account, listing title, and test
+time, then use Settings > Download diagnostic report. This downloads
+`tayyara-diagnostics.txt` with recent output and CHECK markers. The Live Terminal
+also offers this download; its original Download logs button exports only the
+visible terminal text.
+
+The installed app saves print output and stderr in
+`%LOCALAPPDATA%\TayyaraMotors\data\diagnostics.log`, with two rotated backups
+(`.1`, `.2`), up to about 15 MB total. Logs survive restarts, and logging failures
+do not interrupt automation. No program-folder write permission is needed.
+Reports can contain account names, listing details, paths, and media URLs;
+review before sharing. Cookie/session databases are not included by the exporter.
+
+IMPORT_LISTING markers list missing/uncertain fields and media counts.
+POST_MEDIA lists photo uploads and optional video submissions. PUBLISH records
+CLICKED separately from CONFIRMED_BY_UI or CLICK_ONLY_REVIEW_ON_FACEBOOK.
+CROSS_POST names the target account and reports each job result. A FINISHED
+marker describes function completion, not proof of publication or complete
+extraction. Verify final fields and media on Facebook as well.

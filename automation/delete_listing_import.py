@@ -1,3 +1,4 @@
+from automation.diagnostics import event as diagnostic_event, traced
 """Import a user's Marketplace listings for the Delete Listings page."""
 
 import hashlib
@@ -10,10 +11,13 @@ import subprocess
 from contextlib import contextmanager
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlsplit, parse_qs
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import InvalidSessionIdException, NoSuchWindowException
+from urllib3.exceptions import ReadTimeoutError, MaxRetryError
 
 from automation.reposting import _open_prelogged_facebook
 from automation.runtime_paths import data_dir
@@ -25,6 +29,7 @@ import requests
 
 
 SELLING_URL = "https://www.facebook.com/marketplace/you/selling"
+AVAILABLE_SELLING_URL = SELLING_URL + '?state=LIVE&status[0]=IN_STOCK'
 IMPORT_DIR = data_dir("delete_listings")
 _active_import_drivers_lock = threading.Lock()
 _active_import_drivers = {}
@@ -89,6 +94,10 @@ class _ImportStopSignal(BaseException):
     """Escape browser retry handlers that catch Exception, like CancelledError."""
 
 
+class _ImportBrowserLost(BaseException):
+    """Stop immediately rather than retrying commands on a dead browser."""
+
+
 class _ListingReadTimedOut(BaseException):
     """Escape nested retry loops so one listing cannot consume the whole import."""
 
@@ -118,7 +127,12 @@ def _guard_import_driver(driver, stop_event):
     def execute(command, params=None):
         if command not in {'quit', 'close'} and stop_event.is_set():
             raise _ImportStopSignal()
-        return original(command, params)
+        try:
+            return original(command, params)
+        except (InvalidSessionIdException, NoSuchWindowException, ReadTimeoutError, MaxRetryError) as exc:
+            if command in {'quit', 'close'}:
+                raise
+            raise _ImportBrowserLost(str(exc)) from exc
 
     driver.execute = execute
 
@@ -274,6 +288,11 @@ def _listing_from_candidate(candidate):
         words = match.group(2).strip().split()
         make = words[0] if words else ""
         model = " ".join(words[1:]).strip()
+        for compound_make in ('Land Rover', 'Alfa Romeo', 'Aston Martin', 'Rolls Royce', 'Mercedes Benz'):
+            if ' '.join(words).casefold().startswith(compound_make.casefold() + ' '):
+                make = ' '.join(words[:2])
+                model = ' '.join(words[2:]).strip()
+                break
     else:
         year, make, model = "", "", title or combined
     if not (year or make or model or href):
@@ -564,6 +583,92 @@ def _click_manage_listings(driver, settle_seconds=5):
 
 
 @cancellable
+def _set_available_filter(driver):
+    """Use semantic labels; Facebook varies between 'and' and '&'."""
+    lower = "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'"
+    available = (
+        f"//*[@role='radio' and contains(translate(@aria-label,{lower}),'available')]",
+        f"//span[contains(translate(normalize-space(.),{lower}),'available')]/ancestor::*[@role='radio'][1]",
+        f"//*[@role='radio' and contains(translate(normalize-space(.),{lower}),'available')]",
+    )
+
+    def choices(current):
+        for xpath in available:
+            yield from current.find_elements(By.XPATH, xpath)
+
+    def choose(current):
+        return next((item for item in choices(current) if item.is_displayed()), False)
+
+    try:
+        if not choose(driver):
+            # Filters is a heading in the supplied layout. Status is the button
+            # that actually reveals the radio options; its aria-label is empty.
+            openers = (
+                f"//*[@role='button' and translate(normalize-space(@aria-label),{lower})='status']",
+                f"//span[translate(normalize-space(.),{lower})='status']/ancestor::*[@role='button'][1]",
+                f"//*[@role='button' and translate(normalize-space(@aria-label),{lower})='filters']",
+                f"//span[translate(normalize-space(.),{lower})='filters']/ancestor::*[@role='button'][1]",
+            )
+            def open_options(current):
+                if choose(current):
+                    return True
+                for index, xpath in enumerate(openers):
+                    control = next((item for item in current.find_elements(By.XPATH, xpath)
+                                    if item.is_displayed() and item.is_enabled()), None)
+                    if control is not None and control.get_attribute('aria-expanded') != 'true':
+                        print('[Import] Opening the Status filter.', flush=True)
+                        control.click()
+                        # An expandable Filters panel may reveal Status first.
+                        return index < 2
+                return False
+            WebDriverWait(driver, 30).until(open_options)
+        radio = WebDriverWait(driver, 30).until(choose)
+        if not radio:
+            return False
+        if radio.get_attribute('aria-checked') != 'true':
+            print('[Import] Selecting Available in the Selling page filters.', flush=True)
+            radio.click()
+        # Facebook can close the menu after selecting a radio. The checked
+        # option may be hidden while still confirming the selected status.
+        def selected(current):
+            return any(item.get_attribute('aria-checked') == 'true' for item in choices(current))
+        WebDriverWait(driver, 30).until(selected)
+        # Check real DOM state as well, so an unsuccessful click cannot select this mode.
+        if not selected(driver):
+            return False
+        print('[Import] Available filter selected. Waiting 5 seconds for listings.', flush=True)
+        time.sleep(5)
+        return True
+    except Exception as exc:
+        print(f'[Import] Could not set the Available filter: {type(exc).__name__}.', flush=True)
+        return False
+
+
+def _open_available_url(driver):
+    print('[Import] Opening the Available listings URL. Waiting for listings to load.', flush=True)
+    try:
+        driver.get(AVAILABLE_SELLING_URL)
+
+        def ready(current):
+            url = urlsplit(str(current.current_url or ''))
+            query = parse_qs(url.query)
+            if url.path.rstrip('/') != '/marketplace/you/selling' or query.get('status[0]') != ['IN_STOCK']:
+                return False
+            if _extract_visible_listing_candidates(current, include_image_lookup=False):
+                return True
+            return current.execute_script("return /(?:you haven.t listed anything|you have no listings|no listings yet|no listings found|no results found)/i.test(document.querySelector('[role=main]')?.innerText || '');") is True
+
+        WebDriverWait(driver, 30).until(ready)
+        if not ready(driver):
+            return False
+        print('[Import] Available listings page is ready. Reading listings without Manage Listings.', flush=True)
+        return True
+    except Exception as exc:
+        print(f'[Import] Available listings URL did not load: {type(exc).__name__}.', flush=True)
+        return False
+
+
+@traced('IMPORT')
 def import_listings_from_facebook(account, stop_event=None, progress_callback=None, replace_existing=False, only_new=False, use_visual_reader=None):
     """Merge live listings into saved backups; never discard absent listings."""
     if not account:
@@ -590,6 +695,9 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
             # identical vehicle titles without a Facebook item URL.
             key += ':' + str(item['id'])
         by_key[key] = item
+    processed_ids = set()
+    skipped_sold = set()
+    seen_cards = set()
     visible_keys = set()
     visible_ids = set()
     original_ids = {str(record['id']) for record in by_key.values()}
@@ -599,17 +707,20 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
     # metric is the card-local value; never let a later duplicate overwrite it.
     clicks_confirmed_this_import = set()
     driver = None
+    listing_number = 0
 
     def register_driver(opened):
         nonlocal driver
         driver = opened
         _guard_import_driver(opened, stop_event)
         opened.set_page_load_timeout(30)
-        opened.set_script_timeout(15)
+        opened.set_script_timeout(30)
         # Bound a hung ChromeDriver HTTP call as well as our polling loops.
         client_config = getattr(opened.command_executor, '_client_config', None)
         if client_config is not None:
-            client_config.timeout = 15
+            # Let the browser's 30-second page timeout finish before the HTTP
+            # connection times out. A shorter HTTP timeout strands the session.
+            client_config.timeout = 60
         with _active_import_drivers_lock:
             _active_import_drivers[account] = opened
         if stop_event.is_set():
@@ -628,16 +739,54 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
         WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
         )
-        _click_manage_listings(driver)
+        filtered = _set_available_filter(driver)
+        via_url = False
+        if not filtered:
+            filtered = _open_available_url(driver)
+            via_url = filtered
+        filter_ready = filtered
+        if filtered:
+            method_name = 'Direct Available URL' if via_url else 'Available filter on Selling page'
+            print(f'[Import] Listing extraction method: {method_name}.', flush=True)
+            print('[Import] Reading available listings directly from Selling.', flush=True)
+        else:
+            print('[Import] Listing extraction method: Manage Listings (skip sold listings).', flush=True)
+            print('[Import] Filter and URL methods failed. Using Manage Listings and skipping sold listings.', flush=True)
+            driver.get(SELLING_URL)
+            _click_manage_listings(driver)
+
+        def return_to_selling(current):
+            nonlocal filter_ready, via_url
+            filter_ready = False
+            if via_url:
+                filter_ready = _open_available_url(current)
+            else:
+                current.get(SELLING_URL)
+                filter_ready = _set_available_filter(current)
+                if not filter_ready:
+                    filter_ready = _open_available_url(current)
+                    via_url = filter_ready
+                    if via_url:
+                        print('[Import] Listing extraction method changed to: Direct Available URL.', flush=True)
+            if not filter_ready:
+                raise RuntimeError('The Available filter could not be restored. Saved listings were kept; restart Import.')
 
         idle_rounds = 0
+        no_new_rounds = 0
         previous_height = 0
-        while not stop_event.is_set() and idle_rounds < 4:
+        previous_position = -1
+        while not stop_event.is_set() and idle_rounds < 4 and no_new_rounds < 4:
             new_count = 0
+            opened_listing = False
             candidates = _extract_visible_listing_candidates(driver)
+            scan_keys = {(_record_key(record), '' if filtered else record.get('listing_status', ''))
+                         for candidate in candidates
+                         if (record := _listing_from_candidate(candidate)) is not None}
+            found_new_cards = bool(scan_keys - seen_cards)
+            seen_cards.update(scan_keys)
             # Full rows carry status badges; nested links may omit them. Inspect
             # all candidates first so an unlabelled duplicate cannot import sold.
-            for candidate in candidates:
+            for candidate in ([] if filtered else candidates):
                 if _candidate_listing_status(candidate) != 'sold':
                     continue
                 sold_record = _listing_from_candidate(candidate)
@@ -678,8 +827,14 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                 else:
                     record.pop("clicks_checked_at", None)
                 facebook_id = _extract_listing_id(record.get('url') or '')
-                if record.get('listing_status') == 'sold' or (facebook_id and facebook_id in sold_facebook_ids):
+                if not filtered and (record.get('listing_status') == 'sold' or (facebook_id and facebook_id in sold_facebook_ids)):
+                    sold_key = _record_key(record)
+                    if sold_key not in skipped_sold:
+                        print(f"[Import] Skipping sold listing: {record.get('year', '')} {record.get('make', '')} {record.get('model', '')}", flush=True)
+                        skipped_sold.add(sold_key)
                     continue
+                if filtered:
+                    record['listing_status'] = 'available'
                 key = _matching_record_key(by_key, record)
                 visible_keys.add(key)
                 if key not in by_key:
@@ -743,6 +898,85 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                             flush=True,
                         )
                 visible_ids.add(str(by_key[key]['id']))
+                record = by_key[key]
+                if str(record['id']) in processed_ids:
+                    continue
+                processed_ids.add(str(record['id']))
+                listing_name = ' '.join(str(record.get(field) or '') for field in ('year', 'make', 'model')).strip()
+                if only_new and record.get('details') and record.get('downloaded_images') and not record.get('detail_error') and not record.get('image_errors') and all(os.path.isfile(photo['path']) for photo in record['downloaded_images']):
+                    continue
+                listing_number += 1
+                method_name = ('Direct Available URL' if via_url else 'Available filter on Selling page') if filtered else 'Manage Listings'
+                print(f'[Import] Listing {listing_number}: extracting with {method_name}.', flush=True)
+                print(f"[Import] Listing {listing_number}: clicking {listing_name} (not sold).", flush=True)
+                save_listings(account, list(by_key.values()))
+                scan_y = driver.execute_script('return window.scrollY;') or 0
+                if progress_callback:
+                    progress_callback({'total_count': len(by_key), 'message': f'Reading full details and photos {len(processed_ids)}/{len(by_key)}...'})
+                try:
+                    visual = True if use_visual_reader is None else use_visual_reader
+                    with _listing_read_deadline(driver):
+                        if visual:
+                            from automation.visual_listing_reader import read_import_fallback_page
+                            result = read_listing_from_manage(account, record, driver=driver, visual_fallback=read_import_fallback_page, listing_card=candidate.get('element'), return_to_inventory=return_to_selling if filtered else None)
+                        else:
+                            result = read_listing_from_manage(account, record, driver=driver, listing_card=candidate.get('element'), return_to_inventory=return_to_selling if filtered else None)
+                    details = result['posts'][0]
+                    from automation.listing_videos import download as download_videos
+                    videos, video_errors = download_videos(driver, account, record['id'],
+                        details.get('video_urls') or [], IMPORT_DIR, stop_event)
+                    # Preserve usable backups if Facebook no longer exposes a source.
+                    previous = [video for video in record.get('downloaded_videos', [])
+                                if video.get('path') and os.path.isfile(video['path'])]
+                    record['downloaded_videos'] = videos or previous
+                    record['video_errors'] = (details.get('video_errors') or []) + video_errors
+                    print(f"[Import] Listing {listing_number}: downloading photos.", flush=True)
+                    photos, errors = download_listing_images(driver, account, record['id'], details.get('image_urls') or [], stop_event)
+                    if (errors or not photos) and record.get('downloaded_images'):
+                        # A transient download error must not erase an existing backup.
+                        raise RuntimeError('Photo refresh failed; previously saved details and photos were kept.')
+                    record.update(details=details, downloaded_images=photos, edit_url=result.get('edit_url'),
+                                  details_imported_at=datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                                  detail_error='', image_errors=errors)
+                    if not photos:
+                        record['detail_error'] = 'No photos downloaded; re-import before reposting.'
+                    from automation.reposting import REPOST_REQUIRED_FIELDS
+                    missing_fields = [key for key in REPOST_REQUIRED_FIELDS if not str(details.get(key) or '').strip()]
+                    uncertain_fields = [key for key, state in (details.get('field_states') or {}).items()
+                                        if state in {'unreadable', 'conflict', 'needs_review'}]
+                    diagnostic_event('IMPORT_LISTING', 'REVIEW' if missing_fields or uncertain_fields or errors or not photos else 'SAVED',
+                        account=account, listing_id=record['id'], title=details.get('title', listing_name),
+                        missing_fields=missing_fields, uncertain_fields=uncertain_fields,
+                        photo_sources=len(details.get('image_urls') or []), photos_saved=len(photos), photo_errors=errors,
+                        videos_saved=len(record.get('downloaded_videos') or []), video_issues=record.get('video_errors') or [])
+
+                except Exception as exc:
+                    if stop_event.is_set():
+                        raise ListingImportCancelled() from exc
+                    record['detail_error'] = str(exc)
+                    diagnostic_event('IMPORT_LISTING', 'FAILED', account=account, listing_id=record['id'], error=str(exc))
+                    print(f"[Import] Listing {listing_number}: could not finish taking details: {exc}. Keeping the backup and moving to the next listing.", flush=True)
+                    if stop_event.wait(2):
+                        raise ListingImportCancelled()
+                if stop_event.is_set():
+                    raise ListingImportCancelled()
+                if filtered and not filter_ready:
+                    raise RuntimeError('The Available filter could not be restored. Saved listings were kept; restart Import.')
+                save_listings(account, list(by_key.values()))
+                if not record.get('detail_error'):
+                    from automation.reposting import REPOST_REQUIRED_FIELDS
+                    missing = [field.replace('_', ' ') for field in REPOST_REQUIRED_FIELDS
+                               if not str(details.get(field) or '').strip()]
+                    if missing or details.get('visual_read_requires_review') or errors:
+                        message = 'Please check: ' + ', '.join(missing) if missing else 'Please review the saved details and photos.'
+                        print(f"[Import] Listing {listing_number}: details saved. {message}", flush=True)
+                    else:
+                        print(f"[Import] Listing {listing_number}: successfully took all details and saved {len(photos)} photos.", flush=True)
+                print('[Import] Moving to the next listing.', flush=True)
+                driver.execute_script('window.scrollTo(0, arguments[0]);', scan_y)
+                time.sleep(1)  # Let the restored inventory viewport render.
+                opened_listing = True
+                break  # Re-scan fresh elements after returning from the editor.
             if new_count:
                 save_listings(account, list(by_key.values()))
             if progress_callback:
@@ -753,58 +987,29 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                     "message": f"Found {len(by_key)} listings...",
                 })
 
+            if opened_listing:
+                idle_rounds = 0
+                no_new_rounds = 0
+                continue
+
+            no_new_rounds = 0 if found_new_cards or previous_height == 0 else no_new_rounds + 1
+
             try:
+                print('[ListingImport] Current listings processed; scrolling for more.', flush=True)
                 height = int(driver.execute_script(
                     "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);"
                 ) or 0)
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                position = int(driver.execute_script('return window.scrollY;') or 0)
+                driver.execute_script('window.scrollBy(0, Math.max(500, window.innerHeight * 0.8));')
             except Exception as exc:
                 raise RuntimeError('Listing scan could not finish; missing-listing statuses were not changed.') from exc
             time.sleep(1)
-            idle_rounds = idle_rounds + 1 if height <= previous_height else 0
+            idle_rounds = idle_rounds + 1 if height <= previous_height and position <= previous_position else 0
             previous_height = height
+            previous_position = position
 
         if stop_event.is_set():
             raise ListingImportCancelled()
-        # Collect cards first so opening edit pages cannot disrupt scroll discovery.
-        for index, record in enumerate(by_key.values(), 1):
-            if stop_event.is_set():
-                raise ListingImportCancelled()
-            if str(record['id']) not in visible_ids or record.get('source_deleted') or record.get('listing_status') == 'sold':
-                continue
-            if only_new and record.get('details') and record.get('downloaded_images') and not record.get('detail_error') and not record.get('image_errors') and all(os.path.isfile(photo['path']) for photo in record['downloaded_images']):
-                continue
-            if progress_callback:
-                progress_callback({'total_count': len(by_key), 'message': f'Reading full details and photos {index}/{len(by_key)}...'})
-            try:
-                import sys
-                visual = True if use_visual_reader is None else use_visual_reader
-                with _listing_read_deadline(driver):
-                    if visual:
-                        from automation.visual_listing_reader import read_import_fallback_page
-                        result = read_listing_from_manage(account, record, driver=driver, visual_fallback=read_import_fallback_page)
-                    else:
-                        result = read_listing_from_manage(account, record, driver=driver)
-                details = result['posts'][0]
-                photos, errors = download_listing_images(driver, account, record['id'], details.get('image_urls') or [], stop_event)
-                if (errors or not photos) and record.get('downloaded_images'):
-                    # A transient download error must not erase an existing backup.
-                    raise RuntimeError('Photo refresh failed; previously saved details and photos were kept.')
-                record.update(details=details, downloaded_images=photos, edit_url=result.get('edit_url'),
-                              details_imported_at=datetime.now(timezone.utc).isoformat(timespec='seconds'),
-                              detail_error='', image_errors=errors)
-                if not photos:
-                    record['detail_error'] = 'No photos downloaded; re-import before reposting.'
-            except Exception as exc:
-                if stop_event.is_set():
-                    raise ListingImportCancelled() from exc
-                record['detail_error'] = str(exc)
-                print(f"[ListingImport] Could not read listing {record['id']}: {exc}. Keeping saved backup and continuing to the next listing.", flush=True)
-                if stop_event.wait(2):
-                    raise ListingImportCancelled()
-            if stop_event.is_set():
-                raise ListingImportCancelled()
-            save_listings(account, list(by_key.values()))
         # Absence is meaningful only after a successful complete inventory scan.
         current_url = str(driver.current_url or '')
         if any(part in current_url for part in ('/login', '/checkpoint', '/recover')):
@@ -812,7 +1017,7 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
         confirmed_empty = False
         if not visible_ids:
             confirmed_empty = driver.execute_script("return /(?:you haven.t listed anything|you have no listings|no listings yet|no listings found)/i.test(document.querySelector('[role=main]')?.innerText || '');") is True
-        if visible_ids or confirmed_empty:
+        if (visible_ids or confirmed_empty) and not filtered and (idle_rounds >= 4 or confirmed_empty):
             checked_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
             for record in by_key.values():
                 present = str(record['id']) in visible_ids
@@ -824,9 +1029,13 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
         if stop_event.is_set():
             raise ListingImportCancelled()
         save_listings(account, list(by_key.values()))
+        print(f'[Import] Finished. Processed {listing_number} listings. Sold listings were skipped.', flush=True)
         return list(by_key.values())
     except _ImportStopSignal:
         raise ListingImportCancelled() from None
+    except _ImportBrowserLost as exc:
+        print('[Import] Chrome stopped responding or closed. Import stopped; saved listings were kept. Start Import again to open a fresh browser.', flush=True)
+        raise RuntimeError('Chrome stopped responding or closed. Saved listings were kept. Start Import again to open a fresh browser.') from exc
     finally:
         with _active_import_drivers_lock:
             if _active_import_drivers.get(account) is driver:

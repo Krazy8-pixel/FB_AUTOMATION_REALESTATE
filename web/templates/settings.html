@@ -7,11 +7,11 @@
   <div class="settings-heading hub-heading"><div><span class="settings-eyebrow">WORKSPACE PREFERENCES</span><h1>Settings</h1><p>Everything you need to keep your workspace organized.</p></div><span class="hub-heading-icon">{{ icon('storage') }}</span></div>
   <div class="hub-sections">
   {% for heading, subtitle, tools in [
-    ('Accounts & groups', 'Set up who you post as and where you share.', [('Accounts','account_page','Manage Facebook accounts and saved logins.','account'),('Groups','groups_page','Import, add, and organize your Facebook groups.','groups')]),
-    ('Posting & activity', 'Plan your next posts and follow your progress.', [('Group Posting','posting_in_groups_page','Create a post for several groups.','post'),('Scheduled Posts','post_schedular','Review your queue and upcoming posting times.','calendar'),('Activity Log','activity_log_page','Check recent actions and their results.','log')])
+    ('Accounts', 'Manage who you post as.', [('Accounts','account_page','Manage Facebook accounts and saved logins.','account'),('Groups','groups_page','Import, add, and organize your Facebook groups.','groups')]),
+    ('Posting & activity', 'Plan your next posts and follow your progress.', [('Group Posting','posting_in_groups_page','Create a post for several groups.','post'),('Posting Results','post_schedular','Review your queue and upcoming posting times.','calendar'),('Activity Log','activity_log_page','Check recent actions and their results.','log'),('Live Terminal','terminal_page','View live application output, progress, and errors.','log')])
   ] %}
     <section class="hub-section" aria-labelledby="section-{{ loop.index }}"><div class="hub-section-head"><h2 id="section-{{ loop.index }}">{{ heading }}</h2><p>{{ subtitle }}</p></div><div class="hub-tool-list">
-      {% for title, endpoint, description, symbol in tools %}<a class="settings-card" href="{{ url_for('web.' ~ endpoint) }}"><span class="settings-card-icon">{{ icon(symbol) }}</span><span class="settings-card-copy"><strong>{{ title }}</strong><span>{{ description }}</span></span><span class="settings-arrow" aria-hidden="true">&rsaquo;</span></a>{% endfor %}
+      {% for title, endpoint, description, symbol in tools if group_ui_enabled or endpoint not in ['groups_page', 'posting_in_groups_page'] %}<a class="settings-card" href="{{ url_for('web.' ~ endpoint) }}"><span class="settings-card-icon">{{ icon(symbol) }}</span><span class="settings-card-copy"><strong>{{ title }}</strong><span>{{ description }}</span></span><span class="settings-arrow" aria-hidden="true">&rsaquo;</span></a>{% endfor %}
     </div></section>
   {% endfor %}
   </div>
@@ -20,18 +20,22 @@
     <form method="post" action="{{ url_for('web.desktop_preferences_save') }}" class="desktop-preferences">
       <label><input type="checkbox" name="background_sync" value="1" {% if desktop_preferences.background_sync %}checked{% endif %}><span><strong>Keep listings and clicks up to date</strong><small>Missed checks run once after your PC wakes. Background sync waits for your posting work.</small></span></label>
       <label><input type="checkbox" name="start_with_windows" value="1" {% if desktop_preferences.start_with_windows %}checked{% endif %}><span><strong>Start with Windows</strong><small>The desktop app starts quietly in the system tray when you sign in.</small></span></label>
-      <label><input type="checkbox" name="automatic_updates" value="1" {% if desktop_preferences.automatic_updates %}checked{% endif %}><span><strong>Update the app automatically</strong><small>Checks on startup and every 6 hours. Downloads, installs and restarts when automation is idle. Updates that clear saved listings need your confirmation.</small></span></label>
       <p>Closing the desktop window keeps sync running. Use the tray menu's Exit App to stop it. Your PC can sleep normally.</p>
       <button type="submit">Save preferences</button>
       {% if not desktop_mode %}<p class="settings-caption">Tray mode and Windows startup take effect in the installed desktop edition.</p>{% endif %}
     </form>
   </section>
-  <section class="hub-section desktop-panel" aria-labelledby="updates-title"><div class="hub-section-head"><h2 id="updates-title">App updates <span class="update-version">Version {{ app_version }}</span></h2><p>The installed app can update automatically while idle. You can also check and install updates here.</p></div>
-    <p id="update-message" role="status" aria-live="polite">Updates preserve saved accounts, groups, listings, and media unless a release explicitly resets listings.</p>
-    <p id="update-reset-notice" hidden>A database reset is included in this release. Saved listings will be cleared; accounts and groups are kept.</p>
+  <section class="hub-section desktop-panel" aria-labelledby="updates-title"><div class="hub-section-head"><h2 id="updates-title">App updates <span class="update-version">Version {{ app_version }}</span></h2><p>Check for updates and choose when to download and install them here.</p></div>
+    <p id="update-message" role="status" aria-live="polite">Updates preserve saved accounts, listings, and media unless a release explicitly resets listings.</p>
+    <progress id="update-progress" max="100" hidden aria-label="Update download progress" style="width:100%;height:18px;margin-bottom:16px"></progress>
+    <p id="update-reset-notice" hidden>A database reset is included in this release. Saved listings will be cleared; accounts are kept.</p>
     <div class="guide-actions"><button type="button" id="update-check">Check for Updates</button><button type="button" id="update-install" hidden>Download &amp; Install</button></div>
   </section>
   <a class="hub-help" href="{{ url_for('web.info_page') }}"><span class="settings-card-icon">{{ icon('help') }}</span><span><strong>Need a hand?</strong><span>Open Help &amp; Instructions for simple guides to every feature.</span></span><span class="hub-help-action">View guide <span aria-hidden="true">&rarr;</span></span></a>
+  <section class="settings-diagnostics" aria-labelledby="diagnostics-heading">
+    <div class="diagnostics-copy"><span class="settings-card-icon">{{ icon('log') }}</span><div><h2 id="diagnostics-heading">Diagnostic report</h2><p>Download recent logs to help review listing imports and posting results.</p><span class="diagnostics-caption">Text file &middot; May include account names and listing details</span></div></div>
+    <a class="diagnostics-download" href="{{ url_for('web.diagnostics_download') }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5"/></svg>Download report</a>
+  </section>
 </main>
 {% endblock %}
 
@@ -39,8 +43,9 @@
 <script>
 (function(){
   const message=document.getElementById('update-message'), check=document.getElementById('update-check'), install=document.getElementById('update-install'), reset=document.getElementById('update-reset-notice');
+  const progress=document.getElementById('update-progress');
   let timer;
-  function show(data){message.textContent=data.message;check.disabled=['checking','downloading','installing'].includes(data.state);install.hidden=!data.available;reset.hidden=!data.resets_listings;install.disabled=check.disabled;clearTimeout(timer);timer=setTimeout(poll,check.disabled?1500:10000);}
+  function show(data){message.textContent=data.message;check.disabled=['checking','downloading','verifying','installing'].includes(data.state);install.hidden=!data.available;reset.hidden=!data.resets_listings;install.disabled=check.disabled;progress.hidden=data.state!=='downloading';if(data.download_percent==null){progress.removeAttribute('value');}else{progress.value=data.download_percent;}clearTimeout(timer);timer=setTimeout(poll,check.disabled?1000:10000);}
   async function poll(){try{const response=await fetch('{{ url_for("web.desktop_update_status") }}');show(await response.json());}catch(error){message.textContent='The app is restarting. Please wait.';}}
   async function action(url){check.disabled=true;try{const response=await fetch(url,{method:'POST'});const data=await response.json();if(!response.ok){message.textContent=data.message;check.disabled=false;return;}show(data);}catch(error){message.textContent='Could not contact the app. Try again.';check.disabled=false;}}
   check.addEventListener('click',()=>action('{{ url_for("web.desktop_update_check") }}'));

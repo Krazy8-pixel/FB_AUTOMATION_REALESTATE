@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,121 +9,64 @@ from unittest.mock import MagicMock, patch
 from automation import app_updates, desktop_preferences
 
 
-class AutomaticUpdateTests(unittest.TestCase):
-    def setUp(self):
-        self.folder = tempfile.TemporaryDirectory()
-        self.addCleanup(self.folder.cleanup)
-        self.root = Path(self.folder.name)
-        self.original_install = app_updates.install
-        self.install = MagicMock()
-        self.check = MagicMock()
-        self.preferences = {'automatic_updates': True}
-        patches = [
-            patch.object(app_updates.sys, 'frozen', True, create=True),
-            patch.object(app_updates, 'exit_callback', MagicMock()),
-            patch.object(app_updates, '_status', {'state': 'idle'}),
-            patch.object(app_updates, '_ready', None),
-            patch.object(app_updates, '_last_check_attempt', None),
-            patch.object(app_updates, '_last_install_attempt', None),
-            patch.object(app_updates, 'data_dir', return_value=self.root),
-            patch.object(app_updates, '_automation_busy', return_value=False),
-            patch.object(app_updates, 'check', self.check),
-            patch.object(app_updates, 'install', self.install),
-            patch.object(desktop_preferences, 'load', return_value=self.preferences),
-        ]
-        for item in patches:
-            item.start()
-            self.addCleanup(item.stop)
+class ManualUpdateTests(unittest.TestCase):
+    def test_download_reports_each_chunk_and_total_size(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {'Content-Length': '6'}
+        response.iter_content.return_value = [b'abc', b'', b'def']
+        reports = []
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(app_updates, 'fetch', return_value=response), \
+             patch.object(app_updates, 'set_status', side_effect=lambda **values: reports.append(values)):
+            package = Path(folder) / 'update.zip'
+            digest = app_updates.download_package('url', package)
+            self.assertEqual(package.read_bytes(), b'abcdef')
+        self.assertEqual(digest, hashlib.sha256(b'abcdef').hexdigest())
+        self.assertEqual([item['downloaded_bytes'] for item in reports], [0, 3, 6])
+        self.assertEqual(reports[1]['download_percent'], 50)
+        self.assertEqual(reports[-1]['download_percent'], 100)
+        self.assertEqual(reports[-1]['total_bytes'], 6)
 
-    def available(self, reset=False):
-        app_updates._status.update(state='available', available=True)
-        app_updates._ready = ({'version': '2.0.0', 'reset_databases': ['listings'] if reset else []}, b'', b'', 'url')
+    def test_unknown_size_keeps_showing_downloaded_bytes(self):
+        with patch.object(app_updates, 'set_status') as report:
+            app_updates.download_progress(2_500_000)
+        values = report.call_args.kwargs
+        self.assertIsNone(values['download_percent'])
+        self.assertIn('2.5 MB', values['message'])
 
-    def test_startup_checks_and_respects_six_hour_interval(self):
-        app_updates.automatic_tick()
-        self.check.assert_called_once()
-        self.check.reset_mock()
-        app_updates._status['state'] = 'current'
-        with patch.object(app_updates.time, 'monotonic', return_value=100):
-            app_updates._last_check_attempt = 99
-            app_updates.automatic_tick()
-        self.check.assert_not_called()
-        with patch.object(app_updates.time, 'monotonic', return_value=100 + app_updates.CHECK_INTERVAL):
-            app_updates.automatic_tick()
-        self.check.assert_called_once()
+    def test_incomplete_download_is_rejected(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {'Content-Length': '6'}
+        response.iter_content.return_value = [b'abc']
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(app_updates, 'fetch', return_value=response), \
+             patch.object(app_updates, 'set_status'):
+            with self.assertRaisesRegex(ValueError, 'incomplete'):
+                app_updates.download_package('url', Path(folder) / 'update.zip')
 
-    def test_network_errors_retry_after_fifteen_minutes(self):
-        app_updates._status['state'] = 'error'
-        app_updates._last_check_attempt = 100
-        with patch.object(app_updates.time, 'monotonic', return_value=999):
-            app_updates.automatic_tick()
-        self.check.assert_not_called()
-        with patch.object(app_updates.time, 'monotonic', return_value=1000):
-            app_updates.automatic_tick()
-        self.check.assert_called_once()
-
-    def test_disabled_and_source_mode_do_not_update(self):
-        self.preferences['automatic_updates'] = False
-        app_updates.automatic_tick()
-        self.preferences['automatic_updates'] = True
-        with patch.object(app_updates.sys, 'frozen', False):
-            app_updates.automatic_tick()
-        self.check.assert_not_called()
-        self.install.assert_not_called()
-
-    def test_update_waits_for_automation_then_installs(self):
-        self.available()
-        with patch.object(app_updates, '_automation_busy', return_value=True):
-            app_updates.automatic_tick()
-        self.install.assert_not_called()
-        self.assertIn('automation finishes', app_updates._status['message'])
-        app_updates.automatic_tick()
-        self.install.assert_called_once_with(automatic=True)
-
-    def test_reset_releases_need_manual_confirmation(self):
-        self.available(reset=True)
-        app_updates.automatic_tick()
-        self.install.assert_not_called()
-        self.assertIn('Settings', app_updates._status['message'])
-
-    def test_failed_install_has_retry_backoff(self):
-        self.available()
-        self.install.side_effect = ValueError('Busy')
-        app_updates.automatic_tick()
-        app_updates.automatic_tick()
-        self.install.assert_called_once()
-
-    def test_failed_startup_version_is_not_automatically_retried(self):
-        self.available()
-        (self.root / 'last-update.json').write_text(json.dumps({'version': '2.0.0', 'success': False}))
-        app_updates.automatic_tick()
-        self.install.assert_not_called()
-        self.assertIn('rolled back', app_updates._status['message'])
-
-    def test_download_and_install_are_not_started_twice(self):
-        self.available()
-        for state in ('checking', 'downloading', 'installing'):
-            app_updates._status['state'] = state
-            app_updates.automatic_tick()
-        self.install.assert_not_called()
-        self.check.assert_not_called()
-
-    def test_actual_install_rechecks_busy_state_before_pausing_scheduler(self):
-        self.available()
-        with patch.object(app_updates, '_automation_busy', return_value=True), \
-             patch.dict('sys.modules', {'web': SimpleNamespace(routes=MagicMock())}):
+    def test_manual_install_requires_idle_automation(self):
+        routes = MagicMock()
+        with patch.object(app_updates, '_ready', ({'version': '2.0.0'}, b'', b'', 'url')), \
+             patch.object(app_updates, '_status', {'state': 'available'}), \
+             patch.object(app_updates.sys, 'frozen', True, create=True), \
+             patch.object(app_updates, 'exit_callback', MagicMock()), \
+             patch.object(app_updates, '_automation_busy', return_value=True), \
+             patch.dict('sys.modules', {'web': SimpleNamespace(routes=routes)}):
             with self.assertRaisesRegex(ValueError, 'automation'):
-                # Call the implementation beneath the mock installed in setUp.
-                self.original_install(automatic=True)
+                app_updates.install()
+        routes.scheduler.pause.assert_not_called()
 
-
-class UpdatePreferenceTests(unittest.TestCase):
-    def test_existing_preferences_enable_automatic_updates_and_preserve_choices(self):
-        with tempfile.TemporaryDirectory() as folder, patch.object(desktop_preferences, 'data_dir', return_value=Path(folder)):
+    def test_old_automatic_update_preference_is_discarded(self):
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(desktop_preferences, 'data_dir', return_value=Path(folder)), \
+             patch.object(desktop_preferences.sys, 'frozen', False, create=True):
             path = Path(folder) / 'desktop_preferences.json'
-            path.write_text(json.dumps({'background_sync': False, 'start_with_windows': False}))
-            self.assertTrue(desktop_preferences.load()['automatic_updates'])
-            desktop_preferences.save(False, False, automatic_updates=False)
-            self.assertFalse(desktop_preferences.load()['automatic_updates'])
+            path.write_text(json.dumps({'background_sync': False, 'start_with_windows': False, 'automatic_updates': True}))
+            self.assertNotIn('automatic_updates', desktop_preferences.load())
             desktop_preferences.save(True, False)
-            self.assertFalse(desktop_preferences.load()['automatic_updates'])
+            saved = json.loads(path.read_text())
+            self.assertNotIn('automatic_updates', saved)
+            self.assertTrue(saved['background_sync'])
+            self.assertFalse(saved['start_with_windows'])

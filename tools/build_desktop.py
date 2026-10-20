@@ -21,6 +21,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--version', required=True)
     parser.add_argument('--reset-listings', action='store_true')
+    parser.add_argument('--fast', action='store_true', help='Use faster compression for local releases (larger downloads).')
+    parser.add_argument('--reuse-updater', action='store_true', help='Keep the existing updater binary for an app-only release.')
     args = parser.parse_args()
     os.chdir(ROOT)
     from packaging.version import Version
@@ -33,7 +35,11 @@ def main():
     (ROOT / 'build/uninstall').mkdir(parents=True, exist_ok=True)
     run(str(compiler), '/DGENERATE_UNINSTALLER', '/DAPP_VERSION=' + args.version, str(ROOT / 'packaging/installer.nsi'))
     run(str(ROOT / 'build/uninstall/MakeUninstaller.exe'), '/S')
-    run(sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile', '--noconsole', '--name', 'TayyaraUpdater', '--distpath', 'build/updater', '--workpath', 'build/updater-work', '--specpath', 'packaging', 'updater.py')
+    if args.reuse_updater:
+        if not (ROOT / 'build/updater/TayyaraUpdater.exe').is_file():
+            raise RuntimeError('No existing updater binary to reuse.')
+    else:
+        run(sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile', '--noconsole', '--name', 'TayyaraUpdater', '--distpath', 'build/updater', '--workpath', 'build/updater-work', '--specpath', 'packaging', 'updater.py')
     # PyInstaller can reuse the EXE when only the icon file contents change.
     # Rebuild its resource container while retaining the dependency cache.
     (ROOT / 'build/desktop/EXE-00.toc').unlink(missing_ok=True)
@@ -51,7 +57,8 @@ def main():
     release.mkdir(exist_ok=True)
     asset = f'FacebookMarketplaceAutomation-{args.version}.zip'
     package = release / asset
-    with zipfile.ZipFile(package, 'w', compression=zipfile.ZIP_LZMA) as archive:
+    compression = {'compression': zipfile.ZIP_DEFLATED, 'compresslevel': 1} if args.fast else {'compression': zipfile.ZIP_LZMA}
+    with zipfile.ZipFile(package, 'w', **compression) as archive:
         for path in (ROOT / 'dist/TayyaraMotors').rglob('*'):
             if path.is_file():
                 archive.write(path, path.relative_to(ROOT / 'dist/TayyaraMotors'))
@@ -63,7 +70,8 @@ def main():
     key = Ed25519PrivateKey.from_private_bytes((ROOT / '.release_keys/ed25519.key').read_bytes())
     (release / 'manifest.sig').write_bytes(key.sign(raw))
     compiler = next((ROOT / 'packaging/compiler').rglob('makensis.exe'))
-    run(str(compiler), '/DAPP_VERSION=' + args.version, str(ROOT / 'packaging/installer.nsi'))
+    options = ['/DFAST_BUILD'] if args.fast else []
+    run(str(compiler), *options, '/DAPP_VERSION=' + args.version, str(ROOT / 'packaging/installer.nsi'))
     print('Release files ready in', release)
 
 

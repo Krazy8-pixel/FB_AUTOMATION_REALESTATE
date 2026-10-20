@@ -308,7 +308,9 @@ def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=No
     missing = [field for field in EDIT_FIELDS if field not in fields and field not in OPTIONAL_COLOR_FIELDS]
     if missing:
         warnings.append('Fields not detected (may be absent from this form): ' + ', '.join(missing))
-    print(f'[ListingImport][OCR] Finished: {len(fields)}/{len(EDIT_FIELDS)} fields found; unreadable={", ".join(field for field in EDIT_FIELDS if field not in fields) or "none"}', flush=True)
+    readable = [field for field in EDIT_FIELDS if str(post.get(field) or '').strip()
+                and post['field_states'].get(field) in {'read', 'disabled'}]
+    print(f'[ListingImport][OCR] Finished: {len(readable)}/{len(EDIT_FIELDS)} vehicle fields read; empty or unverified={", ".join(field for field in EDIT_FIELDS if field not in readable) or "none"}', flush=True)
     usable = bool(post['price']) and bool(post.get('title') or any(post[field] for field in ('year', 'make', 'model')))
     if not usable:
         warnings.append('Listing price and vehicle identity were not recovered; this read failed.')

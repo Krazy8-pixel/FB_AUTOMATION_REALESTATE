@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Repost Status{% endblock %}
+{% block title %}Reposting Results{% endblock %}
 {% block extra_css %}
 <style>
   .repost-status-page { width:100%; box-sizing:border-box; padding:28px 32px; border:1px solid var(--app-grey-100); border-radius:0; background:#fff; }
@@ -36,7 +36,7 @@
 {% include '_active_tasks.html' %}
 <div class="repost-status-page">
   <div class="repost-status-head">
-    <div><h1>Repost Status</h1><p>Schedules, progress and results{% if active_account %} for {{ active_account }}{% endif %}.</p></div>
+    <div><h1>Reposting Results</h1><p>Schedules, progress and results{% if active_account %} for {{ active_account }}{% endif %}.</p></div>
     <div class="repost-count"><div><span id="repost-count">{{ repost_items|length }}</span> active</div><small><span id="repost-pending-count">{{ pending_count }}</span> scheduled &middot; <span id="repost-running-count">{{ running_count }}</span> running</small></div>
   </div>
   <div id="repost-empty" class="repost-empty{% if repost_items %} delete-hidden{% endif %}">No scheduled or running reposts. Open a saved listing to start a repost.</div>

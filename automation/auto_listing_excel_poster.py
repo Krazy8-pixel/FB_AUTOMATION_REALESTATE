@@ -1,3 +1,4 @@
+from automation.diagnostics import event as diagnostic_event, traced
 import base64
 from automation.task_control import cancellable, cancellable_sleep
 import builtins as _builtins
@@ -1056,6 +1057,7 @@ def _marketplace_publish_confirmed(driver):
 
 
 @cancellable
+@traced('POST')
 def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
     print("post_to_fb_marketplace : Starting Facebook Marketplace posting process...")
     indicator=False
@@ -1316,7 +1318,10 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
       debug_field_failure("Images", e)
     # Optional videos never block the required listing fields or publishing.
     from automation.video_upload import upload_optional_videos
-    upload_optional_videos(driver, data.get("video_paths", []), log=log)
+    video_submissions = upload_optional_videos(driver, data.get("video_paths", []), log=log)
+    diagnostic_event('POST_MEDIA', 'SUMMARY', account=account,
+                     photos_uploaded=successful_uploads,
+                     videos_requested=len(data.get('video_paths') or []), videos_submitted=video_submissions)
 
     # ======================================================
     # Step 6: Fill Post Details (step 1: vehicle type only)
@@ -1965,9 +1970,11 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             except Exception:
                 driver.execute_script("arguments[0].click();", publish_btn)
             print("Clicked Publish")
+            diagnostic_event("PUBLISH", "CLICKED", account=account, title=data.get("title"))
             if data.get('_require_publish_confirmation'):
                 try:
                     WebDriverWait(driver, 45).until(_marketplace_publish_confirmed)
+                    diagnostic_event("PUBLISH", "CONFIRMED_BY_UI", account=account, title=data.get("title"))
                 except Exception as exc:
                     raise RuntimeError(
                         'Publish was clicked, but Facebook did not confirm publication; '
@@ -1976,6 +1983,8 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             # Facebook frequently publishes without changing the create-page
             # URL or showing stable confirmation text. A completed Publish
             # click is therefore the success boundary for this flow.
+            if not data.get("_require_publish_confirmation"):
+                diagnostic_event("PUBLISH", "CLICK_ONLY_REVIEW_ON_FACEBOOK", account=account, title=data.get("title"))
             indicator = True
             debug_field_success("Publish", "listing marked as posted")
         except Exception as exc:

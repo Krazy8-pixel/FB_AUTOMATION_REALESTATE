@@ -10,24 +10,55 @@ from automation import listing_store
 
 
 class ListingRouteTests(unittest.TestCase):
-    def test_missing_mandatory_color_is_rejected_before_queuing(self):
-        response = self.client.post('/delete_listings/repost', json={
-            'listing_id': 'one', 'post_mode': 'now',
-            'fields': {'exterior_color': ''}, 'image_order': ['first.jpg', 'second.jpg']})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('exterior_color', response.get_json()['message'])
-        self.assertEqual(self.routes.repost_jobs, {})
+    def test_background_toggle_saves_without_redirecting(self):
+        with patch.object(self.routes, 'set_run_in_background_enabled') as save:
+            response = self.client.post('/set_background_mode', data={},
+                headers={'X-Requested-With': 'XMLHttpRequest',
+                         'Referer': 'http://localhost/delete_listings/import/stop'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {'ok': True, 'enabled': False})
+        save.assert_called_once_with(False)
 
-    def test_repost_form_requires_user_fields_but_vin_and_trim_are_optional(self):
+    def test_background_toggle_get_recovers_without_changing_setting(self):
+        with patch.object(self.routes, 'set_run_in_background_enabled') as save:
+            response = self.client.get('/set_background_mode')
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.location.endswith('/delete_listings'))
+        save.assert_not_called()
+
+    def test_listing_import_waits_for_group_import(self):
+        with patch.dict(self.routes.groups_jobs, {'test-account': {'running': True}}, clear=True):
+            ok, message = self.routes._start_listing_import_job('test-account')
+        self.assertFalse(ok)
+        self.assertIn('Group import', message)
+        self.assertNotIn('test-account', self.routes.listing_import_jobs)
+
+    def test_absent_optional_fields_are_valid_and_hidden(self):
+        from automation.reposting import validate_repost_fields
+        listing = listing_store.load('test-account')['listings'][0]
+        for field in ('exterior_color', 'interior_color', 'vin', 'trim'):
+            listing['details'][field] = ''
+            listing['details'].setdefault('field_states', {})[field] = 'unreadable'
+        validate_repost_fields(listing['details'])
+        listing_store.save('test-account', [listing])
+        html = self.client.get('/delete_listings/detail/one').data.decode()
+        for field in ('exterior_color', 'interior_color', 'vin', 'trim'):
+            self.assertNotIn('name="' + field + '"', html)
+        self.assertNotIn('<dt>Exterior Color</dt>', html)
+        self.assertNotIn('<dt>Interior Color</dt>', html)
+
+    def test_repost_form_requires_core_fields_and_shows_optional_colors(self):
         import re
         html = self.client.get('/delete_listings/detail/one').data.decode()
-        for field in ('exterior_color', 'interior_color', 'year', 'make', 'model', 'price',
-                      'body_style', 'fuel_type', 'vehicle_condition', 'description'):
+        for field in ('year', 'make', 'model', 'price', 'body_style',
+                      'fuel_type', 'vehicle_condition', 'description'):
             tag = re.search(r'<(?:input|select|textarea)\b[^>]*name="' + field + r'"[^>]*>', html).group()
             self.assertIn('required', tag)
-        for field in ('vin', 'trim'):
-            tag = re.search(r'<input\b[^>]*name="' + field + r'"[^>]*>', html).group()
+        for field in ('exterior_color', 'interior_color'):
+            tag = re.search(r'<select\b[^>]*name="' + field + r'"[^>]*>', html).group()
             self.assertNotIn('required', tag)
+        for field in ('vin', 'trim'):
+            self.assertNotIn('name="' + field + '"', html)
 
     def test_repost_payload_keeps_twenty_photos_vin_trim_and_colors(self):
         post = {'title': '2015 Lexus RC 350', 'price': '18500',
@@ -308,7 +339,7 @@ class ListingRouteTests(unittest.TestCase):
         self.assertEqual(self.client.get('/delete_listings/data').json['listings'][0]['display_status'], 'pending')
         response = self.client.get('/delete_listings')
         self.assertIn(b'listing-view-btn', response.data)
-        self.assertIn(b'Scheduled', response.data)
+        self.assertIn(b'Posting Results', response.data)
         self.assertNotIn(b'listing-repost-btn', response.data)
 
     def test_immediate_repost_is_queued_without_publishing_in_request(self):
@@ -551,8 +582,8 @@ class ListingRouteTests(unittest.TestCase):
         self.routes._record_repost_history('other-account', listing, 'failed', 'Private other account error')
         response = self.client.get('/reposting')
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Repost Status', response.data)
-        self.assertIn(b'Scheduled', response.data)
+        self.assertIn(b'Reposting Results', response.data)
+        self.assertIn(b'Posting Results', response.data)
         self.assertIn(b'Reposting', response.data)
         self.assertIn(b'Deleting original listing', response.data)
         self.assertIn(b'Body style: no matching option', response.data)
@@ -566,6 +597,64 @@ class ListingRouteTests(unittest.TestCase):
         self.client.post('/reposting_history/clear')
         self.assertEqual(self.client.get('/reposting_data').json['history'], [])
         self.assertEqual(len(listing_store.load('test-account')['listings']), 1)
+
+    def test_diagnostic_report_download_requires_login_and_is_attachment(self):
+        with patch('automation.terminal_log.export_text', return_value='[CHECK] IMPORT FINISHED'):
+            response = self.client.get('/settings/diagnostics/download')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('attachment', response.headers['Content-Disposition'])
+        self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        self.assertIn(b'IMPORT FINISHED', response.data)
+        with self.client.session_transaction() as session:
+            session.clear()
+        self.assertEqual(self.client.get('/settings/diagnostics/download').status_code, 302)
+
+    def add_saved_video(self):
+        video = self.root / 'clip.mp4'
+        video.write_bytes(b'original-video')
+        listing = listing_store.load('test-account')['listings'][0]
+        listing['downloaded_videos'] = [{'name': 'clip.mp4', 'path': str(video), 'mime_type': 'video/mp4'}]
+        listing_store.save('test-account', [listing])
+        return listing, video
+
+    def test_saved_video_player_and_account_scoped_range_delivery(self):
+        listing, video = self.add_saved_video()
+        page = self.client.get('/delete_listings/detail/one')
+        self.assertIn(b'<video class="ld-saved-video"', page.data)
+        response = self.client.get('/delete_listings/video/one/clip.mp4', headers={'Range': 'bytes=0-7'})
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.data, b'original')
+        response.close()
+        with patch.object(self.routes, 'get_active_account', return_value='other'):
+            self.assertEqual(self.client.get('/delete_listings/video/one/clip.mp4').status_code, 404)
+
+    def test_repost_passes_saved_video_and_skips_missing_optional_file(self):
+        listing, video = self.add_saved_video()
+        for exists in (True, False):
+            if not exists:
+                video.unlink()
+            with patch.object(self.routes, 'post_to_fb_marketplace', return_value=True) as poster, \
+                 patch.object(self.routes, 'delete_selected_listings_from_facebook', return_value={'deleted': 1}), \
+                 patch.object(self.routes, '_record_repost_history'), patch.object(self.routes, '_runtime_log'):
+                self.routes._run_saved_listing_repost(listing, 'test-account')
+            poster.assert_called_once()
+            self.assertEqual(poster.call_args.args[0]['video_paths'], [str(video)] if exists else [])
+
+    def test_cross_post_copies_video_backup_and_passes_upload_path(self):
+        listing, video = self.add_saved_video()
+        with patch.object(self.routes, 'get_all_accounts', return_value=['test-account', 'other']), \
+             patch.object(self.routes.scheduler, 'add_job'):
+            response = self.cross_request(['other'])
+            self.assertEqual(response.status_code, 200)
+            ids = response.json['job_ids']
+            with patch.object(self.routes, 'post_to_fb_marketplace', return_value=True) as poster:
+                self.routes._run_cross_post_batch(ids)
+            self.assertEqual(poster.call_args.args[0]['video_paths'], [str(video)])
+        target = listing_store.load('other')['listings'][0]
+        copied = target['downloaded_videos'][0]['path']
+        self.assertNotEqual(copied, str(video))
+        self.assertEqual(Path(copied).read_bytes(), b'original-video')
+        self.assertEqual(target['details']['video_paths'], [copied])
 
     def cross_request(self, targets=None, **extra):
         payload = {'account': 'test-account', 'listing_id': 'one',
@@ -595,7 +684,7 @@ class ListingRouteTests(unittest.TestCase):
             calls = []
             def publish(payload, account):
                 calls.append(account)
-                self.assertTrue(payload['_require_publish_confirmation'])
+                self.assertFalse(payload['_require_publish_confirmation'])
                 self.assertEqual(payload['price'], '250')
                 self.assertEqual(payload['description'], 'Cross description')
                 if account == 'other':

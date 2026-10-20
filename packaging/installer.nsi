@@ -4,11 +4,19 @@ Name "Facebook Marketplace Automation"
 !ifdef GENERATE_UNINSTALLER
 OutFile "..\build\uninstall\MakeUninstaller.exe"
 !else
+!ifdef SETUP_OUTFILE
+OutFile "${SETUP_OUTFILE}"
+!else
 OutFile "..\release\FacebookMarketplaceAutomation-Setup-${APP_VERSION}.exe"
+!endif
 !endif
 InstallDir "$LOCALAPPDATA\Programs\TayyaraMotors"
 RequestExecutionLevel user
+!ifdef FAST_BUILD
+SetCompressor /SOLID zlib
+!else
 SetCompressor /SOLID lzma
+!endif
 Icon "..\assets\app.ico"
 UninstallIcon "..\assets\app.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\TayyaraMotors.exe"
@@ -19,16 +27,6 @@ UninstallIcon "..\assets\app.ico"
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
-Function .onInit
-!ifndef GENERATE_UNINSTALLER
-  System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "Local\TayyaraMotorsDesktop") p .r0'
-  ${If} $0 != 0
-    System::Call 'kernel32::CloseHandle(p r0)'
-    MessageBox MB_OK "Please exit the app using its tray menu before installing."
-    Abort
-  ${EndIf}
-!endif
-FunctionEnd
 ; NSIS is 32-bit: inspect the machine's 32-bit registration and both user views.
 Function DetectWebViewRuntime
   StrCpy $1 ""
@@ -68,6 +66,8 @@ Section "Install"
   ${EndIf}
   Delete "$TEMP\TayyaraMotorsSetup\MicrosoftEdgeWebview2Setup.exe"
   RMDir "$TEMP\TayyaraMotorsSetup"
+  Call CloseApp
+  Call CheckAppWritable
   SetOutPath "$INSTDIR"
   File /r "..\dist\TayyaraMotors\*"
   CreateShortcut "$DESKTOP\Tayyara Motors.lnk" "$INSTDIR\TayyaraMotors.exe"
@@ -85,7 +85,9 @@ Section "Install"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TayyaraMotors" "NoRepair" 1
 !endif
 SectionEnd
-Function un.CloseApp
+!macro CloseAppFunction PREFIX
+Function ${PREFIX}CloseApp
+close_app_retry:
   ; Ask the tray instance to stop, rather than making users find its menu.
   System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "Local\TayyaraMotorsDesktop") p .r0'
   ${If} $0 != 0
@@ -105,11 +107,35 @@ Function un.CloseApp
     ${LoopUntil} $2 >= 60
     Delete "$LOCALAPPDATA\TayyaraMotors\data\exit-for-uninstall"
     ${If} $0 != 0
-      MessageBox MB_OK "The app could not close automatically. Exit it from the tray menu, then run uninstall again."
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Tayyara Motors is still running. Close it in Task Manager (TayyaraMotors.exe), then click Retry. No program files have been changed." /SD IDCANCEL IDRETRY close_app_retry
       Abort
     ${EndIf}
   ${EndIf}
 FunctionEnd
+!macroend
+!ifndef GENERATE_UNINSTALLER
+!insertmacro CloseAppFunction ""
+Function CheckAppWritable
+check_app_retry:
+  IfFileExists "$INSTDIR\TayyaraMotors.exe" 0 check_app_done
+  DetailPrint "Waiting for TayyaraMotors.exe to be released..."
+  StrCpy $2 0
+  ${Do}
+    ; OPEN_EXISTING + GENERIC_WRITE + no sharing: test without changing bytes.
+    System::Call 'kernel32::CreateFileW(w "$INSTDIR\TayyaraMotors.exe", i 0x40000000, i 0, p 0, i 3, i 0, p 0) p .r0'
+    ${If} $0 != -1
+      System::Call 'kernel32::CloseHandle(p r0)'
+      Goto check_app_done
+    ${EndIf}
+    Sleep 500
+    IntOp $2 $2 + 1
+  ${LoopUntil} $2 >= 60
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Windows cannot write to $INSTDIR\TayyaraMotors.exe. Close TayyaraMotors.exe in Task Manager and check the folder permissions, then click Retry. If it remains locked, restart Windows before installing. No program files have been changed." /SD IDCANCEL IDRETRY check_app_retry
+  Abort
+check_app_done:
+FunctionEnd
+!endif
+!insertmacro CloseAppFunction "un."
 Section "Uninstall"
   SetShellVarContext current
   Call un.CloseApp

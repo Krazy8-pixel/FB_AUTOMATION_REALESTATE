@@ -1,13 +1,12 @@
-"""Manual and idle-time automatic updates with pinned Ed25519 signatures."""
+"""User-initiated updates with pinned Ed25519 signatures."""
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 import threading
-import time
+from uuid import uuid4
 
 import requests
 from packaging.version import Version
@@ -18,64 +17,12 @@ _lock = threading.RLock()
 _status = {'state': 'idle', 'message': 'Click Check for Updates when notified.', 'available': False}
 _ready = None
 exit_callback = None
-CHECK_INTERVAL = 6 * 60 * 60
-RETRY_INTERVAL = 15 * 60
-_last_check_attempt = None
-_last_install_attempt = None
-_automatic_lock = threading.Lock()
 
 
 def _automation_busy(routes):
     from automation.maintenance import busy
     from automation.task_control import has_active_tasks
     return busy(routes) or has_active_tasks()
-
-
-def automatic_tick():
-    """Called by the desktop monitor; checks and downloads run in worker threads."""
-    global _last_install_attempt
-    if not getattr(sys, 'frozen', False) or not exit_callback:
-        return
-    from automation.desktop_preferences import load
-    if not load().get('automatic_updates', True):
-        return
-    if not _automatic_lock.acquire(blocking=False):
-        return
-    try:
-        with _lock:
-            state = _status['state']
-            ready = _ready
-        now = time.monotonic()
-        if state in {'checking', 'downloading', 'installing'}:
-            return
-        if state == 'available' and ready:
-            if ready[0].get('reset_databases'):
-                set_status(message='This update clears saved listings. Review and install it in Settings.')
-                return
-            try:
-                previous = json.loads((data_dir('updates') / 'last-update.json').read_text(encoding='utf-8'))
-            except (OSError, ValueError):
-                previous = {}
-            if previous.get('success') is False and previous.get('version') == ready[0]['version']:
-                set_status(message='The previous automatic update failed and was rolled back. Retry it manually in Settings.')
-                return
-            if _last_install_attempt is not None and now - _last_install_attempt < RETRY_INTERVAL:
-                return
-            from web import routes
-            if _automation_busy(routes):
-                set_status(message='Update available. It will install automatically when automation finishes.')
-                return
-            _last_install_attempt = now
-            try:
-                install(automatic=True)
-            except ValueError as exc:
-                set_status(message=str(exc))
-            return
-        interval = RETRY_INTERVAL if state == 'error' else CHECK_INTERVAL
-        if _last_check_attempt is None or now - _last_check_attempt >= interval:
-            check()
-    finally:
-        _automatic_lock.release()
 
 
 def config():
@@ -92,6 +39,36 @@ def set_status(**values):
         _status.update(values)
 
 
+def download_progress(downloaded, total=0):
+    percent = min(100, int(downloaded * 100 / total)) if total else None
+    amount = f'{downloaded / 1_000_000:.1f} MB'
+    if total:
+        amount += f' / {total / 1_000_000:.1f} MB ({percent}%)'
+    set_status(downloaded_bytes=downloaded, total_bytes=total,
+               download_percent=percent, message='Downloading update: ' + amount)
+
+
+def download_package(url, package, total=0):
+    digest = hashlib.sha256()
+    downloaded = 0
+    with fetch(url, stream=True) as response, package.open('wb') as stream:
+        if not total:
+            try:
+                total = max(0, int(response.headers.get('Content-Length', 0)))
+            except (ValueError, TypeError):
+                total = 0
+        download_progress(0, total)
+        for block in response.iter_content(256 * 1024):
+            if block:
+                stream.write(block)
+                digest.update(block)
+                downloaded += len(block)
+                download_progress(downloaded, total)
+    if total and downloaded != total:
+        raise ValueError('The download was incomplete. Please try again.')
+    return digest.hexdigest()
+
+
 
 def fetch(url, **kwargs):
     response = requests.get(url, timeout=(10, 60), **kwargs)
@@ -100,12 +77,12 @@ def fetch(url, **kwargs):
 
 
 def check():
-    global _ready, _last_check_attempt
+    global _ready
     with _lock:
-        if _status['state'] in {'checking', 'downloading', 'installing'}:
+        if _status['state'] in {'checking', 'downloading', 'verifying', 'installing'}:
             return
-        _status.update(state='checking', message='Checking GitHub Releases...', available=False)
-        _last_check_attempt = time.monotonic()
+        _status.update(state='checking', message='Checking GitHub Releases...', available=False,
+                       downloaded_bytes=0, total_bytes=0, download_percent=None)
         _ready = None
     def worker():
         global _ready
@@ -116,54 +93,50 @@ def check():
             raw = fetch(assets['manifest.json']).content
             signature = fetch(assets['manifest.sig']).content
             manifest = verify_manifest(raw, signature, cfg['update_public_key'])
+            size = next((item.get('size', 0) for item in release['assets'] if item['name'] == manifest['asset']), 0)
             available = Version(manifest['version']) > Version(cfg['version'])
             _ready = (manifest, raw, signature, assets[manifest['asset']]) if available else None
-            set_status(state='available' if available else 'current', available=available, latest_version=manifest['version'], message='An update is available.' if available else 'You have the latest version.', resets_listings=bool(manifest.get('reset_databases')))
+            set_status(state='available' if available else 'current', available=available, latest_version=manifest['version'], message=f'An update is available ({size / 1_000_000:.1f} MB).' if available and size else 'An update is available.' if available else 'You have the latest version.', total_bytes=size, resets_listings=bool(manifest.get('reset_databases')))
         except Exception as exc:
             set_status(state='error', available=False, message='Could not check for updates: ' + str(exc))
     threading.Thread(target=worker, daemon=True).start()
 
 
-def install(automatic=False):
+def install():
     from web import routes
     with _lock:
         if not _ready or _status['state'] != 'available':
             raise ValueError('Check for an available update first.')
         if not getattr(sys, 'frozen', False) or not exit_callback:
             raise ValueError('Updates can be installed from the packaged desktop app.')
-        if automatic:
-            from automation.desktop_preferences import load
-            if not load().get('automatic_updates', True) or _ready[0].get('reset_databases'):
-                raise ValueError('This update needs manual installation from Settings.')
         if _automation_busy(routes):
             raise ValueError('Wait for current automation to finish before updating.')
         routes.desktop_update_pending = True
         routes.scheduler.pause()
-        _status.update(state='downloading', message='Downloading and verifying the update...', available=False)
+        _status.update(state='downloading', message='Starting download...', available=False,
+                       downloaded_bytes=0, download_percent=0)
 
     def worker():
         try:
             manifest, raw, signature, url = _ready
             folder = data_dir('updates')
             package = folder / 'update.zip'
-            digest = hashlib.sha256()
-            with fetch(url, stream=True) as response, package.open('wb') as stream:
-                for block in response.iter_content(1024 * 1024):
-                    if block:
-                        stream.write(block)
-                        digest.update(block)
-            if digest.hexdigest() != manifest['sha256']:
+            digest = download_package(url, package, status().get('total_bytes', 0))
+            set_status(state='verifying', message='Download complete. Verifying update...')
+            if digest != manifest['sha256']:
                 raise ValueError('The downloaded update failed verification.')
             (folder / 'manifest.json').write_bytes(raw)
             (folder / 'manifest.sig').write_bytes(signature)
             plan = {'install_dir': str(Path(sys.executable).resolve().parent), 'data_dir': str(data_dir()), 'package': str(package), 'public_key': config()['update_public_key'], 'pid': os.getpid()}
             (folder / 'plan.json').write_text(json.dumps(plan), encoding='utf-8')
-            updater = folder / 'TayyaraUpdater.exe'
+            # A previous updater may still be cleaning up after restarting the UI.
+            updater = folder / ('TayyaraUpdater-' + uuid4().hex + '.exe')
             shutil.copy2(resource_root() / 'TayyaraUpdater.exe', updater)
             from automation.desktop_state import checkpoint
             checkpoint()
             set_status(state='installing', message='Installing update. The app will restart.')
-            subprocess.Popen([str(updater), str(folder / 'plan.json')], cwd=str(folder), creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            from automation.update_process import launch_independent
+            launch_independent([str(updater), str(folder / 'plan.json')], folder)
             exit_callback()
         except Exception as exc:
             routes.desktop_update_pending = False

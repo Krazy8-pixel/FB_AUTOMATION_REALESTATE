@@ -15,6 +15,9 @@ def _configure_console_encoding():
 
 _configure_console_encoding()
 
+from automation.terminal_log import install as install_terminal_log
+install_terminal_log()
+
 from flask import Flask
 from web.routes import web_bp
 from automation.runtime_paths import static_dir, template_dir, screenshots_dir, data_dir

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Live Terminal{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/terminal.css') }}">
+{% endblock %}
+{% block content %}
+<main class="terminal-page">
+  <a href="{{ url_for('web.settings_page') }}">&larr; Settings</a>
+  <div class="terminal-heading"><div><h1>Live Terminal</h1><p>Application output and errors from this session. Recent output is kept while you visit other pages.</p></div><span id="terminal-status" role="status">Connecting…</span></div>
+  <div class="terminal-toolbar">
+    <label><input id="terminal-follow" type="checkbox" checked> Auto-scroll</label>
+    <button id="terminal-pause" type="button">Pause</button>
+    <button id="terminal-copy" type="button">Copy logs</button>
+    <button id="terminal-copy-selected" type="button" disabled>Copy selected text</button>
+    <a href="{{ url_for('web.diagnostics_download') }}">Download diagnostic report</a>
+    <button id="terminal-download" type="button">Download logs</button>
+    <button id="terminal-clear" type="button">Clear display</button>
+  </div>
+  <pre id="terminal-output" data-url="{{ url_for('web.terminal_data') }}" tabindex="0" aria-label="Terminal output"></pre>
+  <p class="terminal-note">For remote testing, download the diagnostic report after each test. It includes saved output from recent app sessions. Reports may contain account names and listing details; review before sharing.</p>
+  <p class="terminal-note">Select any line or text to copy with Ctrl+C or Copy selected text. Live refresh holds while text is selected; click inside the terminal to clear the selection and resume. Shows the latest 2 million characters. Restarting the app starts a new session. Clear display only clears this view.</p>
+</main>
+{% endblock %}
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/terminal.js') }}"></script>
+{% endblock %}

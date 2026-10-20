@@ -30,7 +30,10 @@ def main():
         sys.stderr = log
     kernel = ctypes.windll.kernel32
     kernel.CreateMutexW.restype = ctypes.c_void_p
-    mutex = kernel.CreateMutexW(None, False, 'Local\\TayyaraMotorsDesktop')
+    mutex_name = 'Local\\TayyaraMotorsDesktop'
+    if args.smoke_test:
+        mutex_name += f'SmokeTest-{os.getpid()}'
+    mutex = kernel.CreateMutexW(None, False, mutex_name)
     if kernel.GetLastError() == 183:
         # A second launch asks the already-running tray instance to show itself.
         (folder / 'show-window').touch()
@@ -42,6 +45,8 @@ def main():
     from waitress import create_server
     import pystray
     import webview
+    # Allow the authenticated diagnostic-report link to open Save As in WebView2.
+    webview.settings['ALLOW_DOWNLOADS'] = True
     from PIL import Image
     from automation import app_updates
     from automation.desktop_state import checkpoint
@@ -63,9 +68,6 @@ def main():
     def quit_app(icon=None, item=None, updating=False):
         if not updating:
             stop_foreground_work(routes)
-            window.hide()
-            tray.visible = False
-            return
         shutting_down.set()
         routes.scheduler.pause()
         checkpoint()
@@ -83,10 +85,8 @@ def main():
     tray = pystray.Icon('TayyaraMotors', Image.open(resource_root() / 'assets/app-logo.png'), 'Tayyara Motors — background sync', menu=pystray.Menu(pystray.MenuItem('Open Tayyara Motors', show, default=True), pystray.MenuItem('Exit App', lambda icon, item: quit_app(icon, item))))
     tray.run_detached()
     app_updates.exit_callback = lambda: quit_app(updating=True)
-    ui_loaded = threading.Event()
 
     def monitor():
-        next_update_check = 0
         while not shutting_down.wait(1):
             uninstall_signal = folder / 'exit-for-uninstall'
             if uninstall_signal.exists():
@@ -97,13 +97,6 @@ def main():
             if signal.exists():
                 signal.unlink(missing_ok=True)
                 show()
-            import time
-            if ui_loaded.is_set() and not args.smoke_test and time.monotonic() >= next_update_check:
-                next_update_check = time.monotonic() + 60
-                try:
-                    app_updates.automatic_tick()
-                except Exception as exc:
-                    print(f'[Updates] Automatic check deferred: {exc}', flush=True)
 
     def loaded():
         if args.health_file:
@@ -112,7 +105,6 @@ def main():
                 health.write_text(json.dumps({'version': app_updates.config()['version']}), encoding='utf-8')
         if args.smoke_test:
             threading.Timer(3, lambda: quit_app(updating=True)).start()
-        ui_loaded.set()
     window.events.loaded += loaded
     threading.Thread(target=monitor, daemon=True).start()
     try:

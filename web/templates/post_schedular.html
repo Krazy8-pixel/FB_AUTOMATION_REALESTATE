@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Scheduled Posts{% endblock %}
+{% block title %}Posting Results{% endblock %}
 
 {% block extra_css %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/post_schedular.css') }}">
@@ -11,7 +11,7 @@
 <div class="schedular-page" data-account="{{ active_account or '' }}">
   <div class="schedular-head">
     <div>
-      <h1>Scheduled Posts</h1>
+      <h1>Posting Results</h1>
       <p>Track posts and cross posting sent from or to the selected account. Cross posts run one at a time.</p>
     </div>
     <div class="schedular-meta">

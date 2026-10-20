@@ -55,16 +55,6 @@ def record(account, task, success, error=''):
         os.replace(temporary, path)
 
 
-def pause_groups(account, paused=True):
-    with _lock:
-        payload = state()
-        payload.setdefault(account, {}).setdefault('groups', {})['paused'] = paused
-        path = data_dir() / 'maintenance.json'
-        temporary = path.with_suffix('.tmp')
-        temporary.write_text(json.dumps(payload), encoding='utf-8')
-        os.replace(temporary, path)
-
-
 def busy(routes, account=None):
     if _cookie_running:
         return True
@@ -95,15 +85,11 @@ def tick():
     for account in routes.get_all_accounts():
         if busy(routes, account):
             continue
-        for task, interval in [('groups', None), ('import', 24 * 3600), ('clicks', 4 * 3600), ('cookies', 24 * 3600)]:
+        for task, interval in [('import', 24 * 3600), ('clicks', 4 * 3600), ('cookies', 24 * 3600)]:
             item = payload.get(account, {}).get(task, {})
-            if task == 'groups' and item.get('paused'):
-                continue
             if time.time() - item.get('last_attempt', 0) < 15 * 60:
                 continue
-            if task == 'groups':
-                due = not item.get('last_success')
-            elif task == 'import':
+            if task == 'import':
                 due = routes._listing_snapshot_is_due(account)
             elif task == 'cookies':
                 due = time.time() - max(item.get('last_success', 0), item.get('last_attempt', 0)) >= interval
@@ -112,8 +98,7 @@ def tick():
             if not due:
                 continue
             record(account, task, False, 'Waiting for completion')
-            ok, message = (routes._start_groups_import_job(account) if task == 'groups' else
-                           routes._start_listing_import_job(account, automatic=True) if task == 'import' else
+            ok, message = (routes._start_listing_import_job(account, automatic=True) if task == 'import' else
                            routes._start_listing_click_refresh_job(account) if task == 'clicks' else start_cookie_check(account))
             if not ok:
                 record(account, task, False, message)

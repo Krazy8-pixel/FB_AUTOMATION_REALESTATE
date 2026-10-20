@@ -69,7 +69,7 @@
     crossPosting = cross;
     document.getElementById('posting-timing-label').textContent = cross ? 'Posting timing' : 'Repost timing';
     crossAccounts.hidden = !cross;
-    workflowHelp.textContent = cross ? 'Your original listing stays unchanged. The delay sets when this queue begins. Each account is posted to in turn, even if an earlier attempt fails. Track results in Scheduled Posts.' : repostHelp;
+    workflowHelp.textContent = cross ? 'Your original listing stays unchanged. The delay sets when this queue begins. Each account is posted to in turn, even if an earlier attempt fails. Track results in Posting Results.' : repostHelp;
     form.querySelector('.ld-eyebrow').textContent = cross ? 'POST ON OTHER ACCOUNTS' : 'PREPARE YOUR REPOST';
     form.querySelector('.ld-timing-options label').lastChild.textContent = cross ? ' Post now' : ' Repost now';
     crossStart.hidden = true;

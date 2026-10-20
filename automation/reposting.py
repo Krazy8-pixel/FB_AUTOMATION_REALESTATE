@@ -1,4 +1,4 @@
-import os
+﻿import os
 import pickle
 import re
 import time
@@ -29,7 +29,7 @@ EDIT_FIELDS = {
 ITEM_EDIT_FIELDS = {'title': 'Title', 'category': 'Category', 'item_condition': 'Condition', 'sku': 'SKU'}
 EXTRA_VEHICLE_FIELDS = {'vin': 'VIN', 'trim': 'Trim'}
 REPOST_REQUIRED_FIELDS = ('title', 'vehicle_type', 'year', 'make', 'model', 'mileage', 'price',
-                          'body_style', 'exterior_color', 'interior_color', 'vehicle_condition',
+                          'body_style', 'vehicle_condition',
                           'fuel_type', 'transmission', 'description', 'location')
 
 
@@ -46,10 +46,12 @@ def read_edit_form_snapshot(driver):
         const result = {};
         for (const [key, label] of Object.entries(fields)) {
             const target = norm(label);
-            let container = containers.find(el => norm(el.getAttribute('aria-label')) === target ||
-                [...el.querySelectorAll('span')].some(span => norm(span.textContent) === target));
+            const matchesLabel = value => norm(value) === target ||
+                (key === 'vehicle_condition' && norm(value) === 'condition');
+            let container = containers.find(el => matchesLabel(el.getAttribute('aria-label')) ||
+                [...el.querySelectorAll('span')].some(span => matchesLabel(span.textContent)));
             const controlLabel = el => el.getAttribute('aria-label') || (el.getAttribute('aria-labelledby') || '').split(/\\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ') || [...(el.labels || [])].map(label => label.textContent).join(' ');
-            let control = controls.find(el => norm(controlLabel(el)) === target);
+            let control = controls.find(el => matchesLabel(controlLabel(el)));
             if (!control && key === 'clean_title') {
                 control = controls.find(el => el.type === 'checkbox' &&
                     norm(el.closest('label')?.textContent || el.parentElement?.parentElement?.textContent).includes(target));
@@ -66,7 +68,7 @@ def read_edit_form_snapshot(driver):
             else {
                 const clone = container.cloneNode(true);
                 for (const span of [...clone.querySelectorAll('span')]) {
-                    if (norm(span.textContent) === target) span.remove();
+                    if (matchesLabel(span.textContent)) span.remove();
                 }
                 value = (clone.textContent || '').replace(/\\s+/g, ' ').trim();
                 if (norm(value) === target) value = '';
@@ -101,6 +103,7 @@ def validate_repost_fields(post, edited_fields=None):
     missing = [field for field in required if not str(post.get(field) or '').strip()]
     uncertain = [field for field, state in (post.get('field_states') or {}).items()
                  if (field in EDIT_FIELDS or (field in EXTRA_VEHICLE_FIELDS and post.get(field))) and field not in edited_fields
+                 and (field not in {'exterior_color', 'interior_color', 'vin', 'trim'} or str(post.get(field) or '').strip())
                  and state in {'unreadable', 'conflict', 'needs_review'}]
     if missing or uncertain:
         fields = ', '.join(dict.fromkeys(missing + uncertain))
@@ -581,7 +584,7 @@ def _valid_model_text(value, allow_numeric=True):
     return value
 
 
-def _model_from_visible_listing_heading(driver, year, make, log_result=True):
+def _model_from_visible_listing_heading(driver, year, make, log_result=True, expected_model=None):
     """Return the model portion of a visible `Year Make Model` Marketplace h1."""
     year = " ".join(str(year or "").split()).strip()
     make = " ".join(str(make or "").split()).strip()
@@ -620,6 +623,10 @@ def _model_from_visible_listing_heading(driver, year, make, log_result=True):
             if not prefix_pattern.match(title_text):
                 continue
             model = _valid_model_text(prefix_pattern.sub("", title_text, count=1))
+            # Inventory spans can still contain the previous vehicle while
+            # Facebook opens the selected card. Never use another model.
+            if expected_model and _normalize_text(model) != _normalize_text(expected_model):
+                continue
             if model:
                 if log_result:
                     print(
@@ -747,14 +754,26 @@ def _normalize_price(value):
     return re.sub(r"[^0-9]", "", str(value or ""))
 
 
-def _scroll_down_page(driver, steps=1):
+def _scroll_down_page(driver, steps=1, jump_to_bottom=True):
     for _ in range(max(1, int(steps or 0))):
         try:
-            driver.execute_script("window.scrollBy(0, Math.max(window.innerHeight, 800));")
+            if jump_to_bottom:
+                driver.execute_script("window.scrollBy(0, Math.max(window.innerHeight, 800));")
+            else:
+                driver.execute_script('''
+                    const input = document.querySelector('input[aria-label="Price"]') ||
+                        [...document.querySelectorAll('label')].find(el => /price/i.test(el.textContent))?.querySelector('input');
+                    let panel = input;
+                    while (panel && !(panel.clientHeight > 100 && panel.scrollHeight > panel.clientHeight + 2 &&
+                           /auto|scroll/.test(getComputedStyle(panel).overflowY))) panel = panel.parentElement;
+                    panel = panel || document.scrollingElement;
+                    panel.scrollTop += Math.max(100, panel.clientHeight * 0.75);
+                ''')
         except Exception:
             pass
         try:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            if jump_to_bottom:
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         except Exception:
             pass
 
@@ -1057,16 +1076,16 @@ def _print_reposting_read_summary(post_data, edit_url=""):
 
 
 def recover_unreadable_fields(driver, post, fallback, fields=None):
-    """Run one fallback pass, preserving every successful or empty primary field."""
+    """Recover missing HTML values once, excluding colors, VIN, and trim."""
     states = post.setdefault('field_states', {})
-    protected = {'read', 'empty', 'disabled'}
-    optional = {'exterior_color', 'interior_color'}
-    fields = fields or EDIT_FIELDS
-    missing = [key for key in fields if states.get(key) not in protected
-               and (not post.get(key) or states.get(key) in {'unavailable', 'unreadable', 'conflict'})]
+    excluded = {'exterior_color', 'interior_color', 'vin', 'trim'}
+    fields = [key for key in (fields if fields is not None else EDIT_FIELDS) if key not in excluded]
+    missing = [key for key in fields if not str(post.get(key) or '').strip()
+               or states.get(key) in {'unavailable', 'unreadable', 'conflict'}]
     post['field_sources'] = {key: 'primary' for key in fields if key not in missing}
-    if not fallback or not any(key not in optional for key in missing):
+    if not fallback or not missing:
         return
+    print(f"[Import] Could not read {', '.join(key.replace('_', ' ') for key in missing)} from HTML. Taking screenshots and trying OCR.", flush=True)
     try:
         result = fallback(driver)
         recovered = result['posts'][0]
@@ -1080,6 +1099,7 @@ def recover_unreadable_fields(driver, post, fallback, fields=None):
             post[key] = recovered.get(key, '')
             states[key] = state
             post['field_sources'][key] = 'visual_fallback'
+            print(f"[Import] OCR read {key.replace('_', ' ')}: {post[key]}", flush=True)
         for key in ('visual_read_report', 'visual_read_requires_review'):
             if key in recovered:
                 post[key] = recovered[key]
@@ -1090,7 +1110,8 @@ def recover_unreadable_fields(driver, post, fallback, fields=None):
         print(f'[ListingImport] Visual fallback failed; primary values kept: {exc}', flush=True)
 
 
-def read_listing_from_manage(account, listing, driver=None, field_reader=None, visual_fallback=None):
+def read_listing_from_manage(account, listing, driver=None, field_reader=None, visual_fallback=None,
+                             listing_card=None, return_to_inventory=None):
     """Read one stored listing through Manage Listings -> Edit listing."""
     if not account:
         raise ValueError("Account is required")
@@ -1106,6 +1127,16 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
     if not listing_name:
         raise ValueError("Listing title is required")
 
+    media_urls, media_errors = [], []
+
+    def with_videos(result):
+        post = result['posts'][0]
+        from automation.listing_videos import discover
+        final_urls, final_errors = discover(driver)
+        post['video_urls'] = list(dict.fromkeys(media_urls + final_urls + (post.get('video_urls') or [])))
+        post['video_errors'] = list(dict.fromkeys(media_errors + final_errors))
+        return result
+
     owns_driver = driver is None
     fallback_used = False
 
@@ -1119,21 +1150,23 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
     try:
         if owns_driver:
             driver = _open_prelogged_facebook(account)
-        if not _open_manage_listings(driver):
-            raise Exception("Manage Listings could not be opened")
-
-        card = _find_listing_card_with_scroll(
-            driver,
-            listing_name=listing_name,
-            listing_price=listing_price,
-            require_pending=False,
-            timeout=40,
-            listing_url=str(listing.get('url') or ''),
-        )
+        card = listing_card
+        if card is None:
+            if not _open_manage_listings(driver):
+                raise Exception("Manage Listings could not be opened")
+            card = _find_listing_card_with_scroll(
+                driver,
+                listing_name=listing_name,
+                listing_price=listing_price,
+                require_pending=False,
+                timeout=40,
+                listing_url=str(listing.get('url') or ''),
+            )
         if not card:
             raise Exception(f"Listing not found in Manage Listings: {listing_name}")
         if not _safe_click(driver, card):
             raise Exception("Selected listing could not be opened")
+        print(f'[ListingImport] Clicked listing: {listing_name}', flush=True)
 
         # Read Model from the public listing heading before opening Edit.
         # Facebook's edit-form Model field can contain an internal numeric ID
@@ -1144,14 +1177,15 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
             WebDriverWait(driver, 10).until(
                 lambda current: bool(
                     _model_from_visible_listing_heading(
-                        current, listing_year, listing_make, log_result=False
+                        current, listing_year, listing_make, log_result=False,
+                        expected_model=listing.get('model')
                     )
                 )
             )
         except Exception:
             pass
         heading_model = _model_from_visible_listing_heading(
-            driver, listing_year, listing_make
+            driver, listing_year, listing_make, expected_model=listing.get('model')
         )
         if heading_model:
             print(f"[Reposting] READ model={heading_model!r}", flush=True)
@@ -1166,6 +1200,7 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
         if not edit_link:
             raise Exception("Edit listing link was not found")
         edit_href = str(edit_link.get_attribute("href") or "").strip()
+        print('[Import] Clicking Edit listing to open the edit page.', flush=True)
         clicked = _safe_click(driver, edit_link)
         if not clicked and not edit_href:
             raise Exception("Edit listing could not be opened")
@@ -1185,24 +1220,28 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
             lambda current: "/marketplace/edit/" in str(current.current_url or "")
             or bool(current.find_elements(By.XPATH, "//*[@aria-label='Price']"))
         )
+        from automation.listing_videos import discover
+        media_urls, media_errors = discover(driver)
         if field_reader is not None:
             WebDriverWait(driver, 30).until(lambda current: current.execute_script(
                 "return document.readyState === 'complete' && !!document.querySelector('input,textarea');"))
             result = field_reader(driver)
             post = result['posts'][0]
             post['title'] = ' '.join(str(post.get(key) or '').strip() for key in ('year', 'make', 'model')).strip() or listing_name
-            return result
+            return with_videos(result)
         snapshot = wait_for_edit_form_ready(driver)
-        print('[ListingImport] Edit form ready; reading saved vehicle fields on the edit page.', flush=True)
-        _scroll_down_page(driver, steps=3)
+        print('[Import] Edit page opened. Taking listing details from HTML.', flush=True)
         # Some Facebook forms virtualize controls while scrolling. Retain the
         # fields read at the top instead of replacing them with absent controls.
-        scrolled_snapshot = read_edit_form_snapshot(driver)
-        for field, value in scrolled_snapshot.items():
-            if value.get('state') != 'unavailable' and (
-                value.get('value') or snapshot.get(field, {}).get('state') == 'unavailable'
-            ):
-                snapshot[field] = value
+        for _ in range(8):
+            _scroll_down_page(driver, steps=1, jump_to_bottom=False)
+            time.sleep(0.2)
+            scrolled_snapshot = read_edit_form_snapshot(driver)
+            for field, value in scrolled_snapshot.items():
+                if value.get('state') != 'unavailable' and (
+                    value.get('value') or snapshot.get(field, {}).get('state') == 'unavailable'
+                ):
+                    snapshot[field] = value
 
         item_post = _item_edit_details(snapshot, listing, [])
         if item_post is not None:
@@ -1213,7 +1252,7 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
             if not item_post.get('title') or not item_post.get('price'):
                 raise RuntimeError('Item editor title or price could not be read; saved details were not replaced.')
             print('[ListingImport] Read item-style editor: title, price, description, category, condition, SKU and attached photos.', flush=True)
-            return {'ok': True, 'edit_url': edit_href, 'listing': dict(listing), 'posts': [item_post]}
+            return with_videos({'ok': True, 'edit_url': edit_href, 'listing': dict(listing), 'posts': [item_post]})
 
         if not any(snapshot.get(field, {}).get('state', 'unavailable') != 'unavailable'
                    for field in ('vehicle_type', 'year', 'make', 'model', 'mileage', 'body_style')):
@@ -1273,25 +1312,27 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
             if str(post_data.get(field) or "").strip()
         ).strip() or listing_name
         _print_reposting_read_summary(post_data, edit_url=edit_href)
-        return {
+        return with_videos({
             "ok": True,
             "edit_url": edit_href,
             "listing": dict(listing),
             "posts": [post_data],
-        }
+        })
     except Exception as primary_error:
         if not fallback_used and visual_fallback is not None and driver is not None and '/marketplace/edit/' in str(driver.current_url or ''):
-            print(f'[ListingImport] DOM readers could not complete ({type(primary_error).__name__}); trying screenshot/OCR once.', flush=True)
+            print('[Import] Could not finish reading HTML. Taking screenshots and trying OCR.', flush=True)
             result = visual_once(driver)
             if not result.get('ok'):
                 raise RuntimeError('Primary and visual listing readers failed; saved details were not replaced.')
             post = result['posts'][0]
             post['field_sources'] = {key: 'visual_fallback' for key in EDIT_FIELDS}
             post['title'] = post.get('title') or ' '.join(str(post.get(key) or '').strip() for key in ('year', 'make', 'model')).strip() or listing_name
-            return result
+            return with_videos(result)
         raise
     finally:
-        if driver and not owns_driver:
+        if driver and not owns_driver and return_to_inventory is not None:
+            return_to_inventory(driver)
+        elif driver and not owns_driver:
             # Return the shared import browser to inventory after each listing,
             # including a failed read. Photos come only from the edit page.
             try:

@@ -33,6 +33,16 @@
   {% endif %}
   {% if listing.repost_error %}<div class="ld-notice"><strong>Last repost could not finish</strong><p>{{ listing.repost_error }}</p></div>{% endif %}
   {% if busy %}<p class="ld-note">A listing operation is active. You can view the details while it finishes.</p>{% endif %}
+  {% if listing.downloaded_videos %}
+  <section class="ld-panel" aria-label="Saved listing videos">
+    <h2>Saved videos</h2>
+    <p class="ld-note">Included when reposting or posting to other accounts if Facebook supports video uploads.</p>
+    {% for video in listing.downloaded_videos %}
+    <video class="ld-saved-video" controls preload="metadata" playsinline src="{{ url_for('web.listing_video', listing_id=listing.id, name=video.name) }}">Your browser cannot play this video.</video>
+    {% endfor %}
+  </section>
+  {% endif %}
+  {% if listing.video_errors %}<p class="ld-note">Some optional videos could not be backed up. Photos and listing details remain available.</p>{% endif %}
   <div id="listing-read-view" class="ld-layout">
     <section class="ld-panel ld-gallery"><div class="ld-section-heading"><h2>Photos</h2><span>{{ photos|length }} saved</span></div>
       {% if photos %}
@@ -42,7 +52,7 @@
       {% else %}<div class="ld-photo-empty">No saved photos yet.<br>Import listings to download them.</div>{% endif %}
     </section>
     <section class="ld-panel ld-information"><div class="ld-section-heading"><h2>Vehicle information</h2><span>Imported from Facebook</span></div>
-      <dl class="ld-info-grid">{% for field in fields if field not in ['title','description'] %}
+      <dl class="ld-info-grid">{% for field in fields if field not in ['title','description','vin','trim'] and (field not in ['exterior_color','interior_color'] or (source.get(field) or '')|trim) %}
       {% set state = source.get('field_states', {}).get(field) %}
       <div><dt>{{ field|replace('_',' ')|title }}</dt><dd>{% if source.get(field) %}{{ source.get(field) }}{% elif state == 'unavailable' %}<span class="ld-unset">Could not read from Facebook</span>{% elif state == 'empty' %}<span class="ld-unset">Empty on Facebook</span>{% elif state == 'disabled' %}<span class="ld-unset">Disabled on Facebook</span>{% else %}<span class="ld-unset">Not imported</span>{% endif %}</dd></div>
       {% endfor %}</dl>
@@ -57,12 +67,12 @@
         <p class="ld-note">Choose up to 19 accounts. Posts run one at a time; the next account starts after the previous attempt finishes.</p>
         <div class="ld-cross-accounts">{% for account in accounts if account != active_account %}<label><input type="checkbox" data-cross-account value="{{ account }}"> {{ account }}</label>{% endfor %}</div>
       </section>
-      <section class="ld-panel"><div class="ld-section-heading"><h2><span class="ld-step">1</span> Listing details</h2></div><p class="ld-note">Review or choose every required value before reposting. VIN and Trim are optional.</p><div class="ld-edit-grid">
+      <section class="ld-panel"><div class="ld-section-heading"><h2><span class="ld-step">1</span> Listing details</h2></div><p class="ld-note">Review or choose every required value before reposting. Colors are optional.</p><div class="ld-edit-grid">
       {% set select_options = {'vehicle_type':['Car','Other'], 'body_style':['Convertible','Coupe','Hatchback','Minivan','Pickup truck','Sedan','Station wagon','SUV','Van','Other'], 'vehicle_condition':['Excellent','Very good','Good','Fair','Poor'], 'fuel_type':['Gasoline','Petrol','Diesel','Electric','Hybrid','Flex','Plug-in hybrid','Other'], 'transmission':['Automatic transmission','Manual transmission']} %}
-      {% for field in fields %}{% set value = listing.repost_preferences.get('fields', {}).get(field, source.get(field, '')) %}
+      {% for field in fields if field not in ['vin','trim'] and (field not in ['exterior_color','interior_color'] or (listing.repost_preferences.get('fields', {}).get(field, source.get(field, '')) or '')|trim) %}{% set value = listing.repost_preferences.get('fields', {}).get(field, source.get(field, '')) %}
         <label class="ld-field{% if field == 'description' %} ld-wide{% endif %}"><span>{{ 'Body shape' if field == 'body_style' else ('VIN' if field == 'vin' else field|replace('_',' ')|title) }}{{ ' *' if field in required_fields else ' (optional)' }}</span>
         {% if field == 'description' %}<textarea name="{{ field }}" rows="5" required>{{ value }}</textarea>
-        {% elif field in ['exterior_color', 'interior_color'] %}<select name="{{ field }}" required>{{ color_options(value) }}</select>
+        {% elif field in ['exterior_color', 'interior_color'] %}<select name="{{ field }}">{{ color_options(value) }}</select>
         {% elif field in select_options %}<select name="{{ field }}" required><option value="">Select {{ field|replace('_',' ') }}</option>{% if value and value not in select_options[field] %}<option value="{{ value }}" selected>{{ value }}</option>{% endif %}{% for option in select_options[field] %}<option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select>
         {% elif field == 'clean_title' %}<select name="{{ field }}"><option value="" {% if not value %}selected{% endif %}>Not specified</option><option value="Yes" {% if value == 'Yes' %}selected{% endif %}>Yes</option><option value="No" {% if value == 'No' %}selected{% endif %}>No</option></select>
         {% else %}<input name="{{ field }}" value="{{ value }}" {% if field in required_fields %}required{% endif %}>{% endif %}</label>

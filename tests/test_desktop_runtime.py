@@ -4,6 +4,7 @@ import io
 import json
 import hashlib
 import sqlite3
+import subprocess
 from pathlib import Path
 import tempfile
 import threading
@@ -16,6 +17,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from automation.release_security import verify_manifest
 from automation import desktop_state, maintenance
+from automation import update_process
 from updater import safe_extract
 import updater
 
@@ -64,7 +66,7 @@ class DesktopRuntimeTests(unittest.TestCase):
         lock.release()
         self.assertFalse(maintenance.busy(routes))
 
-    def test_group_fetch_starts_once_after_success(self):
+    def test_background_maintenance_never_imports_groups(self):
         calls = []
         routes = SimpleNamespace(post_locks_by_account={}, listing_import_jobs={}, listing_click_jobs={},
             facebook_delete_jobs={}, groups_jobs={}, scheduled_posts={}, repost_jobs={},
@@ -75,9 +77,11 @@ class DesktopRuntimeTests(unittest.TestCase):
             maintenance.record('account', 'clicks', True)
             maintenance.record('account', 'cookies', True)
             maintenance.tick()
+            maintenance.record('account', 'groups', False, 'Previous automatic attempt failed')
+            maintenance.tick()
             maintenance.record('account', 'groups', True)
             maintenance.tick()
-        self.assertEqual(calls, ['account'])
+        self.assertEqual(calls, [])
 
     def test_cookie_check_is_once_daily_even_after_unknown_result(self):
         routes = SimpleNamespace(post_locks_by_account={}, listing_import_jobs={}, listing_click_jobs={},
@@ -170,9 +174,51 @@ class DesktopRuntimeTests(unittest.TestCase):
     def test_folder_swap_timeout_explains_recovery(self):
         error = OSError('File is in use')
         error.winerror = 32
-        with patch.object(updater.Path, 'rename', side_effect=error), patch.object(updater.time, 'monotonic', side_effect=[0, 31]):
+        with patch.object(updater.Path, 'rename', side_effect=error), patch.object(updater.time, 'monotonic', side_effect=[0, 61]):
             with self.assertRaisesRegex(RuntimeError, 'restart Windows'):
                 updater.rename_with_retry(Path('app'), Path('previous'))
+
+    def test_file_update_does_not_rename_install_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, previous = Path(folder) / 'app', Path(folder) / 'previous'
+            (root / '_internal').mkdir(parents=True)
+            (root / 'TayyaraMotors.exe').write_bytes(b'old-exe')
+            (root / '_internal/library.dll').write_bytes(b'old-library')
+            moved = []
+            with patch.object(updater, 'rename_with_retry', wraps=updater.rename_with_retry) as rename:
+                updater.move_program_files(root, previous, moved)
+            self.assertTrue(root.is_dir())
+            self.assertEqual(len(moved), 2)
+            self.assertEqual(moved[0], Path('TayyaraMotors.exe'))
+            self.assertTrue(all(call.args[0].suffix in {'.exe', '.dll'} for call in rename.call_args_list))
+            self.assertEqual((previous / '_internal/library.dll').read_bytes(), b'old-library')
+            installed = []
+            updater.move_program_files(previous, root, installed, executable_last=True)
+            self.assertEqual(installed[-1], Path('TayyaraMotors.exe'))
+
+    def test_partial_file_install_can_restore_exact_previous_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, previous, staging = [Path(folder) / name for name in ('app', 'previous', 'staging')]
+            for path in (root, previous, staging):
+                path.mkdir()
+            (previous / 'TayyaraMotors.exe').write_bytes(b'old-exe')
+            (root / 'TayyaraMotors.exe').write_bytes(b'new-exe')
+            (root / 'still-locked.dll').write_bytes(b'untouched-library')
+            updater.restore_program_files(root, staging, previous,
+                                          [Path('TayyaraMotors.exe')], [Path('TayyaraMotors.exe')])
+            self.assertEqual((root / 'TayyaraMotors.exe').read_bytes(), b'old-exe')
+            self.assertEqual((root / 'still-locked.dll').read_bytes(), b'untouched-library')
+            self.assertEqual((staging / 'TayyaraMotors.exe').read_bytes(), b'new-exe')
+
+    def test_update_launch_does_not_inherit_parent_runtime_or_handles(self):
+        with patch.object(update_process.sys, 'frozen', False, create=True), \
+             patch.object(update_process.subprocess, 'Popen') as launch:
+            update_process.launch_independent(['TayyaraMotors.exe'], Path('data'))
+        options = launch.call_args.kwargs
+        self.assertTrue(options['close_fds'])
+        self.assertEqual(options['env']['PYINSTALLER_RESET_ENVIRONMENT'], '1')
+        self.assertEqual(options['cwd'], 'data')
+        self.assertEqual(options['stdout'], subprocess.DEVNULL)
 
     def test_update_installs_updated_uninstaller(self):
         self.run_update_scenario(include_new_uninstaller=True)

@@ -98,3 +98,15 @@
 .desktop-preferences button { padding:10px 16px; border-radius:0; border:0; cursor:pointer; }
 .update-version { display:inline-block; font-size:11px; font-weight:500; color:var(--app-grey-700); margin-left:10px; }
 #update-install[hidden],#update-reset-notice[hidden] { display:none !important; }
+
+.settings-diagnostics { display:flex; align-items:center; justify-content:space-between; gap:24px; margin-top:24px; padding:24px; background:var(--app-white); border:1px solid var(--app-grey-200); }
+.diagnostics-copy { display:flex; align-items:flex-start; gap:16px; min-width:0; }
+.diagnostics-copy .settings-card-icon { flex-shrink:0; }
+.diagnostics-copy h2 { margin:0 0 6px; font-size:17px; }
+.diagnostics-copy p { margin:0 0 8px; font-size:13px; line-height:1.6; color:var(--app-grey-700); }
+.diagnostics-caption { font-size:12px; color:var(--app-grey-700); line-height:1.6; }
+.settings-hub .diagnostics-download { display:inline-flex; align-items:center; justify-content:center; gap:9px; flex-shrink:0; box-sizing:border-box; padding:12px 18px; background:var(--app-blue); color:#fff; border:1px solid var(--app-blue); font-size:13px; font-weight:600; text-decoration:none; min-height:44px; }
+.diagnostics-download svg { width:18px; height:18px; }
+.settings-hub .diagnostics-download:hover { background:#173f78; border-color:#173f78; color:#fff; }
+.diagnostics-download:focus-visible { outline:3px solid var(--app-blue); outline-offset:3px; }
+@media(max-width:760px) { .settings-diagnostics { flex-direction:column; align-items:stretch; gap:20px; padding:20px; }.settings-hub .diagnostics-download { width:100%; } }
