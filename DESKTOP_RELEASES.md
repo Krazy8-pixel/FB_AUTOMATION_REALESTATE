@@ -132,7 +132,7 @@ strings, submitted forms, cookies, or frame-local values. It does not run any
 Facebook automation or restart the app. Retest the rebuilt desktop app on the
 affected PC; these safeguards do not establish the exact cause of a past freeze.
 
-## Version 1.0.27 listing workflow
+## Version 1.0.28 listing workflow
 
 Manage Listings contains the selected account's Facebook posts. Backup Posts is
 its own sidebar page and shows shared backups across all accounts. Save template
