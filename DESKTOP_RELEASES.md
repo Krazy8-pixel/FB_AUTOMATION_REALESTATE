@@ -164,3 +164,23 @@ confirmation; account-to-account posting retains its click-and-wait success rule
 
 Finish active jobs and restart the app after updating Python routes. Refreshing
 an already running browser does not register newly added server endpoints.
+
+## Version 1.0.29 ChromeDriver connection fix
+
+The build runtime's ssl.py loads an adjacent codex-rejected-cas.pem support file.
+The desktop spec now includes it when present, preserving that runtime's trust
+policy. Without it, SSLContext construction failed in frozen builds. Release
+validation requires SSL context creation to pass as well as real browser control.
+
+ChromeDriver readiness and shutdown now use direct loopback HTTP. Selenium's
+stock readiness helper constructs an HTTPS handler even for its HTTP /status
+request; if SSL context initialization fails, it masks a running driver as
+unreachable. The app-specific service preserves the ready-status check without
+creating an unrelated TLS context. Remote HTTPS certificate verification is not
+changed.
+
+Release validation now includes `TayyaraMotors.exe --driver-smoke-test` using
+an isolated FB_AUTOMATION_HOME. It checks a real headless browser session and
+attachment to an independently launched Chrome debugging port, using only local
+blank/data pages and temporary profiles. Results are saved in
+data/driver-smoke.json. Finish active jobs before installing the update.

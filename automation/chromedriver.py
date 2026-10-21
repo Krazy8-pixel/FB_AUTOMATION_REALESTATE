@@ -2,14 +2,49 @@ import os
 import sys
 import re
 import subprocess
+import json
+from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 
 from selenium import webdriver
 from selenium.common.exceptions import SessionNotCreatedException, WebDriverException
-from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.service import Service as SeleniumService
 from selenium.webdriver.common.selenium_manager import SeleniumManager
 
 from automation.runtime_paths import resource_root, data_dir
+
+
+class Service(SeleniumService):
+    """Check ChromeDriver's loopback HTTP endpoint without initializing TLS.
+
+    Selenium's urllib opener also constructs an HTTPS handler for HTTP URLs.
+    In a frozen runtime, unrelated SSL initialization failures can therefore
+    falsely report a healthy local driver as unreachable. Keep remote HTTPS
+    verification unchanged and use plain HTTP only for this local service.
+    """
+    def is_connectable(self):
+        connection = HTTPConnection('127.0.0.1', self.port, timeout=1)
+        try:
+            connection.request('GET', '/status')
+            response = connection.getresponse()
+            if response.status != 200:
+                return False
+            data = json.loads(response.read(1024 * 1024))
+            return data.get('ready', data.get('value', {}).get('ready')) is True
+        except (OSError, ValueError, HTTPException, AttributeError, TypeError):
+            return False
+        finally:
+            connection.close()
+
+    def send_remote_shutdown_command(self):
+        connection = HTTPConnection('127.0.0.1', self.port, timeout=2)
+        try:
+            connection.request('GET', '/shutdown')
+            connection.getresponse().read(1024)
+        except (OSError, HTTPException):
+            pass
+        finally:
+            connection.close()
 
 
 def installed_chrome_path():

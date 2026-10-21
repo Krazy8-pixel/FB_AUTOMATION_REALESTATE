@@ -1,4 +1,5 @@
 from pathlib import Path
+import ssl
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 ROOT = Path(SPECPATH)
@@ -10,6 +11,12 @@ datas = [
     (str(ROOT / '.ocr_runtime'), 'ocr_runtime'),
     (str(ROOT / 'build/updater/TayyaraUpdater.exe'), '.'),
 ]
+# Some Python distributions require this adjacent SSL trust-support file.
+# Preserve their certificate policy in the frozen runtime as well.
+ssl_support = Path(ssl.__file__).with_name('codex-rejected-cas.pem')
+if ssl_support.is_file():
+    datas.append((str(ssl_support), '.'))
+
 datas += collect_data_files('webview')
 datas += collect_data_files('selenium', includes=['webdriver/common/windows/selenium-manager.exe'])
 a = Analysis([str(ROOT / 'desktop.py')], pathex=[str(ROOT), str(ROOT / '.desktop_deps'), str(ROOT / '.listing_test_deps')], binaries=[], datas=datas,

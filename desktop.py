@@ -14,6 +14,7 @@ def main():
     parser.add_argument('--background', action='store_true')
     parser.add_argument('--health-file')
     parser.add_argument('--smoke-test', action='store_true')
+    parser.add_argument('--driver-smoke-test', action='store_true')
     args = parser.parse_args()
     os.environ['FB_AUTOMATION_DESKTOP'] = '1'
     from automation.task_control import set_window_open, stop_foreground_work
@@ -31,7 +32,7 @@ def main():
     kernel = ctypes.windll.kernel32
     kernel.CreateMutexW.restype = ctypes.c_void_p
     mutex_name = 'Local\\TayyaraMotorsDesktop'
-    if args.smoke_test:
+    if args.smoke_test or args.driver_smoke_test:
         mutex_name += f'SmokeTest-{os.getpid()}'
     mutex = kernel.CreateMutexW(None, False, mutex_name)
     if kernel.GetLastError() == 183:
@@ -40,6 +41,14 @@ def main():
         return
     from app import app
     from web import routes
+    if args.driver_smoke_test:
+        from automation.driver_smoke import run
+        try:
+            run(folder)
+        finally:
+            routes.scheduler.shutdown(wait=False)
+            kernel.CloseHandle(ctypes.c_void_p(mutex))
+        return
     if args.background:
         stop_foreground_work(routes)
     from waitress import create_server
@@ -124,6 +133,6 @@ if __name__ == '__main__':
     except Exception as exc:
         import traceback
         traceback.print_exc()
-        if '--smoke-test' not in sys.argv:
+        if '--smoke-test' not in sys.argv and '--driver-smoke-test' not in sys.argv:
             ctypes.windll.user32.MessageBoxW(None, str(exc), 'Tayyara Motors startup error', 0x10)
         raise
