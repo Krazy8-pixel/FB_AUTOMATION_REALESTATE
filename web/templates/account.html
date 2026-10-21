@@ -122,7 +122,7 @@
       const message = item.querySelector("small");
       const poll = async function() {
         try {
-          const response = await fetch("/account/cdp_status?account=" + encodeURIComponent(account), {cache: "no-store"});
+          const response = await appFetch("/account/cdp_status?account=" + encodeURIComponent(account), {cache: "no-store"});
           const data = await response.json();
           if (response.status === 404 || data.status === "missing") {
             item.remove();
@@ -201,7 +201,7 @@
 
     async function refreshStatus() {
       try {
-        const resp = await fetch("/account/session_check/status", { cache: "no-store" });
+        const resp = await appFetch("/account/session_check/status", { cache: "no-store" });
         const data = await resp.json();
         applyHealth(data.account_health || {});
         setRunning(data.session_check || {});
@@ -229,7 +229,7 @@
       }
       setRunning({running: true, completed: 0, total: accounts.length});
       try {
-        const resp = await fetch("/account/session_check/start", {
+        const resp = await appFetch("/account/session_check/start", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({accounts: accounts})

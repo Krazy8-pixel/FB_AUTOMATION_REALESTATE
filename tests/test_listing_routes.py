@@ -10,6 +10,116 @@ from automation import listing_store
 
 
 class ListingRouteTests(unittest.TestCase):
+    def test_clear_posting_results_keeps_active_jobs_and_saved_listings(self):
+        for job_id, state, account in [('posted', 'posted', 'test-account'), ('failed', 'failed', 'test-account'),
+                                       ('cancelled', 'cancelled', 'test-account'), ('pending', 'pending', 'test-account'),
+                                       ('waiting', 'waiting', 'test-account'), ('running', 'posting', 'test-account'),
+                                       ('other', 'posted', 'other-account')]:
+            self.routes.scheduled_posts[job_id] = {'status': state, 'account': account}
+        saved = listing_store.load('test-account')
+        with patch.object(self.routes.scheduler, 'remove_job') as cancel, \
+             patch.object(self.routes, 'post_to_fb_marketplace') as post, \
+             patch.object(self.routes, 'delete_selected_listings_from_facebook') as delete:
+            response = self.client.post('/post_schedular/clear_results', json={'account': 'test-account'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['cleared_count'], 3)
+        self.assertEqual(set(self.routes.scheduled_posts), {'pending', 'waiting', 'running', 'other'})
+        self.assertEqual(listing_store.load('test-account'), saved)
+        cancel.assert_not_called()
+        post.assert_not_called()
+        delete.assert_not_called()
+
+    def test_cleared_cross_post_results_are_account_scoped_and_survive_restart(self):
+        from automation import desktop_state
+        now = datetime.now()
+        self.routes.scheduled_posts['cross'] = {
+            'job_id': 'cross', 'status': 'posted', 'source': 'Cross posting',
+            'account': 'target-account', 'source_account': 'test-account',
+            'title': 'Cross-post result', 'run_at': now, 'posted_at': now,
+        }
+        with patch.object(self.routes, 'DESKTOP_MODE', True), \
+             patch.dict('os.environ', FB_AUTOMATION_DESKTOP='1'), \
+             patch.object(desktop_state, 'data_dir', return_value=self.root), \
+             patch.object(desktop_state, '_last_saved', None), \
+             patch.object(self.routes.scheduler, 'get_jobs', return_value=[]):
+            response = self.client.post('/post_schedular/clear_results', json={'account': 'test-account'})
+            self.assertEqual(response.json['cleared_count'], 1)
+            self.routes.scheduled_posts.clear()
+            desktop_state.restore_state(self.routes)
+            self.assertEqual(self.client.get('/post_schedular_data').json['items'], [])
+            self.assertEqual(self.client.get('/post_schedular_data').json['posted_count'], 0)
+            with patch.object(self.routes, 'get_active_account', return_value='target-account'):
+                self.assertEqual(len(self.client.get('/post_schedular_data').json['items']), 1)
+                self.assertEqual(self.client.get('/post_schedular_data').json['posted_count'], 1)
+                response = self.client.post('/post_schedular/clear_results', json={'account': 'target-account'})
+                self.assertEqual(response.json['cleared_count'], 1)
+            self.assertNotIn('cross', self.routes.scheduled_posts)
+
+    def test_clear_posting_results_rejects_changed_account(self):
+        self.routes.scheduled_posts['posted'] = {'account': 'test-account', 'status': 'posted'}
+        response = self.client.post('/post_schedular/clear_results', json={'account': 'another-account'})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('posted', self.routes.scheduled_posts)
+
+    def test_posting_results_show_latest_completion_first_with_clear_times(self):
+        now = datetime.now().replace(microsecond=0)
+        self.routes.scheduled_posts.update({
+            'older': {'job_id': 'older', 'account': 'test-account', 'title': 'Older result',
+                      'status': 'posted', 'run_at': now - timedelta(hours=1),
+                      'posted_at': now - timedelta(minutes=2)},
+            'latest': {'job_id': 'latest', 'account': 'test-account', 'title': 'Latest result',
+                       'source': 'Cross posting', 'source_account': 'other',
+                       'status': 'posted', 'run_at': now - timedelta(hours=2),
+                       'posted_at': now - timedelta(minutes=1)},
+            'future': {'job_id': 'future', 'account': 'test-account', 'title': 'Future post',
+                       'status': 'pending', 'run_at': now + timedelta(days=5),
+                       'created_at': now - timedelta(days=1)},
+            'sooner': {'job_id': 'sooner', 'account': 'test-account', 'title': 'Sooner post',
+                       'status': 'pending', 'run_at': now + timedelta(days=1),
+                       'created_at': now - timedelta(days=2)},
+        })
+        with patch.object(self.routes.scheduler, 'get_jobs', return_value=[]):
+            data = self.client.get('/post_schedular_data').json
+            html = self.client.get('/post_schedular').get_data(as_text=True)
+        self.assertEqual([item['job_id'] for item in data['items']], ['latest', 'older', 'future', 'sooner'])
+        latest = data['items'][0]
+        local = (now - timedelta(minutes=1)).astimezone()
+        self.assertEqual(latest['time_label'], 'Posted')
+        self.assertEqual(latest['time_clock'], local.strftime('%I:%M:%S %p').lstrip('0'))
+        self.assertEqual(latest['time_date'], local.strftime('%d %b %Y'))
+        self.assertTrue(latest['time_zone'])
+        self.assertEqual(data['pending_count'], 2)
+        self.assertEqual(data['posted_count'], 2)
+        self.assertEqual(data['next_run_label'], (now + timedelta(days=1)).astimezone().strftime('%d %b, %I:%M %p') + ' ' + local.tzname())
+        self.assertLess(html.index('Latest result'), html.index('Older result'))
+        self.assertIn('posting-time-clock', html)
+
+    def test_busy_post_registry_returns_promptly_and_dashboard_stays_accessible(self):
+        lock = self.routes.scheduled_posts_lock
+        lock.acquire()
+        try:
+            with patch.object(lock, 'request_timeout', 0.02):
+                def blocked_context():
+                    raise AssertionError('Recovery page ran normal context processors')
+                with patch.dict(self.app.template_context_processors, {None: [blocked_context]}):
+                    response = self.client.get('/auto_listing')
+                self.assertEqual(response.status_code, 503)
+                self.assertIn(b'Posting Results', response.data)
+                self.assertEqual(self.client.get('/').status_code, 200)
+        finally:
+            lock.release()
+
+    def test_create_page_does_not_query_scheduler_to_render_navigation(self):
+        with patch.object(self.routes.scheduler, 'get_jobs', side_effect=AssertionError('Navigation queried scheduler')):
+            self.assertEqual(self.client.get('/auto_listing').status_code, 200)
+
+    def test_busy_listing_database_returns_retryable_json(self):
+        import sqlite3
+        with patch.object(self.routes, 'load_listings', side_effect=sqlite3.OperationalError('database is locked')):
+            response = self.client.get('/delete_listings/data')
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(response.json['ok'])
+
     def test_background_toggle_saves_without_redirecting(self):
         with patch.object(self.routes, 'set_run_in_background_enabled') as save:
             response = self.client.post('/set_background_mode', data={},
@@ -51,10 +161,10 @@ class ListingRouteTests(unittest.TestCase):
         import re
         html = self.client.get('/delete_listings/detail/one').data.decode()
         for field in ('year', 'make', 'model', 'price', 'body_style',
-                      'fuel_type', 'vehicle_condition', 'description'):
+                      'fuel_type', 'description'):
             tag = re.search(r'<(?:input|select|textarea)\b[^>]*name="' + field + r'"[^>]*>', html).group()
             self.assertIn('required', tag)
-        for field in ('exterior_color', 'interior_color'):
+        for field in ('exterior_color', 'interior_color', 'vehicle_condition'):
             tag = re.search(r'<select\b[^>]*name="' + field + r'"[^>]*>', html).group()
             self.assertNotIn('required', tag)
         for field in ('vin', 'trim'):
@@ -115,7 +225,7 @@ class ListingRouteTests(unittest.TestCase):
         self.routes.listing_import_jobs['test-account'] = {'running': False, 'stop_requested': True}
         ok, message = self.routes._start_listing_import_job('test-account', automatic=True)
         self.assertFalse(ok)
-        self.assertIn('paused', message)
+        self.assertIn('disabled', message)
 
     def test_stop_import_sets_account_event_and_closes_its_browser(self):
         stop = threading.Event()
@@ -148,7 +258,7 @@ class ListingRouteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # Never start background account work while exercising HTTP handlers.
-        with patch('apscheduler.schedulers.background.BackgroundScheduler.start'):
+        with patch('automation.maintenance.start_scheduler_without_maintenance'):
             cls.routes = importlib.import_module('web.routes')
         cls.app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'web/templates'),
                         static_folder=str(Path(__file__).resolve().parents[1] / 'web/static'))
@@ -543,7 +653,7 @@ class ListingRouteTests(unittest.TestCase):
         reader.assert_not_called()
         poster.assert_not_called()
 
-    def test_daily_refresh_uses_import_time_and_runs_only_one_due_account(self):
+    def test_legacy_daily_refresh_never_starts_imports(self):
         now = datetime.now(timezone.utc)
         for hours, expected in ((23, False), (24, True)):
             with patch.object(self.routes, 'load_listings', return_value={'last_import_at': (now-timedelta(hours=hours)).isoformat(), 'updated_at': now.isoformat()}):
@@ -553,20 +663,28 @@ class ListingRouteTests(unittest.TestCase):
              patch.object(self.routes, '_start_listing_import_job', return_value=(True, 'Started')) as start, \
              patch.object(self.routes, '_runtime_log'):
             self.routes._refresh_due_listing_snapshots()
-        start.assert_called_once_with('a', automatic=True)
+        start.assert_not_called()
 
-    def test_automatic_import_merges_and_marks_its_own_clock(self):
+    def test_manual_import_merges_and_marks_its_own_clock(self):
         def thread(*args, **kwargs):
             from unittest.mock import MagicMock
             instance = MagicMock()
             instance.start.side_effect = kwargs['target']
             return instance
+        original_load = self.routes.load_listings
+        def read_without_registry_lock(account):
+            acquired = self.routes.listing_import_jobs_lock.acquire(blocking=False)
+            if acquired:
+                self.routes.listing_import_jobs_lock.release()
+            self.assertTrue(acquired, 'Import held the page-facing lock while reading SQLite')
+            return original_load(account)
         with patch.object(self.routes.threading, 'Thread', side_effect=thread), \
+             patch.object(self.routes, 'load_listings', side_effect=read_without_registry_lock), \
              patch.object(self.routes, 'import_listings_from_facebook') as importer:
-            ok, _ = self.routes._start_listing_import_job('test-account', automatic=True)
+            ok, _ = self.routes._start_listing_import_job('test-account')
         self.assertTrue(ok)
         self.assertFalse(importer.call_args.kwargs['replace_existing'])
-        self.assertTrue(importer.call_args.kwargs['only_new'])
+        self.assertFalse(importer.call_args.kwargs['only_new'])
         self.assertFalse(self.routes._listing_snapshot_is_due('test-account'))
 
     def test_repost_status_page_shows_schedules_and_history_for_active_account(self):
@@ -688,7 +806,7 @@ class ListingRouteTests(unittest.TestCase):
                 self.assertEqual(payload['price'], '250')
                 self.assertEqual(payload['description'], 'Cross description')
                 if account == 'other':
-                    self.assertEqual(self.routes.scheduled_posts[ids[1]]['status'], 'pending')
+                    self.assertEqual(self.routes.scheduled_posts[ids[1]]['status'], 'waiting')
                     raise RuntimeError('First account failed')
                 self.assertEqual(self.routes.scheduled_posts[ids[0]]['status'], 'failed')
                 return True
@@ -713,13 +831,78 @@ class ListingRouteTests(unittest.TestCase):
             data = self.client.get('/post_schedular_data').json
             self.assertEqual(len(data['items']), 2)
             self.assertEqual(data['posted_count'], 1)
-            self.assertIn('First account failed', data['items'][0]['error'])
+            failed_item = next(item for item in data['items'] if item['job_id'] == ids[0])
+            self.assertIn('First account failed', failed_item['error'])
             with patch.object(self.routes, 'get_active_account', return_value='third'):
                 target = self.client.get('/post_schedular_data').json['items']
                 self.assertEqual(len(target), 1)
                 self.assertEqual(target[0]['source_account'], 'test-account')
             with patch.object(self.routes, 'get_active_account', return_value='unrelated'):
                 self.assertEqual(self.client.get('/post_schedular_data').json['items'], [])
+
+    def test_clear_facebook_records_is_bulk_local_only_and_account_scoped(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [original, dict(original, id='two'), dict(original, id='backup', source_deleted=True, facebook_present=False)])
+        listing_store.save('other', [dict(original, id='other-live')])
+        with patch.object(self.routes, 'delete_selected_listings_from_facebook') as delete:
+            response = self.client.post('/delete_listings/storage/clear', json={'account':'test-account','scope':'facebook'})
+            self.assertEqual(response.status_code, 200, response.json)
+            delete.assert_not_called()
+        self.assertEqual([item['id'] for item in listing_store.load('test-account')['listings']], ['backup'])
+        self.assertEqual({item['id'] for item in listing_store.load('other')['listings']}, {'other-live','backup'})
+        self.assertTrue((self.root / 'photo.jpg').exists())
+        self.assertEqual(self.client.post('/delete_listings/storage/clear', json={'account':'other','scope':'facebook'}).status_code, 409)
+
+    def test_manage_bulk_controls_are_inline_with_one_bulk_facebook_clear_button(self):
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(self.client.get('/delete_listings').data, 'html.parser')
+        self.assertIsNone(soup.select_one('dialog'))
+        self.assertEqual(len(soup.select('#facebook-panel [data-clear-facebook]')), 1)
+        self.assertFalse(soup.select('#backup-panel [data-clear-facebook], .delete-card [data-clear-facebook]'))
+        self.assertEqual(len(soup.select('[data-posting-controls-slot]')), 1)
+        form = soup.select_one('#manage-cross-form')
+        self.assertLess(str(form).index('manage-target-accounts'), str(form).index('manage-cross-delay'))
+
+    def test_mass_account_posting_staggers_each_listing_on_all_ten_accounts(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [dict(original, id=str(index), details=dict(original['details'], model='Model ' + str(index)), source_deleted=True, facebook_present=False) for index in range(4)])
+        accounts = ['test-account'] + ['account-' + str(index) for index in range(9)]
+        with patch.object(self.routes, 'get_all_accounts', return_value=accounts), patch.object(self.routes.scheduler, 'add_job') as schedule:
+            for index in range(4):
+                response = self.cross_request(accounts, listing_id=str(index), backup_post=True, mass_post=True, post_mode='schedule', delay_value=5, delay_unit='minutes', schedule_batch='test-series', schedule_position=index)
+                self.assertEqual(response.status_code, 200, response.json)
+                jobs = [self.routes.scheduled_posts[job_id] for job_id in response.json['job_ids']]
+                self.assertEqual(len(jobs), 10)
+                self.assertEqual({job['account'] for job in jobs}, set(accounts))
+                self.assertEqual(len({job['run_at'] for job in jobs}), 1)
+                if index == 0:
+                    anchor = jobs[0]['schedule_anchor']
+                expected = anchor + timedelta(minutes=5 * (index + 1))
+                self.assertTrue(all(job['run_at'] == expected for job in jobs))
+                self.assertEqual(schedule.call_args.kwargs['run_date'], expected)
+                self.assertEqual(response.json['run_at'], expected.strftime('%Y-%m-%d %H:%M:%S'))
+            rows = self.client.get('/post_schedular_data').json['items']
+            self.assertEqual(len(rows), 40)
+            for row in rows:
+                meta = self.routes.scheduled_posts[row['job_id']]
+                self.assertEqual(row['time_label'], 'Scheduled')
+                self.assertEqual(row['time_iso'], meta['run_at'].astimezone().isoformat(timespec='seconds'))
+                self.assertAlmostEqual(row['remaining_seconds'], (meta['run_at'] - datetime.now()).total_seconds(), delta=2)
+
+    def test_mass_schedule_requires_consistent_interval_order_and_targets(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [original, dict(original, id='two')])
+        with patch.object(self.routes, 'get_all_accounts', return_value=['test-account','other','third']), patch.object(self.routes.scheduler, 'add_job'):
+            args = dict(mass_post=True, post_mode='schedule', delay_value=5, delay_unit='minutes', schedule_batch='series', schedule_position=0)
+            self.assertEqual(self.cross_request(['other'], **args).status_code, 200)
+            args.update(listing_id='two', schedule_position=1)
+            self.assertEqual(self.cross_request(['other'], **dict(args, delay_value=6)).status_code, 409)
+            self.assertEqual(self.cross_request(['third'], **args).status_code, 409)
+            self.assertEqual(self.cross_request(['other'], **dict(args, schedule_position=3)).status_code, 409)
+            self.assertEqual(self.cross_request(['other'], **dict(args, schedule_position=True)).status_code, 400)
+            self.assertEqual(self.cross_request(['other'], **args).status_code, 200)
+            jobs = list(self.routes.scheduled_posts.values())
+            self.assertEqual(jobs[1]['run_at'] - jobs[0]['run_at'], timedelta(minutes=5))
 
     def test_cross_post_delay_and_pending_cancellation(self):
         with patch.object(self.routes, 'get_all_accounts', return_value=['test-account', 'other', 'third']), \
@@ -774,7 +957,7 @@ class ListingRouteTests(unittest.TestCase):
                     self.assertTrue(first_started.wait(2))
                     second.start()
                     self.assertFalse(second_started.wait(0.2))
-                    self.assertEqual(self.routes.scheduled_posts[second_ids[0]]['status'], 'pending')
+                    self.assertEqual(self.routes.scheduled_posts[second_ids[0]]['status'], 'waiting')
                 finally:
                     release.set()
                     first.join(3)
@@ -812,7 +995,7 @@ class ListingRouteTests(unittest.TestCase):
         import re
         listing_store.update_fields('test-account', 'one', {
             'facebook_present': False, 'source_deleted': True, 'facebook_reposted': False})
-        for url in ('/delete_listings', '/delete_listings/detail/one'):
+        for url in ('/backup_listings', '/delete_listings/detail/one'):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200)
             badge = re.search(r'<span\b[^>]*class="listing-source-badge[^>]*>', response.get_data(as_text=True))
@@ -824,6 +1007,334 @@ class ListingRouteTests(unittest.TestCase):
         response = self.client.post('/reposting')
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.location.endswith('/delete_listings'))
+
+    def manual_form(self, **changes):
+        from io import BytesIO
+        from PIL import Image
+        image = BytesIO()
+        Image.new('RGB', (900, 600), 'blue').save(image, format='PNG')
+        image.seek(0)
+        return dict({'account': 'test-account', 'vehicle_type': 'Car', 'year': '2026',
+                     'make': 'Honda', 'model': 'City', 'mileage': '1000', 'price': '5000',
+                     'body_style': 'Sedan', 'fuel_type': 'Gasoline', 'transmission': 'Automatic transmission',
+                     'description': '', 'images': (image, 'car.png')}, **changes)
+
+    def test_save_manual_template_requires_fields_and_is_shared(self):
+        with patch.object(self.routes, '_manual_images_directory', return_value=str(self.root / 'uploads')), \
+             patch('automation.manual_backups.data_dir', return_value=self.root / 'durable'), \
+             patch.object(self.routes.scheduler, 'add_job') as schedule, \
+             patch.object(self.routes, 'post_to_fb_marketplace') as publish:
+            response = self.client.post('/auto_listing_manual', data=self.manual_form(submit_action='save_template'))
+        self.assertEqual(response.status_code, 302)
+        records = listing_store.load('test-account')['listings']
+        template = next(item for item in records if item.get('manual_template'))
+        self.assertFalse(template['facebook_present'])
+        self.assertTrue(template['source_deleted'])
+        self.assertEqual(template['details']['make'], 'Honda')
+        self.assertTrue(Path(template['downloaded_images'][0]['path']).is_file())
+        self.assertIn('durable', template['downloaded_images'][0]['path'])
+        for source in (self.root / 'uploads').iterdir():
+            source.unlink()
+        self.assertTrue(Path(template['downloaded_images'][0]['path']).is_file())
+        self.assertEqual(listing_store.load('other')['listings'], [template])
+        schedule.assert_not_called()
+        publish.assert_not_called()
+
+    def test_invalid_manual_template_is_not_saved_or_scheduled(self):
+        for changes in ({'make': ''}, {'mileage': '100'}, {'year': '1800'}, {'price': '-1'}, {'body_style': ''}):
+            with patch.object(self.routes.scheduler, 'add_job') as schedule:
+                response = self.client.post('/auto_listing_manual',
+                    data=self.manual_form(submit_action='save_template', **changes))
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(listing_store.load('test-account')['listings']), 1)
+            schedule.assert_not_called()
+
+    def test_manual_template_rejects_account_change(self):
+        response = self.client.post('/auto_listing_manual',
+            data=self.manual_form(submit_action='save_template', account='other'))
+        self.assertIn(b'active account changed', response.data)
+        self.assertEqual(len(listing_store.load('test-account')['listings']), 1)
+        self.assertEqual(listing_store.load('other')['listings'], [])
+
+    def test_manual_post_is_saved_only_after_existing_confirmation_succeeds(self):
+        with patch.object(self.routes, '_manual_images_directory', return_value=str(self.root / 'uploads')), \
+             patch('automation.manual_backups.data_dir', return_value=self.root / 'durable'), \
+             patch.object(self.routes.scheduler, 'add_job') as schedule, \
+             patch.object(self.routes, '_runtime_log'), patch.object(self.routes, '_log_event'):
+            response = self.client.post('/auto_listing_manual', data=self.manual_form(manual_timing='now'))
+            self.assertEqual(response.status_code, 200)
+            payload, account, job_id = schedule.call_args.kwargs['args']
+            self.assertTrue(payload['_require_publish_confirmation'])
+            self.assertEqual(len(listing_store.load(account)['listings']), 1)
+            with patch.object(self.routes, 'post_to_fb_marketplace', return_value=False):
+                self.assertFalse(self.routes._post_single_listing(payload, account, job_id))
+            self.assertEqual(len(listing_store.load(account)['listings']), 1)
+            self.routes.scheduled_posts[job_id]['status'] = 'pending'
+            with patch.object(self.routes, 'post_to_fb_marketplace', return_value=True):
+                self.assertTrue(self.routes._post_single_listing(payload, account, job_id))
+        record = listing_store.load(account)['listings'][0]
+        self.assertTrue(record['facebook_present'])
+        self.assertFalse(record['source_deleted'])
+        self.assertFalse(record['manual_template'])
+        self.assertEqual(record['details']['title'], '2026 Honda City')
+        self.assertTrue(Path(record['downloaded_images'][0]['path']).is_file())
+        self.assertEqual(listing_store.load('other')['listings'], [])
+
+    def test_manual_delay_remains_scheduled_with_confirmation(self):
+        with patch.object(self.routes, '_manual_images_directory', return_value=str(self.root / 'uploads')), \
+             patch.object(self.routes.scheduler, 'add_job') as schedule:
+            response = self.client.post('/auto_listing_manual', data=self.manual_form(
+                manual_timing='schedule', delay_unit='minutes', delay_value='5'))
+        self.assertEqual(response.status_code, 200)
+        self.assertGreater(schedule.call_args.kwargs['run_date'], datetime.now() + timedelta(minutes=4))
+        self.assertTrue(schedule.call_args.kwargs['args'][0]['_require_publish_confirmation'])
+        self.assertEqual(len(listing_store.load('test-account')['listings']), 1)
+
+    def test_clear_backups_preserves_facebook_and_other_account_records(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [original, dict(original, id='backup', source_deleted=True, facebook_present=False)])
+        listing_store.save('other', [dict(original, id='other-backup', source_deleted=True)])
+        response = self.client.post('/delete_listings/storage/clear', json={'scope': 'backups', 'account': 'test-account'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['id'] for item in listing_store.load('test-account')['listings']], ['one'])
+        self.assertEqual(len(listing_store.load('other')['listings']), 0)
+        self.assertEqual(self.client.post('/delete_listings/storage/clear',
+            json={'scope': 'backups', 'account': 'other'}).status_code, 409)
+
+    def test_manage_sections_sort_latest_facebook_first_and_backups_last(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [dict(original, id='backup', source_deleted=True, facebook_present=False, created_at='2026-12-01'),
+            dict(original, id='older', listed_date='2026-01-01'), dict(original, id='newer', listed_date='2026-10-21')])
+        ids = [item['id'] for item in self.client.get('/delete_listings/data').json['listings']]
+        self.assertEqual(ids, ['newer', 'older', 'backup'])
+        html = self.client.get('/delete_listings').get_data(as_text=True)
+        self.assertLess(html.index('data-id="newer"'), html.index('data-id="older"'))
+        self.assertNotIn('data-id="backup"', html)
+        backup_html = self.client.get('/backup_listings').data.decode()
+        self.assertIn('data-id="backup"', backup_html)
+        self.assertNotIn('data-id="older"', backup_html)
+        self.assertIn('Clear all backups', backup_html)
+        self.assertIn('Post to other accounts', html)
+
+    def test_manual_page_exposes_template_and_now_delay_controls(self):
+        html = self.client.get('/auto_listing_manual').get_data(as_text=True)
+        self.assertIn('Save template', html)
+        self.assertIn('manual_timing', html)
+        self.assertIn('submit_action', html)
+
+    def test_facebook_delete_moves_reposted_listing_to_backups_without_losing_media(self):
+        listing_store.update_fields('test-account', 'one', {'facebook_present': True, 'facebook_reposted': True})
+        workers = []
+        from unittest.mock import MagicMock
+        def make_worker(*args, **kwargs):
+            workers.append(kwargs['target'])
+            return MagicMock()
+        with patch.object(self.routes.threading, 'Thread', side_effect=make_worker), \
+             patch.object(self.routes, 'delete_selected_listings_from_facebook',
+                          return_value={'deleted_ids': ['one'], 'deleted': 1}), \
+             patch.object(self.routes, '_runtime_log'):
+            response = self.client.post('/delete_listings/delete', json={'ids': ['one'], 'account': 'test-account'})
+            self.assertEqual(response.status_code, 200)
+            workers[0]()
+        listing = listing_store.load('test-account')['listings'][0]
+        self.assertTrue(listing['source_deleted'])
+        self.assertFalse(listing['facebook_present'])
+        self.assertFalse(listing['facebook_reposted'])
+        self.assertEqual(len(listing['downloaded_images']), 2)
+
+    def test_confirmed_deletion_is_saved_before_batch_ends_even_if_next_fails(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [original, dict(original, id='two')])
+        workers = []
+        from unittest.mock import MagicMock
+        def make_worker(*args, **kwargs):
+            workers.append(kwargs['target'])
+            return MagicMock()
+        def delete(account, items, **kwargs):
+            kwargs['progress_callback']({'listing_id': 'one', 'confirmed_deleted': True,
+                'clicked': 1, 'deleted': 1, 'message': 'Listing deleted.'})
+            records = {item['id']: item for item in listing_store.load(account)['listings']}
+            self.assertTrue(records['one']['source_deleted'])
+            self.assertFalse(records['one']['facebook_present'])
+            self.assertFalse(records['two'].get('source_deleted', False))
+            self.assertTrue(self.routes.facebook_delete_jobs[account]['running'])
+            raise RuntimeError('Second listing failed')
+        with patch.object(self.routes.threading, 'Thread', side_effect=make_worker), \
+             patch.object(self.routes, 'delete_selected_listings_from_facebook', side_effect=delete), \
+             patch.object(self.routes, '_runtime_log'):
+            self.assertEqual(self.client.post('/delete_listings/delete', json={'ids': ['one', 'two']}).status_code, 200)
+            workers[0]()
+        records = {item['id']: item for item in listing_store.load('test-account')['listings']}
+        self.assertTrue(records['one']['source_deleted'])
+        self.assertFalse(records['two'].get('source_deleted', False))
+        self.assertEqual(self.routes.facebook_delete_jobs['test-account']['deleted'], 1)
+
+    def test_clear_one_backup_preserves_live_and_other_backups(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [original, dict(original, id='backup', source_deleted=True, facebook_present=False),
+            dict(original, id='backup-two', details=dict(original['details'], price='200'), source_deleted=True)])
+        listing_store.save('other', [dict(original, id='backup', source_deleted=True)])
+        endpoint = '/delete_listings/backup/backup/clear'
+        self.assertEqual(self.client.post(endpoint, json={'account': 'other'}).status_code, 409)
+        self.assertEqual(self.client.post('/delete_listings/backup/one/clear', json={'account': 'test-account'}).status_code, 409)
+        self.assertEqual(self.client.post(endpoint, json={'account': 'test-account'}).status_code, 200)
+        self.assertEqual({item['id'] for item in listing_store.load('test-account')['listings']}, {'one', 'backup-two'})
+        self.assertEqual(len(listing_store.load('other')['listings']), 1)
+        self.assertTrue((self.root / 'photo.jpg').is_file())
+
+    def test_backup_cards_offer_posting_actions_without_global_clear(self):
+        from bs4 import BeautifulSoup
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [original, dict(original, id='backup', source_deleted=True, facebook_present=False)])
+        soup = BeautifulSoup(self.client.get('/delete_listings').data, 'html.parser')
+        self.assertIsNone(soup.select_one('#listing-clear-storage-btn'))
+        live = soup.select_one('.delete-card[data-id="one"]')
+        backup_soup = BeautifulSoup(self.client.get('/backup_listings').data, 'html.parser')
+        backup = backup_soup.select_one('.delete-card[data-id="backup"]')
+        self.assertIsNone(live.select_one('[data-clear-backup]'))
+        self.assertIsNone(live.select_one('.listing-backup-action'))
+        self.assertEqual(backup.select('.listing-backup-action'), [])
+        self.assertEqual([button.text.strip() for button in backup_soup.select('[data-backup-action]')], ['Post on accounts'])
+        self.assertEqual([el.text.strip() for el in backup.select('.listing-actions a,.listing-actions button')], ['View', 'Clear backup'])
+        for card in (live, backup):
+            self.assertEqual(card.select_one('.listing-view-btn').text, 'View')
+
+    def test_backup_batch_can_queue_multiple_reposts_at_the_same_time(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [dict(original, id=name, source_deleted=True, facebook_present=False) for name in ('backup-one', 'backup-two')])
+        with patch.object(self.routes.scheduler, 'add_job') as queue:
+            for name in ('backup-one', 'backup-two'):
+                response = self.client.post('/delete_listings/repost', json={'listing_id': name,
+                    'account': 'test-account', 'post_mode': 'schedule', 'delay_value': 1, 'delay_unit': 'minutes', 'backup_batch': True})
+                self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(queue.call_count, 2)
+
+    def test_mass_actions_require_delay_but_individual_now_stays_available(self):
+        with patch.object(self.routes.scheduler, 'add_job') as queue:
+            for path, flags in [('/delete_listings/repost', {'backup_batch': True}),
+                                ('/delete_listings/cross_post', {'mass_post': True})]:
+                response = self.client.post(path, json={'account': 'test-account', 'post_mode': 'now', **flags})
+                self.assertEqual(response.status_code, 400)
+                self.assertIn('delay', response.json['message'])
+            queue.assert_not_called()
+        self.assertIn(b'value="now"', self.client.get('/delete_listings/detail/one').data)
+
+    def test_identical_backups_show_once_and_clear_all_matching_copies(self):
+        from bs4 import BeautifulSoup
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [original, dict(original, id='backup-one', facebook_present=False, source_deleted=True), dict(original, id='backup-two', facebook_present=False, source_deleted=True)])
+        soup = BeautifulSoup(self.client.get('/backup_listings').data, 'html.parser')
+        cards = soup.select('.delete-card')
+        self.assertEqual(len(cards), 1)
+        rows = self.client.get('/delete_listings/data').json['listings']
+        self.assertEqual(len(rows), 2)
+        backup_id = cards[0]['data-id']
+        self.routes.scheduled_posts['pending'] = {'source':'Cross posting', 'source_account':'other', 'source_listing_id':'backup-two' if backup_id=='backup-one' else 'backup-one', 'status':'pending', 'account':'other'}
+        self.assertEqual(self.client.post('/delete_listings/backup/' + backup_id + '/clear', json={'account':'test-account'}).status_code, 409)
+        self.routes.scheduled_posts.clear()
+        self.assertEqual(self.client.post('/delete_listings/backup/' + backup_id + '/clear', json={'account':'test-account'}).status_code, 200)
+        self.assertEqual([item['id'] for item in listing_store.load('test-account')['listings']], ['one'])
+        self.assertTrue((self.root / 'photo.jpg').is_file())
+
+    def test_backups_have_own_sidebar_page_and_keep_account_switch_navigation(self):
+        from bs4 import BeautifulSoup
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.add_at_top('test-account', dict(original, id='shared-backup', facebook_present=False, source_deleted=True))
+        soup = BeautifulSoup(self.client.get('/backup_listings').data, 'html.parser')
+        self.assertIsNotNone(soup.select_one('#backup-panel'))
+        self.assertIsNone(soup.select_one('#facebook-panel'))
+        self.assertIsNone(soup.select_one('#listing-import-form'))
+        self.assertIsNotNone(soup.select_one('li.active a[href="/backup_listings"]'))
+        self.assertIsNotNone(soup.select_one('.delete-card[data-id="shared-backup"]'))
+        with patch.object(self.routes, 'get_active_account', return_value='other'):
+            other = BeautifulSoup(self.client.get('/backup_listings').data, 'html.parser')
+            self.assertIsNotNone(other.select_one('.delete-card[data-id="shared-backup"]'))
+        detail = BeautifulSoup(self.client.get('/delete_listings/detail/shared-backup').data, 'html.parser')
+        self.assertEqual(detail.select_one('.ld-back')['href'], '/backup_listings')
+        self.assertIsNotNone(detail.select_one('li.active a[href="/backup_listings"]'))
+        response = self.client.post('/set_active_account', data={'account':'other'}, headers={'Referer':'http://localhost/backup_listings'})
+        self.assertTrue(response.location.endswith('/backup_listings'))
+
+    def test_manage_panels_own_their_buttons(self):
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(self.client.get('/delete_listings').data, 'html.parser')
+        posted = soup.select_one('#facebook-panel')
+        backups = BeautifulSoup(self.client.get('/backup_listings').data, 'html.parser').select_one('#backup-panel')
+        self.assertIsNone(soup.select_one('#backup-panel'))
+        self.assertIsNotNone(posted)
+        self.assertIsNotNone(backups)
+        for selector in ('#listing-refresh-clicks-btn', '#listing-cross-post-btn', '#listing-facebook-delete-btn'):
+            self.assertIsNotNone(posted.select_one(selector))
+        self.assertEqual(len(backups.select('[data-backup-action]')), 1)
+        self.assertIsNotNone(backups.select_one('[data-clear-backups]'))
+        self.assertFalse(soup.select('.delete-secondary-row button'))
+
+    def test_post_dialog_uses_card_selection_and_includes_active_account(self):
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(self.client.get('/delete_listings').data, 'html.parser')
+        dialog = soup.select_one('#manage-cross-dialog')
+        self.assertIsNone(dialog.select_one('#backup-popup-listings'))
+        self.assertIsNotNone(dialog.select_one('#manage-cross-value'))
+        self.assertIsNotNone(dialog.select_one('[name=cross_account][value="test-account"]'))
+        self.assertIsNotNone(soup.select_one('#facebook-panel [data-facebook-action="repost"]'))
+        self.assertIsNone(soup.select_one('#backup-panel [data-backup-action="repost"]'))
+
+    def test_backup_post_allows_active_account_only_for_real_backups(self):
+        with patch.object(self.routes, 'get_all_accounts', return_value=['test-account', 'other']), patch.object(self.routes.scheduler, 'add_job'):
+            self.assertEqual(self.cross_request(['test-account'], backup_post=True).status_code, 409)
+            original = listing_store.load('test-account')['listings'][0]
+            listing_store.save('test-account', [dict(original, source_deleted=True, facebook_present=False)])
+            self.assertEqual(self.cross_request(['test-account']).status_code, 400)
+            response = self.cross_request(['test-account', 'other'], backup_post=True, mass_post=True, post_mode='schedule', delay_value=1, delay_unit='minutes')
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual({meta['account'] for meta in self.routes.scheduled_posts.values()}, {'test-account', 'other'})
+
+    def test_shared_backup_visible_and_postable_after_switching_accounts(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.add_at_top('test-account', dict(original, id='shared', facebook_present=False, source_deleted=True))
+        with patch.object(self.routes, 'get_active_account', return_value='other'), patch.object(self.routes, 'get_all_accounts', return_value=['test-account','other']), patch.object(self.routes.scheduler, 'add_job'):
+            records = self.client.get('/delete_listings/data').json['listings']
+            self.assertEqual([item['id'] for item in records], ['shared'])
+            self.assertEqual(self.client.get('/delete_listings/photo/shared/first.jpg').status_code, 200)
+            response = self.cross_request(['other'], account='other', listing_id='shared', backup_post=True, mass_post=True, post_mode='schedule', delay_value=1, delay_unit='minutes')
+            self.assertEqual(response.status_code, 200, response.json)
+        self.assertIn('shared', self.routes._active_repost_listing_ids('test-account'))
+        self.assertEqual(self.client.post('/delete_listings/backup/shared/clear', json={'account':'test-account'}).status_code, 409)
+        self.assertEqual(self.client.post('/delete_listings/storage/clear', json={'account':'test-account','scope':'backups'}).status_code, 409)
+
+    def test_reposted_source_requires_current_facebook_id_before_reposting_again(self):
+        listing_store.update_fields('test-account', 'one', {'source_deleted':True, 'facebook_reposted':True, 'facebook_present':True})
+        with patch.object(self.routes.scheduler, 'add_job') as queue:
+            response = self.client.post('/delete_listings/repost', json={'account':'test-account', 'listing_id':'one', 'mass_post':True, 'post_mode':'schedule', 'delay_value':1, 'delay_unit':'minutes'})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn('current Facebook listing ID', response.json['message'])
+            queue.assert_not_called()
+
+    def test_failed_repost_after_confirmed_deletion_is_shared_backup(self):
+        listing_store.update_fields('test-account', 'one', {'source_deleted':False, 'facebook_reposted':True, 'facebook_present':True})
+        listing = listing_store.load('test-account')['listings'][0]
+        with patch.object(self.routes, 'delete_selected_listings_from_facebook', return_value={'deleted':1}), patch.object(self.routes, 'post_to_fb_marketplace', return_value=False), patch.object(self.routes, '_runtime_log'), patch.object(self.routes, '_record_repost_history'):
+            self.routes._run_saved_listing_repost(listing, 'test-account')
+        backup = listing_store.load('other')['listings'][0]
+        self.assertEqual(backup['id'], 'one')
+        self.assertFalse(backup['facebook_present'])
+        self.assertFalse(backup['facebook_reposted'])
+        self.assertEqual(backup['repost_status'], 'failed')
+
+    def test_bulk_repost_rejects_backups(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [dict(original, source_deleted=True, facebook_present=False)])
+        response = self.client.post('/delete_listings/repost', json={'account':'test-account', 'listing_id':'one', 'mass_post':True, 'post_mode':'schedule', 'delay_value':1, 'delay_unit':'minutes'})
+        self.assertEqual(response.status_code, 409)
+
+    def test_bulk_live_reposts_allow_same_delay(self):
+        original = listing_store.load('test-account')['listings'][0]
+        listing_store.save('test-account', [dict(original, id=name) for name in ('live-one', 'live-two')])
+        with patch.object(self.routes.scheduler, 'add_job') as queue:
+            for name in ('live-one', 'live-two'):
+                response = self.client.post('/delete_listings/repost', json={'account':'test-account', 'listing_id':name, 'mass_post':True, 'post_mode':'schedule', 'delay_value':1, 'delay_unit':'minutes'})
+                self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual(queue.call_count, 2)
 
 
 if __name__ == '__main__':

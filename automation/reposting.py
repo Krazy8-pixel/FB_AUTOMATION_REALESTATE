@@ -1,4 +1,4 @@
-﻿import os
+import os
 import pickle
 import re
 import time
@@ -29,7 +29,7 @@ EDIT_FIELDS = {
 ITEM_EDIT_FIELDS = {'title': 'Title', 'category': 'Category', 'item_condition': 'Condition', 'sku': 'SKU'}
 EXTRA_VEHICLE_FIELDS = {'vin': 'VIN', 'trim': 'Trim'}
 REPOST_REQUIRED_FIELDS = ('title', 'vehicle_type', 'year', 'make', 'model', 'mileage', 'price',
-                          'body_style', 'vehicle_condition',
+                          'body_style',
                           'fuel_type', 'transmission', 'description', 'location')
 
 
@@ -103,7 +103,7 @@ def validate_repost_fields(post, edited_fields=None):
     missing = [field for field in required if not str(post.get(field) or '').strip()]
     uncertain = [field for field, state in (post.get('field_states') or {}).items()
                  if (field in EDIT_FIELDS or (field in EXTRA_VEHICLE_FIELDS and post.get(field))) and field not in edited_fields
-                 and (field not in {'exterior_color', 'interior_color', 'vin', 'trim'} or str(post.get(field) or '').strip())
+                 and (field not in {'exterior_color', 'interior_color', 'vehicle_condition', 'vin', 'trim'} or str(post.get(field) or '').strip())
                  and state in {'unreadable', 'conflict', 'needs_review'}]
     if missing or uncertain:
         fields = ', '.join(dict.fromkeys(missing + uncertain))
@@ -1075,13 +1075,15 @@ def _print_reposting_read_summary(post_data, edit_url=""):
             print(f"[Reposting]   image_{index}={image_url!r}", flush=True)
 
 
-def recover_unreadable_fields(driver, post, fallback, fields=None):
+def recover_unreadable_fields(driver, post, fallback, fields=None, skip_confirmed_empty=False):
     """Recover missing HTML values once, excluding colors, VIN, and trim."""
     states = post.setdefault('field_states', {})
-    excluded = {'exterior_color', 'interior_color', 'vin', 'trim'}
+    excluded = {'exterior_color', 'interior_color', 'vehicle_condition', 'vin', 'trim'}
     fields = [key for key in (fields if fields is not None else EDIT_FIELDS) if key not in excluded]
     missing = [key for key in fields if not str(post.get(key) or '').strip()
                or states.get(key) in {'unavailable', 'unreadable', 'conflict'}]
+    if skip_confirmed_empty:
+        missing = [key for key in missing if states.get(key) != 'empty']
     post['field_sources'] = {key: 'primary' for key in fields if key not in missing}
     if not fallback or not missing:
         return
@@ -1110,8 +1112,60 @@ def recover_unreadable_fields(driver, post, fallback, fields=None):
         print(f'[ListingImport] Visual fallback failed; primary values kept: {exc}', flush=True)
 
 
+def _public_media_in_new_tab(driver, listing):
+    """Resolve the selected item after navigation settles; always restore its tab."""
+    from automation.public_listing_media import read_public_listing_media
+
+    def exact_id(url):
+        match = re.search(r'/marketplace/item/(\d+)(?:/|\?|$)', str(url or ''))
+        if match:
+            return match.group(1)
+        values = parse_qs(urlsplit(str(url or '')).query).get('listing_id', [])
+        return values[0] if values and values[0].isdigit() else ''
+
+    def selected_item(current):
+        # Selling cards may have no href, and clicking them may open a dialog
+        # without changing the address bar. Its Edit link still identifies it.
+        navigated = exact_id(current.current_url)
+        if navigated:
+            return navigated
+        dialogs = [node for node in current.find_elements(By.CSS_SELECTOR, '[role="dialog"]')
+                   if node.is_displayed()]
+        scope = dialogs[-1] if dialogs else current
+        links = scope.find_elements(By.XPATH, ".//a[contains(@href,'/marketplace/edit/') and contains(@href,'listing_id=')]")
+        ids = {exact_id(link.get_attribute('href')) for link in links if link.is_displayed()}
+        ids.discard('')
+        if len(ids) == 1:
+            return next(iter(ids))
+        return exact_id(listing.get('url')) or exact_id(listing.get('edit_url')) or False
+
+    listing_id = WebDriverWait(driver, 20).until(selected_item,
+        message='Selected listing did not expose its public URL or Edit listing ID within 20 seconds.')
+    original = driver.current_window_handle
+    previous_timeout = driver.timeouts.page_load
+    opened = None
+    try:
+        driver.switch_to.new_window('tab')
+        opened = driver.current_window_handle
+        driver.set_page_load_timeout(30)
+        public_url = 'https://www.facebook.com/marketplace/item/' + listing_id + '/'
+        print(f'[Import] Opening public listing in separate tab: {public_url}', flush=True)
+        driver.get(public_url)
+        WebDriverWait(driver, 20).until(lambda current: exact_id(current.current_url) == listing_id,
+            message='Public listing did not open within 20 seconds.')
+        print(f'[Import] Public listing opened: {driver.current_url}', flush=True)
+        return read_public_listing_media(driver, listing_id)
+    finally:
+        try:
+            if opened is not None and opened != original:
+                driver.close()
+        finally:
+            driver.switch_to.window(original)
+            driver.set_page_load_timeout(previous_timeout)
+
+
 def read_listing_from_manage(account, listing, driver=None, field_reader=None, visual_fallback=None,
-                             listing_card=None, return_to_inventory=None):
+                             listing_card=None, return_to_inventory=None, public_media=False):
     """Read one stored listing through Manage Listings -> Edit listing."""
     if not account:
         raise ValueError("Account is required")
@@ -1128,9 +1182,14 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
         raise ValueError("Listing title is required")
 
     media_urls, media_errors = [], []
+    public_sources = {'image_urls': [], 'video_urls': [], 'video_errors': []}
 
     def with_videos(result):
         post = result['posts'][0]
+        if public_media:
+            post.update(public_sources)
+            post['media_source'] = 'public_listing'
+            return result
         from automation.listing_videos import discover
         final_urls, final_errors = discover(driver)
         post['video_urls'] = list(dict.fromkeys(media_urls + final_urls + (post.get('video_urls') or [])))
@@ -1167,6 +1226,15 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
         if not _safe_click(driver, card):
             raise Exception("Selected listing could not be opened")
         print(f'[ListingImport] Clicked listing: {listing_name}', flush=True)
+
+        if public_media:
+            try:
+                public_sources = _public_media_in_new_tab(driver, listing)
+                print(f"[Import] Public gallery: {len(public_sources['image_urls'])} photos, {len(public_sources['video_urls'])} optional HD videos.", flush=True)
+            except Exception as exc:
+                message = f'Public media extraction failed: {type(exc).__name__}: {exc}'
+                public_sources['photo_errors'] = [message]
+                print(f'[Import] {message}. Continuing with Edit Listing details.', flush=True)
 
         # Read Model from the public listing heading before opening Edit.
         # Facebook's edit-form Model field can contain an internal numeric ID
@@ -1220,8 +1288,9 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
             lambda current: "/marketplace/edit/" in str(current.current_url or "")
             or bool(current.find_elements(By.XPATH, "//*[@aria-label='Price']"))
         )
-        from automation.listing_videos import discover
-        media_urls, media_errors = discover(driver)
+        if not public_media:
+            from automation.listing_videos import discover
+            media_urls, media_errors = discover(driver)
         if field_reader is not None:
             WebDriverWait(driver, 30).until(lambda current: current.execute_script(
                 "return document.readyState === 'complete' && !!document.querySelector('input,textarea');"))
@@ -1245,10 +1314,11 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
 
         item_post = _item_edit_details(snapshot, listing, [])
         if item_post is not None:
-            item_post['image_urls'] = _safe_image_urls(driver)
+            item_post['image_urls'] = public_sources['image_urls'] if public_media else _safe_image_urls(driver)
             if visual_fallback is not None:
                 recover_unreadable_fields(driver, item_post, visual_once,
-                                          fields=('title', 'price', 'description'))
+                                          fields=('title', 'price', 'description'),
+                                          skip_confirmed_empty=public_media)
             if not item_post.get('title') or not item_post.get('price'):
                 raise RuntimeError('Item editor title or price could not be read; saved details were not replaced.')
             print('[ListingImport] Read item-style editor: title, price, description, category, condition, SKU and attached photos.', flush=True)
@@ -1284,7 +1354,7 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
             'vin': snapshot.get('vin', {}).get('value') or '',
             'trim': snapshot.get('trim', {}).get('value') or '',
             "vehicle_type": read_value("vehicle_type", lambda: _safe_combobox_text(driver, "Vehicle type")),
-            "image_urls": read_value("image_urls", lambda: _safe_image_urls(driver)),
+            "image_urls": public_sources['image_urls'] if public_media else read_value("image_urls", lambda: _safe_image_urls(driver)),
             "year": read_value("year", lambda: _safe_combobox_text(driver, "Year") or _safe_input_value(driver, "Year")) or str(listing.get("year") or ""),
             "make": read_value("make", lambda: _safe_input_value(driver, "Make") or _safe_combobox_text(driver, "Make")) or str(listing.get("make") or ""),
             "model": heading_model or _valid_model_text(snapshot.get('model', {}).get('value'), allow_numeric=False) or _valid_model_text(listing.get("model")),
@@ -1304,7 +1374,7 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
         if heading_model:
             post_data['field_states']['model'] = 'read'
         if visual_fallback is not None:
-            recover_unreadable_fields(driver, post_data, visual_once)
+            recover_unreadable_fields(driver, post_data, visual_once, skip_confirmed_empty=public_media)
         _print_reposting_read_summary(post_data, edit_url=edit_href)
         post_data["title"] = " ".join(
             str(post_data.get(field) or "").strip()
@@ -1319,7 +1389,7 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
             "posts": [post_data],
         })
     except Exception as primary_error:
-        if not fallback_used and visual_fallback is not None and driver is not None and '/marketplace/edit/' in str(driver.current_url or ''):
+        if not fallback_used and visual_fallback is not None and driver is not None and (not public_media or public_sources is not None) and '/marketplace/edit/' in str(driver.current_url or ''):
             print('[Import] Could not finish reading HTML. Taking screenshots and trying OCR.', flush=True)
             result = visual_once(driver)
             if not result.get('ok'):
@@ -1334,7 +1404,7 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
             return_to_inventory(driver)
         elif driver and not owns_driver:
             # Return the shared import browser to inventory after each listing,
-            # including a failed read. Photos come only from the edit page.
+            # including a failed read.
             try:
                 if not _open_manage_listings(driver):
                     print('[ListingImport] Could not return to Manage Listings.', flush=True)

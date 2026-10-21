@@ -37,6 +37,9 @@ if os.getenv("FB_AUTOMATION_DESKTOP") == "1":
 enable_keep_awake_from_env()
 enable_button_sleep_block_from_env()
 
+from automation.responsiveness import install_request_monitor
+install_request_monitor(app)
+
 # register blueprint with all routes including dashboard
 app.register_blueprint(web_bp)
 

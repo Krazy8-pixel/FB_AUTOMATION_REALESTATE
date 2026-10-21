@@ -10,7 +10,7 @@ import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import zipfile
 
 from cryptography.exceptions import InvalidSignature
@@ -66,45 +66,45 @@ class DesktopRuntimeTests(unittest.TestCase):
         lock.release()
         self.assertFalse(maintenance.busy(routes))
 
-    def test_background_maintenance_never_imports_groups(self):
-        calls = []
-        routes = SimpleNamespace(post_locks_by_account={}, listing_import_jobs={}, listing_click_jobs={},
-            facebook_delete_jobs={}, groups_jobs={}, scheduled_posts={}, repost_jobs={},
-            scheduler=SimpleNamespace(get_jobs=lambda: []), _get_post_lock=lambda account: threading.Lock(),
-            get_all_accounts=lambda: ['account'], _listing_snapshot_is_due=lambda account: False,
-            _start_groups_import_job=lambda account: (calls.append(account) or (True, 'Started')))
-        with tempfile.TemporaryDirectory() as folder, patch.dict('sys.modules', {'web': SimpleNamespace(routes=routes)}), patch.object(desktop_state, 'checkpoint'), patch('automation.desktop_preferences.load', return_value={'background_sync': True}), patch.object(maintenance, 'data_dir', return_value=Path(folder)):
-            maintenance.record('account', 'clicks', True)
-            maintenance.record('account', 'cookies', True)
-            maintenance.tick()
-            maintenance.record('account', 'groups', False, 'Previous automatic attempt failed')
-            maintenance.tick()
-            maintenance.record('account', 'groups', True)
-            maintenance.tick()
-        self.assertEqual(calls, [])
-
-    def test_cookie_check_is_once_daily_even_after_unknown_result(self):
-        routes = SimpleNamespace(post_locks_by_account={}, listing_import_jobs={}, listing_click_jobs={},
-            facebook_delete_jobs={}, groups_jobs={}, scheduled_posts={}, repost_jobs={},
-            scheduler=SimpleNamespace(get_jobs=lambda: []), _get_post_lock=lambda account: threading.Lock(),
-            get_all_accounts=lambda: ['account'], _listing_snapshot_is_due=lambda account: False)
-        with tempfile.TemporaryDirectory() as folder, patch.dict('sys.modules', {'web': SimpleNamespace(routes=routes)}), patch.object(desktop_state, 'checkpoint'), patch('automation.desktop_preferences.load', return_value={'background_sync': True}), patch.object(maintenance, 'data_dir', return_value=Path(folder)), patch.object(maintenance.time, 'time', return_value=200000), patch.object(maintenance, 'start_cookie_check', return_value=(True, 'Started')) as start:
-            maintenance.record('account', 'groups', True)
-            maintenance.record('account', 'clicks', True)
-            maintenance.tick()
-            maintenance.tick()
-            start.assert_called_once_with('account')
-
-    def test_two_days_off_runs_overdue_maintenance_once_per_account(self):
-        calls = []
-        routes = SimpleNamespace(post_locks_by_account={}, listing_import_jobs={}, listing_click_jobs={}, facebook_delete_jobs={}, groups_jobs={}, scheduled_posts={}, repost_jobs={}, scheduler=SimpleNamespace(get_jobs=lambda: []), _get_post_lock=lambda account: threading.Lock(), _listing_snapshot_is_due=lambda account: True, get_all_accounts=lambda: ['first', 'second'])
-        routes._start_listing_import_job = lambda account, automatic: (calls.append(('import', account)) or (True, 'Started'))
-        routes._start_listing_click_refresh_job = lambda account: (calls.append(('clicks', account)) or (True, 'Started'))
-        with tempfile.TemporaryDirectory() as folder, patch.dict('sys.modules', {'web': SimpleNamespace(routes=routes)}), patch.object(desktop_state, 'checkpoint'), patch('automation.desktop_preferences.load', return_value={'background_sync': True}), patch.object(maintenance, 'data_dir', return_value=Path(folder)), patch.object(maintenance.time, 'time', return_value=172800):
-            (Path(folder) / 'maintenance.json').write_text(json.dumps({name: {'groups': {'last_success': 1}, 'cookies': {'last_success': 172800}} for name in ['first', 'second']}))
+    def test_legacy_maintenance_does_nothing_even_with_saved_sync_enabled(self):
+        routes = MagicMock()
+        with patch.dict('sys.modules', {'web': SimpleNamespace(routes=routes)}), \
+             patch('automation.desktop_preferences.load', return_value={'background_sync': True}), \
+             patch.object(maintenance, 'data_dir') as directory, \
+             patch.object(desktop_state, 'checkpoint') as checkpoint:
             for _ in range(6):
                 maintenance.tick()
-        self.assertEqual(calls, [('import', 'first'), ('clicks', 'first'), ('import', 'second'), ('clicks', 'second')])
+            ok, _ = maintenance.start_cookie_check('account')
+        self.assertFalse(ok)
+        self.assertEqual(routes.mock_calls, [])
+        directory.assert_not_called()
+        checkpoint.assert_not_called()
+
+    def test_persisted_maintenance_removed_before_scheduler_resumes(self):
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+        from datetime import datetime, timedelta, timezone
+        # Exercise the real SQLite job store without a scheduler thread racing
+        # temporary-database cleanup on Windows.
+        with tempfile.TemporaryDirectory() as folder, patch.object(BackgroundScheduler, '_main_loop'):
+            url = 'sqlite:///' + str(Path(folder) / 'schedules.db')
+            first = BackgroundScheduler(jobstores={'default': SQLAlchemyJobStore(url=url)})
+            first.start(paused=True)
+            first.add_job(maintenance.tick, 'interval', minutes=1,
+                          id='delete-listings-auto-refresh-check',
+                          next_run_time=datetime.now(timezone.utc) - timedelta(minutes=2))
+            first.add_job(maintenance.tick, 'date', id='user-post',
+                          run_date=datetime.now(timezone.utc) + timedelta(days=1))
+            first.shutdown()
+            restored = BackgroundScheduler(jobstores={'default': SQLAlchemyJobStore(url=url)})
+            try:
+                with patch.object(restored, 'resume', wraps=restored.resume) as resume:
+                    maintenance.start_scheduler_without_maintenance(restored)
+                resume.assert_called_once()
+                self.assertIsNone(restored.get_job('delete-listings-auto-refresh-check'))
+                self.assertIsNotNone(restored.get_job('user-post'))
+            finally:
+                restored.shutdown()
 
     def run_update_scenario(self, fail=False, include_new_uninstaller=False):
         with tempfile.TemporaryDirectory() as folder:

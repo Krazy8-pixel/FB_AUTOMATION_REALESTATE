@@ -1,3 +1,4 @@
+from automation.responsiveness import RequestLock
 import json
 from automation.task_control import cancellable, check_cancelled
 import os
@@ -21,7 +22,7 @@ from automation.fb_login import _is_home_screen_visible, _safe_session_filename
 from automation.runtime_paths import data_dir, sessions_dir
 
 
-_config_lock = threading.RLock()
+_config_lock = RequestLock('cdp_login._config_lock', reentrant=True)
 _account_locks = {}
 _watchers = {}
 LOGIN_WAIT_SECONDS = 40 * 60
@@ -175,7 +176,11 @@ def _launch_profile(meta, *, background=False):
 def _attach(port):
     options = Options()
     options.add_experimental_option("debuggerAddress", f"127.0.0.1:{int(port)}")
-    return build_chrome_driver(options)
+    driver = build_chrome_driver(options)
+    config = getattr(driver.command_executor, '_client_config', None)
+    if config is not None:
+        config.timeout = 60
+    return driver
 
 
 def _detach(driver):

@@ -1,11 +1,13 @@
 """Durable desktop job metadata. Data is never shipped in a release."""
+from automation.responsiveness import RequestLock
 import json
+import copy
 import os
 import threading
 from datetime import datetime
 from automation.runtime_paths import data_dir
 
-_lock = threading.RLock()
+_lock = RequestLock('desktop_state._lock', reentrant=True)
 _last_saved = None
 
 
@@ -25,9 +27,12 @@ def save_state(routes):
     global _last_saved
     if os.getenv('FB_AUTOMATION_DESKTOP') != '1':
         return
-    with _lock, routes.scheduled_posts_lock, routes.repost_jobs_lock:
+    with _lock:
+        with routes.scheduled_posts_lock, routes.repost_jobs_lock:
+            snapshot = copy.deepcopy({'posts': routes.scheduled_posts, 'reposts': routes.repost_jobs})
         path = data_dir() / 'desktop_jobs.json'
-        raw = json.dumps({'posts': routes.scheduled_posts, 'reposts': routes.repost_jobs}, default=encode)
+        # Serialization and disk writes must not hold the locks used by pages.
+        raw = json.dumps(snapshot, default=encode)
         if raw == _last_saved and path.exists():
             return
         temporary = path.with_suffix('.tmp')

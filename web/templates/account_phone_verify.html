@@ -71,7 +71,7 @@
     }
 
     async function postAction(payload) {
-      const response = await fetch("/account/phone_verify/" + sessionId + "/action", {
+      const response = await appFetch("/account/phone_verify/" + sessionId + "/action", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -87,7 +87,7 @@
 
     async function pollState() {
       try {
-        const response = await fetch("/account/phone_verify/" + sessionId + "/state?t=" + Date.now());
+        const response = await appFetch("/account/phone_verify/" + sessionId + "/state?t=" + Date.now());
         const data = await response.json();
         if (!response.ok || !data.ok) {
           throw new Error(data.message || "State unavailable");

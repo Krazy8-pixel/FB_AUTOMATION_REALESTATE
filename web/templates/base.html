@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Tayyara Motors{% endblock %}</title>
+  <script src="{{ url_for('static', filename='js/app_requests.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
   {% block extra_css %}{% endblock %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app_theme.css') }}">
@@ -55,6 +56,15 @@
             <svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v14H4z"></path><path d="M8 9h8M8 13h5"></path></svg>
           </span>
           <a href="{{ url_for('web.delete_listings_page') }}">Manage Listings</a>
+        </div>
+      </li>
+
+      <li class="{% if active_page == 'backups' %}active{% endif %}">
+        <div class="menu-link-wrap" onclick="window.location.href='{{ url_for('web.backup_listings_page') }}'">
+          <span class="menu-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v14H4z"></path><path d="M8 9h8M8 13h5"></path></svg>
+          </span>
+          <a href="{{ url_for('web.backup_listings_page') }}">Backup Posts</a>
         </div>
       </li>
 
@@ -267,6 +277,7 @@
       return;
     }
     form.addEventListener("submit", function(event) {
+      if (event.defaultPrevented) return;
       event.preventDefault(); // stop immediate submission
       const overlay = document.getElementById("loading-overlay");
       const overlayText = document.getElementById("loading-text");
@@ -300,9 +311,13 @@
   const list = document.querySelector('[data-active-task-list]');
   if (!list) return;
   const message = document.querySelector('[data-active-task-message]');
+  let loading = false, taskTimer = null;
   async function refreshTasks() {
+    if (loading) return;
+    loading = true;
+    clearTimeout(taskTimer);
     try {
-      const response = await fetch('{{ url_for("web.active_browser_tasks") }}');
+      const response = await appFetch('{{ url_for("web.active_browser_tasks") }}');
       if (!response.ok) throw new Error('Could not load running actions.');
       const data = await response.json();
       list.replaceChildren();
@@ -319,7 +334,7 @@
         button.addEventListener('click', async () => {
           button.disabled = true;
           try {
-            const response = await fetch('{{ url_for("web.cancel_browser_task") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:task.id})});
+            const response = await appFetch('{{ url_for("web.cancel_browser_task") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:task.id})});
             const result = await response.json();
             message.textContent = result.message;
           } catch (error) { message.textContent = 'Cancellation could not be requested. Try again.'; }
@@ -328,8 +343,9 @@
         row.append(label, button); list.append(row);
       });
     } catch (error) { message.textContent = error.message; }
+    finally { loading = false; taskTimer = setTimeout(refreshTasks, 2000); }
   }
-  refreshTasks(); setInterval(refreshTasks, 2000);
+  refreshTasks();
 })();
 </script>
 </body>

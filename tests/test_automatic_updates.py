@@ -63,10 +63,11 @@ class ManualUpdateTests(unittest.TestCase):
              patch.object(desktop_preferences, 'data_dir', return_value=Path(folder)), \
              patch.object(desktop_preferences.sys, 'frozen', False, create=True):
             path = Path(folder) / 'desktop_preferences.json'
-            path.write_text(json.dumps({'background_sync': False, 'start_with_windows': False, 'automatic_updates': True}))
+            path.write_text(json.dumps({'background_sync': True, 'start_with_windows': False, 'automatic_updates': True}))
             self.assertNotIn('automatic_updates', desktop_preferences.load())
+            self.assertFalse(desktop_preferences.load()['background_sync'])
             desktop_preferences.save(True, False)
             saved = json.loads(path.read_text())
             self.assertNotIn('automatic_updates', saved)
-            self.assertTrue(saved['background_sync'])
+            self.assertFalse(saved['background_sync'])
             self.assertFalse(saved['start_with_windows'])

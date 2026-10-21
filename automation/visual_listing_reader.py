@@ -189,7 +189,7 @@ def capture_description_scroll(driver, output_dir, max_captures=24):
 
 
 def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=None, max_captures=12,
-                             allow_unstructured=False, max_seconds=90):
+                             allow_unstructured=False, max_seconds=90, include_media=True):
     """Read the already-open edit page without changing or submitting fields.
 
     Returns the existing posts structure plus review evidence. `vision`, when
@@ -276,10 +276,11 @@ def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=No
             if isinstance(control_snapshot, dict):
                 merge_control_fields(fields, control_snapshot, path.resolve())
                 captures[-1]['control_snapshot'] = control_snapshot
-            images.extend(_safe_image_urls(driver))
-            direct, missing = extract_video_sources(driver)
-            videos.extend(direct)
-            unresolved.extend(missing)
+            if include_media:
+                images.extend(_safe_image_urls(driver))
+                direct, missing = extract_video_sources(driver)
+                videos.extend(direct)
+                unresolved.extend(missing)
             print(f'[ListingImport][OCR] Media so far: {len(set(images))} photos, {len(set(videos))} direct videos, {len(unresolved)} unresolved video sources', flush=True)
             before, after, bottom = driver.execute_script("""
               const el=arguments[0], before=el.scrollTop;
@@ -319,13 +320,13 @@ def read_listing_edit_visual(driver, output_dir, *, ocr=tesseract_ocr, vision=No
             'capture_complete': complete, 'warnings': warnings}
 
 
-def read_import_edit_page(driver, *, require_usable=True):
+def read_import_edit_page(driver, *, require_usable=True, include_media=True):
     """Local import adapter: keep a report for each listing and read attempt."""
     import json
     from uuid import uuid4
     from automation.runtime_paths import data_dir
     output = data_dir('visual-listing-reader') / uuid4().hex[:12]
-    result = read_listing_edit_visual(driver, output, allow_unstructured=True, max_captures=6, max_seconds=60)
+    result = read_listing_edit_visual(driver, output, allow_unstructured=True, max_captures=6, max_seconds=60, include_media=include_media)
     result['posts'][0]['visual_read_requires_review'] = True
     result['posts'][0]['visual_read_report'] = str((output / 'report.json').resolve())
     (output / 'report.json').write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding='utf-8')
@@ -335,6 +336,6 @@ def read_import_edit_page(driver, *, require_usable=True):
     return result
 
 
-def read_import_fallback_page(driver):
+def read_import_fallback_page(driver, *, include_media=True):
     """Partial recovery may help even when the fallback cannot read a price."""
-    return read_import_edit_page(driver, require_usable=False)
+    return read_import_edit_page(driver, require_usable=False, include_media=include_media)

@@ -11,6 +11,13 @@ from automation import terminal_log
 
 
 class TerminalLogTests(unittest.TestCase):
+    def test_report_includes_freeze_thread_captures(self):
+        with tempfile.TemporaryDirectory() as folder, \
+             patch('automation.runtime_paths.data_dir', return_value=Path(folder)), \
+             patch.object(terminal_log, '_disk_handler', None):
+            (Path(folder) / 'freeze-diagnostics.log').write_text('[FREEZE] UI lock wait timed out: posting registry', encoding='utf-8')
+            self.assertIn('[FREEZE] UI lock wait timed out: posting registry', terminal_log.export_text())
+
     def setUp(self):
         for name, value in [('_chunks', deque()), ('_sequence', 0), ('_size', 0)]:
             item = patch.object(terminal_log, name, value)

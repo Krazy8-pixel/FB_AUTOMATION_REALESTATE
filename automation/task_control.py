@@ -1,4 +1,5 @@
 """Cooperative cancellation of browser tasks without affecting tray lifetime."""
+from automation.responsiveness import RequestLock
 import functools
 import inspect
 import threading
@@ -6,7 +7,7 @@ import time
 from uuid import uuid4
 import os
 
-_lock = threading.RLock()
+_lock = RequestLock('task_control._lock', reentrant=True)
 _local = threading.local()
 _tasks = {}
 _window_open = True

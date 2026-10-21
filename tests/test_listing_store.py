@@ -83,6 +83,44 @@ class ListingStoreTests(unittest.TestCase):
         self.assertEqual([item['id'] for item in listing_store.load('b')['listings']], ['one', 'two'])
         self.assertEqual(listing_store.load('a')['last_import_at'], imported)
 
+    def test_backups_shared_but_live_listings_account_scoped(self):
+        listing_store.save('a', [{'id':'live-a'}, {'id':'backup-a', 'facebook_present':False}])
+        listing_store.save('b', [{'id':'live-b'}, {'id':'backup-b', 'source_deleted':True}])
+        self.assertEqual({item['id'] for item in listing_store.load('a')['listings']}, {'live-a','backup-a','backup-b'})
+        self.assertEqual({item['id'] for item in listing_store.load('b')['listings']}, {'live-b','backup-a','backup-b'})
+        listing_store.save_preferences('b', 'backup-a', {'fields':{'price':'100'}})
+        self.assertEqual(next(item for item in listing_store.load('a')['listings'] if item['id']=='backup-a')['repost_preferences']['fields']['price'], '100')
+        listing_store.save('b', [{'id':'live-b-new'}])
+        self.assertEqual({item['id'] for item in listing_store.load('b')['listings']}, {'live-b-new','backup-a','backup-b'})
+        self.assertTrue(listing_store.remove_backup('b', 'backup-a'))
+        self.assertEqual(listing_store.clear_backups('a'), 1)
+        self.assertEqual([item['id'] for item in listing_store.load('a')['listings']], ['live-a'])
+        self.assertEqual([item['id'] for item in listing_store.load('b')['listings']], ['live-b-new'])
+
+    def test_confirmed_deletion_shares_backup_and_repost_returns_to_source_only(self):
+        listing_store.save('a', [{'id':'one', 'details':{'title':'Vehicle'}}])
+        listing_store.save_preferences('a', 'one', {'fields':{'price':'200'}})
+        listing_store.update_fields('a', 'one', {'source_deleted':True, 'facebook_present':False})
+        self.assertEqual(listing_store.load('a')['listings'], listing_store.load('b')['listings'])
+        listing_store.update_fields('a', 'one', {'source_deleted':True, 'facebook_reposted':True, 'facebook_present':True})
+        self.assertEqual(listing_store.load('b')['listings'], [])
+        self.assertEqual(listing_store.load('a')['listings'][0]['repost_preferences']['fields']['price'], '200')
+
+    def test_existing_account_backups_migrate_without_changing_media_or_live_rows(self):
+        import sqlite3
+        db = sqlite3.connect(str(self.root / 'listings.db'))
+        db.execute('CREATE TABLE listings (account TEXT,id TEXT,position INTEGER,data TEXT,preferences TEXT,PRIMARY KEY(account,id))')
+        for account, item in [('a', {'id':'live-a'}), ('b', {'id':'live-b'}), ('a', {'id':'backup', 'facebook_present':False, 'downloaded_images':[{'name':'photo.jpg','path':'original.jpg'}]})]:
+            db.execute('INSERT INTO listings VALUES (?,?,?,?,?)', (account,item['id'],0,json.dumps(item),json.dumps({'fields':{'price':'300'}})))
+        db.commit()
+        db.close()
+        self.assertEqual({item['id'] for item in listing_store.load('b')['listings']}, {'live-b','backup'})
+        backup = next(item for item in listing_store.load('a')['listings'] if item['id']=='backup')
+        self.assertEqual(backup['downloaded_images'][0]['path'], 'original.jpg')
+        self.assertEqual(backup['repost_preferences']['fields']['price'], '300')
+        listing_store.clear_backups('b')
+        self.assertEqual([item['id'] for item in listing_store.load('a')['listings']], ['live-a'])
+
 
 if __name__ == '__main__':
     unittest.main()

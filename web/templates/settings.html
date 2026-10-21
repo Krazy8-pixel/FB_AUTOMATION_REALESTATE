@@ -16,11 +16,10 @@
   {% endfor %}
   </div>
   <section class="settings-cleanup hub-storage" aria-labelledby="cleanup-heading"><div><div class="hub-storage-title"><span class="settings-card-icon">{{ icon('storage') }}</span><div><h2 id="cleanup-heading">Storage & cleanup</h2><p>Free space after your posting jobs finish.</p></div></div><div class="settings-storage"><span><span>Temp screenshots</span><strong>{{ junk_files_size_label or '0 MB' }}</strong></span><span><span>Manual media uploads</span><strong>{{ manual_pics_size_label or '0 MB' }}</strong></span></div><p class="settings-caption">Clean Up removes screenshots and uploaded photos/videos. Wait until queued posts finish using them. Accounts, listing backups, and Facebook posts are kept.</p>{% if auto_listing_running %}<p class="hub-busy" role="status">Posting is in progress. Cleanup will be available when it finishes.</p>{% endif %}</div><form method="post" action="{{ url_for('web.auto_listing_clear_junk') }}"><button class="delete-btn" type="submit" {% if auto_listing_running %}disabled{% endif %}>Clean Up</button></form></section>
-  <section class="hub-section desktop-panel" aria-labelledby="background-title"><div class="hub-section-head"><h2 id="background-title">Background sync</h2><p>Listings import every 24 hours. Clicks refresh every 4 hours for each saved account.</p></div>
+  <section class="hub-section desktop-panel" aria-labelledby="background-title"><div class="hub-section-head"><h2 id="background-title">Desktop preferences</h2><p>Listing imports, click refreshes, and session checks run only when you start them.</p></div>
     <form method="post" action="{{ url_for('web.desktop_preferences_save') }}" class="desktop-preferences">
-      <label><input type="checkbox" name="background_sync" value="1" {% if desktop_preferences.background_sync %}checked{% endif %}><span><strong>Keep listings and clicks up to date</strong><small>Missed checks run once after your PC wakes. Background sync waits for your posting work.</small></span></label>
       <label><input type="checkbox" name="start_with_windows" value="1" {% if desktop_preferences.start_with_windows %}checked{% endif %}><span><strong>Start with Windows</strong><small>The desktop app starts quietly in the system tray when you sign in.</small></span></label>
-      <p>Closing the desktop window keeps sync running. Use the tray menu's Exit App to stop it. Your PC can sleep normally.</p>
+      <p>Closing the desktop window leaves the app in the tray. No automatic imports, click refreshes, or cookie checks run. Use Exit App to stop the app.</p>
       <button type="submit">Save preferences</button>
       {% if not desktop_mode %}<p class="settings-caption">Tray mode and Windows startup take effect in the installed desktop edition.</p>{% endif %}
     </form>
@@ -46,8 +45,8 @@
   const progress=document.getElementById('update-progress');
   let timer;
   function show(data){message.textContent=data.message;check.disabled=['checking','downloading','verifying','installing'].includes(data.state);install.hidden=!data.available;reset.hidden=!data.resets_listings;install.disabled=check.disabled;progress.hidden=data.state!=='downloading';if(data.download_percent==null){progress.removeAttribute('value');}else{progress.value=data.download_percent;}clearTimeout(timer);timer=setTimeout(poll,check.disabled?1000:10000);}
-  async function poll(){try{const response=await fetch('{{ url_for("web.desktop_update_status") }}');show(await response.json());}catch(error){message.textContent='The app is restarting. Please wait.';}}
-  async function action(url){check.disabled=true;try{const response=await fetch(url,{method:'POST'});const data=await response.json();if(!response.ok){message.textContent=data.message;check.disabled=false;return;}show(data);}catch(error){message.textContent='Could not contact the app. Try again.';check.disabled=false;}}
+  async function poll(){try{const response=await appFetch('{{ url_for("web.desktop_update_status") }}');show(await response.json());}catch(error){message.textContent='The app is restarting. Please wait.';}}
+  async function action(url){check.disabled=true;try{const response=await appFetch(url,{method:'POST'});const data=await response.json();if(!response.ok){message.textContent=data.message;check.disabled=false;return;}show(data);}catch(error){message.textContent='Could not contact the app. Try again.';check.disabled=false;}}
   check.addEventListener('click',()=>action('{{ url_for("web.desktop_update_check") }}'));
   install.addEventListener('click',()=>{if(!reset.hidden&&!window.confirm('This release clears saved listing backups. Continue?'))return;action('{{ url_for("web.desktop_update_install") }}');});
   poll();

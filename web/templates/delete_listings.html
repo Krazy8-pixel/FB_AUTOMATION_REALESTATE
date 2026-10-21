@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from '_listing_storage_badges.html' import storage_badges %}
 
-{% block title %}Manage Listings{% endblock %}
+{% block title %}{{ 'Backup Posts' if backups_page else 'Manage Listings' }}{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -36,12 +36,62 @@
   .delete-clear-storage { width:auto; min-width:150px; min-height:38px; margin:0; border:1px solid #555; border-radius:0; padding:9px 13px; background:#fff; color:#454545; cursor:pointer; font-size:13px; font-weight:700; }
   .delete-clear-storage:not(:disabled):hover { border-color:#0b3d91; background:#f2f2f2; color:#0b3d91; }
   .delete-clear-storage:disabled { opacity:.5; cursor:not-allowed; }
+  .listing-section-heading { grid-column:1/-1; display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding-top:18px; border-top:1px solid #dbe2eb; }
+  .listing-section-heading h2 { margin-right:auto !important; }
+  .listing-panel { min-width:0; padding:20px; border:1px solid #d6dfeb; border-radius:12px; background:#fff; box-shadow:0 3px 12px rgba(15,23,42,.04); }
+  .listing-panel .listing-section-heading { padding:0 0 18px; margin-bottom:18px; border-top:0; border-bottom:1px solid #e2e8f0; align-items:flex-start; }
+  .listing-panel-actions { display:flex; flex-wrap:wrap; gap:8px; }
+  .listing-panel-actions .delete-btn,.listing-panel-actions .delete-clear-storage { box-sizing:border-box; width:160px; min-width:160px; height:44px; min-height:44px; padding:7px 10px; display:inline-flex; align-items:center; justify-content:center; font-size:12px; line-height:1.25; }
+  .listing-panel-cards { display:grid; gap:12px; min-width:0; }
+  .listing-panel .listing-view-btn,.listing-panel .listing-clear-one { box-sizing:border-box; width:124px; min-height:40px; height:40px; display:inline-flex; align-items:center; justify-content:center; padding:7px 10px; font-size:13px; }
+  @media(max-width:800px) { .listing-panel { padding:14px; }.listing-panel-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); width:100%; }.listing-panel-actions .delete-btn,.listing-panel-actions .delete-clear-storage { width:100%; min-width:0; }.listing-panel .listing-view-btn,.listing-panel .listing-clear-one { width:100%; } }
+  .listing-section-heading h2 { margin:0; font-size:19px; color:#172b4d; }
+  .listing-section-empty { grid-column:1/-1; color:#64748b; padding:12px 0; }
+  #facebook-panel .listing-section-heading { flex-direction:column; align-items:stretch; gap:18px; }
+  #facebook-heading { width:100%; box-sizing:border-box; font-size:26px; font-weight:800; line-height:1.3; color:#0b3d91; padding:12px 16px; border-left:4px solid #0b3d91; background:#eff6ff; }
+  #facebook-panel .listing-panel-actions { display:grid; grid-template-columns:repeat(2,minmax(0,200px)); grid-template-rows:repeat(3,40px); grid-auto-flow:column; justify-content:space-between; width:100%; max-width:100%; gap:12px 20px; }
+  #facebook-panel .listing-panel-actions form { width:100%; margin:0; }
+  #facebook-panel .listing-panel-actions button { width:100%; min-width:0; height:40px; min-height:40px; padding:8px 12px; border-radius:0; font-size:12px; font-weight:600; flex:none; }
+  .facebook-clear-row { display:flex; justify-content:flex-end; width:100%; margin:0 0 18px; }
+  .facebook-clear-row .delete-clear-storage { width:200px; max-width:100%; min-height:40px; height:40px; flex:none; padding:8px 12px; border-radius:0; font-size:12px; font-weight:600; }
+  @media(max-width:800px) { #facebook-panel .listing-panel-actions { grid-template-columns:repeat(2,minmax(0,1fr)); width:100%; gap:12px 16px; } }
+  .manage-cross-dialog { position:static; width:100%; margin:16px 0; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:12px; padding:20px; background:#f8fafc; }
+  #manage-cross-dialog[hidden] { display:none !important; }
+  #manage-cross-delay { display:flex; flex-wrap:wrap; align-items:end; gap:16px; }
+  #manage-cross-delay label { flex:1 1 140px; }
+  #manage-cross-delay input,#manage-cross-delay select { width:100%; box-sizing:border-box; }
+  .manage-cross-dialog label { display:block; margin:12px 0; }
+  .manage-cross-dialog select,.manage-cross-dialog input[type=number] { padding:10px; max-width:100%; }
+  .manage-cross-dialog h2 { margin:0 0 12px; color:#172b4d; }
+  .manage-account-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:20px; }
+  .manage-account-heading h3 { margin:0; font-size:16px; }
+  #manage-cross-dialog [hidden] { display:none !important; }
+  .manage-account-list { display:grid; gap:8px; max-height:220px; overflow:auto; margin:12px 0; }
+  .manage-account-list label { display:flex; align-items:center; gap:10px; margin:0; padding:12px; border:1px solid #dbe2eb; border-radius:8px; overflow-wrap:anywhere; }
+  .manage-account-list label:has(input:checked) { background:#eff6ff; border-color:#0b3d91; }
+  .manage-account-list input { width:19px; height:19px; accent-color:#0b3d91; flex-shrink:0; }
+  #listing-feedback { color:#334155; }
   .delete-grid { display:grid; width:calc(100% - 80px); max-width:1080px; margin:0 auto; grid-template-columns:minmax(0,1fr); gap:14px; }
   .delete-card { display:grid; width:100%; grid-template-columns:132px minmax(0,1fr) 132px; gap:22px; align-items:center; min-height:158px; box-sizing:border-box; padding:13px 22px 13px 13px; border:1px solid #e2e8f0; border-radius:0; background:#fff; }
   .content .delete-page .delete-card { transition:background .18s,border-color .18s,box-shadow .18s,transform .18s; }
   .content .delete-page .delete-card:hover,.content .delete-page .delete-card:focus-within { background:#f8faff !important; border-color:var(--app-blue) !important; box-shadow:0 5px 16px rgba(11,61,145,.09) !important; transform:translateY(-2px); }
-  .delete-card input { position:absolute; margin:0 0 112px 5px; z-index:2; display:none; }
-  .delete-grid.selection-mode .delete-card input { display:block; }
+  .delete-card { position:relative; }
+  .delete-card input.listing-check { position:absolute; top:12px; left:12px; margin:0; z-index:2; display:none; }
+  .listing-check,.listing-select-all { appearance:none; -webkit-appearance:none; width:22px; height:22px; flex:0 0 22px; border:2px solid #94a3b8; border-radius:6px; background:#fff; cursor:pointer; box-shadow:0 1px 3px rgba(15,23,42,.1); transition:background .15s,border-color .15s; }
+  .listing-check:checked,.listing-select-all:checked,.listing-check:indeterminate,.listing-select-all:indeterminate { background:#0b3d91; border-color:#0b3d91; }
+  .listing-check:checked::after,.listing-select-all:checked::after { content:''; display:block; width:5px; height:10px; margin:2px 0 0 6px; border:solid white; border-width:0 2px 2px 0; transform:rotate(45deg); }
+  .listing-select-all:indeterminate::after { content:''; display:block; width:10px; height:2px; background:#fff; margin:8px 0 0 4px; }
+  .listing-check:focus-visible,.listing-select-all:focus-visible { outline:3px solid #93c5fd; outline-offset:3px; }
+  .listing-check:disabled { opacity:.4; cursor:not-allowed; }
+  .delete-card:has(.listing-check:checked) { border-color:#0b3d91; box-shadow:0 0 0 1px #0b3d91; background:#f0f6ff; }
+  .listing-select-all-wrap { align-items:center; gap:10px; padding:10px 14px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; font-weight:600; }
+  .listing-select-all-wrap:not(.delete-hidden) { display:inline-flex; }
+  .listing-selected-count { color:#64748b; font-size:12px; font-weight:500; }
+  .listing-clear-one { border:1px solid #cbd5e1; background:#fff; color:#475569; padding:9px 12px; cursor:pointer; font-weight:600; }
+  .listing-clear-one:hover { border-color:#b91c1c; color:#b91c1c; }
+  .listing-clear-one:disabled { opacity:.5; cursor:not-allowed; }
+  .listing-actions { display:flex; flex-direction:column; gap:8px; }
+  .listing-panel.selection-mode .delete-card input { display:block; }
   .listing-photo { width:132px; height:132px; border-radius:0; object-fit:cover; background:#e2e8f0; }
   .listing-photo-placeholder { display:flex; align-items:center; justify-content:center; color:#94a3b8; font-size:11px; text-align:center; }
   .listing-details { min-width:0; }
@@ -50,6 +100,8 @@
   .listing-meta { display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:11px; color:#64748b; font-size:14px; }
   .listing-actions { display:flex; flex-direction:column; align-items:flex-end; justify-content:center; gap:10px; }
   .listing-view-btn { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:124px; min-height:40px; border:0; border-radius:0; background:var(--app-blue); color:#fff; text-decoration:none; font-size:14px; font-weight:700; }
+  .listing-backup-action { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:124px; min-height:38px; padding:7px 10px; border:1px solid #b5c7e4; color:#0b3d91; background:#f5f8fd; text-align:center; text-decoration:none; font-size:12px; font-weight:700; line-height:1.35; }
+  .listing-backup-action:hover { background:#e7effb; border-color:#0b3d91; }
   .listing-state { font-size:12px; font-weight:600; color:var(--app-blue); background:var(--app-grey-50); border-radius:0; padding:5px 8px; }
   .repost-modal-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:18px 0; text-align:left; }
   .repost-modal-fields label { color:#475569; font-size:13px; font-weight:700; }
@@ -70,6 +122,7 @@
     .listing-title { font-size:15px; }
     .listing-actions { grid-column:1 / -1; }
     .listing-view-btn { width:100%; }
+    .listing-backup-action { width:100%; }
     .delete-operation-overlay { align-items:flex-start; padding:16px 12px; }
     .delete-operation-card { width:100%; max-width:420px; margin:auto 0; padding:22px 16px; border-radius:0; }
     .repost-modal-fields { grid-template-columns:1fr; gap:14px; margin:16px 0; }
@@ -84,18 +137,7 @@
 <div class="delete-page">
   <div class="delete-header">
     <div class="delete-heading">
-      <h1>All Listings <span id="listing-count">({{ listings|length }})</span></h1>
-    </div>
-    <div class="delete-header-side">
-      <div class="delete-actions delete-header-actions">
-        <form id="listing-import-form" method="post" action="{{ url_for('web.delete_listings_import') }}">
-          <button id="listing-import-btn" class="delete-btn delete-primary" type="submit" {% if not active_account or import_status.get('running') %}disabled{% endif %}>Import Listings</button>
-        </form>
-        <form id="listing-stop-form" method="post" action="{{ url_for('web.delete_listings_import_stop') }}">
-          <button id="listing-stop-btn" class="delete-btn delete-warning" type="submit" {% if not import_status.get('running') %}disabled{% endif %}>Stop Import</button>
-        </form>
-        <button id="listing-facebook-delete-btn" class="delete-btn delete-danger" type="button" data-running="{{ 'true' if facebook_delete_status.get('running') else 'false' }}" {% if not listings or click_refresh_status.get('running') %}disabled{% endif %}>Delete from Facebook</button>
-      </div>
+      <h1>{{ 'Backup Posts' if backups_page else 'Facebook Listings' }} <span id="listing-count">({{ listings|length }})</span></h1>
     </div>
   </div>
   <div class="delete-secondary-row">
@@ -105,22 +147,24 @@
       <span class="delete-account-value"><span class="delete-account-dot"></span><span class="delete-account-value-text">{{ active_account }}</span></span>
     </div>
     {% endif %}
-    <button id="listing-clear-storage-btn" class="delete-clear-storage" type="button" {% if not listings or scheduled_repost_ids %}disabled{% endif %}>Clear All Listings</button>
-    <button id="listing-refresh-clicks-btn" class="delete-btn delete-primary" type="button" data-url="{{ url_for('web.delete_listings_clicks_refresh') }}" {% if not active_account or not listings or import_status.get('running') or click_refresh_status.get('running') or facebook_delete_status.get('running') %}disabled{% endif %}>{% if click_refresh_status.get('running') %}<span class="click-refresh-spinner" aria-hidden="true"></span>Refreshing... {{ click_refresh_status.get('confirmed_count', 0) }}/{{ click_refresh_status.get('total_count', listings|length) }}{% else %}Refresh Clicks{% endif %}</button>
   </div>
 
   {% if active_account %}
-  <div class="delete-toolbar">
-    <div class="delete-toolbar-controls">
-      <label id="listing-select-all-wrap" class="delete-select-wrap delete-hidden"><input id="listing-select-all" type="checkbox" {% if not listings %}disabled{% endif %}> Select all listings</label>
-      <button id="listing-cancel-selection-btn" class="delete-btn delete-muted delete-hidden" type="button">Cancel</button>
-    </div>
-  </div>
-  <div id="listing-empty" class="delete-empty{% if listings %} delete-hidden{% endif %}">No imported listings yet.</div>
-  <div id="listing-grid" class="delete-grid{% if not listings %} delete-hidden{% endif %}">
+  <p id="listing-feedback" role="status" aria-live="polite"></p>
+  <div id="listing-grid" class="delete-grid">
+    {% for backup_section in ([true] if backups_page else [false]) %}
+    <section class="listing-panel" id="{{ 'backup-panel' if backup_section else 'facebook-panel' }}"><div class="listing-section-heading"><h2 id="{{ 'backup-heading' if backup_section else 'facebook-heading' }}">{{ 'Saved as backup' if backup_section else 'Posted on Facebook' }}</h2><div class="listing-panel-actions">{% if backup_section %}<button type="button" class="delete-clear-storage" data-clear-backups>Clear all backups</button><button type="button" class="delete-btn delete-primary" data-backup-action="accounts">Post on accounts</button>{% else %}        <form id="listing-import-form" data-ajax="true" method="post" action="{{ url_for('web.delete_listings_import') }}">
+          <button id="listing-import-btn" class="delete-btn delete-primary" type="submit" {% if not active_account or import_status.get('running') %}disabled{% endif %}>Import Listings</button>
+        </form>
+        <form id="listing-stop-form" data-ajax="true" method="post" action="{{ url_for('web.delete_listings_import_stop') }}">
+          <button id="listing-stop-btn" class="delete-btn delete-warning" type="submit" {% if not import_status.get('running') %}disabled{% endif %}>Stop Import</button>
+        </form>
+<button id="listing-refresh-clicks-btn" class="delete-btn delete-primary" type="button" data-url="{{ url_for('web.delete_listings_clicks_refresh') }}" {% if not active_account or not listings or import_status.get('running') or click_refresh_status.get('running') or facebook_delete_status.get('running') %}disabled{% endif %}>{% if click_refresh_status.get('running') %}<span class="click-refresh-spinner" aria-hidden="true"></span>Refreshing... {{ click_refresh_status.get('confirmed_count', 0) }}/{{ click_refresh_status.get('total_count', listings|length) }}{% else %}Refresh Clicks{% endif %}</button><button type="button" class="delete-btn delete-primary" data-facebook-action="repost">Repost</button><button id="listing-cross-post-btn" class="delete-btn delete-primary" type="button" {% if not listings %}disabled{% endif %}>Post to other accounts</button><button id="listing-facebook-delete-btn" class="delete-btn delete-danger" type="button" data-running="{{ 'true' if facebook_delete_status.get('running') else 'false' }}" {% if not listings or click_refresh_status.get('running') %}disabled{% endif %}>Delete from Facebook</button>{% endif %}</div></div>{% if not backup_section %}<div class="facebook-clear-row"><button type="button" class="delete-clear-storage" data-clear-facebook title="Clear all local records for this account; Facebook posts are kept.">Clear local listings</button></div>{% endif %}<div class="delete-toolbar-controls listing-selection-controls delete-hidden" data-selection-controls><label class="delete-select-wrap listing-select-all-wrap"><input id="{{ 'backup-select-all' if backup_section else 'listing-select-all' }}" class="listing-select-all" type="checkbox"><span>Select all</span><span class="listing-selected-count" id="{{ 'backup-selected-count' if backup_section else 'listing-selected-count' }}">0 selected</span></label><button id="{{ 'backup-cancel-selection-btn' if backup_section else 'listing-cancel-selection-btn' }}" data-cancel-selection class="delete-btn delete-muted" type="button">Cancel</button></div>{% if backup_section %}<p class="listing-section-empty">Shared across all accounts.</p>{% endif %}<div data-posting-controls-slot></div><div class="listing-panel-cards" id="{{ 'backup-cards' if backup_section else 'facebook-cards' }}">
     {% for listing in listings %}
+    {% set is_backup = listing.facebook_present is sameas false or (listing.source_deleted|default(false) and not listing.facebook_reposted|default(false)) %}
+    {% if is_backup == backup_section %}
     <div class="delete-card" data-id="{{ listing.id }}">
-      <input class="listing-check" type="checkbox" value="{{ listing.id }}" {% if listing.id in scheduled_repost_ids %}disabled{% endif %}>
+      <input class="listing-check" type="checkbox" aria-label="Select {{ listing.year }} {{ listing.make }} {{ listing.model }}" value="{{ listing.id }}" {% if listing.id in scheduled_repost_ids %}disabled{% endif %}>
       {% set listing_image = listing.image or (listing.images[0] if listing.images else '') %}
       {% if listing.downloaded_images %}{% set listing_image = url_for('web.listing_photo', listing_id=listing.id, name=listing.downloaded_images[0].name) %}{% endif %}
       {% if listing_image %}<img class="listing-photo" src="{{ listing_image }}" alt="" loading="lazy" referrerpolicy="no-referrer">
@@ -134,14 +178,36 @@
         </span>
         {{ storage_badges(listing) }}
       </span>
-      <span class="listing-actions"><a class="listing-view-btn" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">View</a></span>
+      <span class="listing-actions"><a class="listing-view-btn" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">View</a>{% if is_backup %}<button type="button" class="listing-clear-one" data-clear-backup="{{ listing.id }}" {% if listing.id in scheduled_repost_ids %}disabled{% endif %}>Clear backup</button>{% endif %}</span>
     </div>
+    {% endif %}
+    {% endfor %}
+    </div></section>
     {% endfor %}
   </div>
   {% else %}
   <div class="delete-empty">Select a Facebook account from the header first.</div>
   {% endif %}
 </div>
+<section id="manage-cross-dialog" class="manage-cross-dialog" hidden aria-labelledby="manage-post-title">
+  <form id="manage-cross-form" data-ajax="true">
+    <h2 id="manage-post-title">Post to other accounts</h2>
+    <p id="manage-post-help">Post selected listings from either section.</p>
+    <div id="manage-target-accounts">
+    <div class="manage-account-heading"><h3>Choose accounts</h3><button id="manage-account-select-all" type="button" class="delete-btn delete-muted">{{ 'Select first 19' if accounts|length > 20 else 'Select all' }}</button></div>
+    <p>Choose up to 19 accounts. Posts run one at a time, just like posting from View.</p>
+    <div class="manage-account-list">
+    {% for account in accounts %}
+    <label><input type="checkbox" name="cross_account" value="{{ account }}"> {{ account }}</label>
+    {% endfor %}<p id="manage-no-accounts" hidden>No saved accounts available. Add an account in Settings.</p>
+    </div>
+    </div>
+    <input id="manage-cross-mode" type="hidden" value="schedule">
+    <div id="manage-cross-delay"><label>Delay value <input id="manage-cross-value" type="number" min="1" max="59" step="1" value="1" required></label><label>Unit <select id="manage-cross-unit"><option value="minutes">Minutes</option><option value="hours">Hours</option><option value="days">Days</option></select></label></div>
+    <p id="manage-cross-error" role="alert"></p>
+    <div class="delete-actions"><button type="button" id="manage-cross-cancel" class="delete-btn delete-muted">Cancel</button><button type="submit" id="manage-cross-submit" class="delete-btn delete-primary">Post</button></div>
+  </form>
+</section>
 {% endblock %}
 
 {% block extra_js %}
@@ -154,17 +220,86 @@
   const refreshClicksBtn = document.getElementById('listing-refresh-clicks-btn');
   const listingCount = document.getElementById('listing-count');
   const grid = document.getElementById('listing-grid');
+  if (!grid) return;
   const empty = document.getElementById('listing-empty');
-  const selectAll = document.getElementById('listing-select-all');
   const clearStorageBtn = document.getElementById('listing-clear-storage-btn');
+  const crossPostBtn = document.getElementById('listing-cross-post-btn');
+  const crossDialog = document.getElementById('manage-cross-dialog');
+  const crossForm = document.getElementById('manage-cross-form');
+  const feedback = document.getElementById('listing-feedback');
+  const activeAccount = {{ active_account|tojson }};
+  const backupsPage = {{ backups_page|default(false)|tojson }};
+  const postedGrid = document.getElementById('facebook-cards');
+  const backupGrid = document.getElementById('backup-cards');
+  let lastCardsMarkup = {};
+  let postingAction = null;
+  let submittingPosts = false;
+  function beginListingAction(action) {
+    setSelectionScope(action === 'backup_accounts' ? 'backups' : 'facebook');
+    postingAction = action;
+    selectionMode = true;
+    const repost = action === 'facebook_repost';
+    document.getElementById('manage-target-accounts').hidden = repost;
+    accountChoices.forEach(box => {
+      box.disabled = action === 'facebook_cross' && box.value === activeAccount;
+      box.closest('label').hidden = box.disabled;
+      box.checked = false;
+    });
+    const none = !accountChoices.some(box => !box.disabled);
+    document.getElementById('manage-no-accounts').hidden = !none;
+    document.getElementById('manage-cross-submit').disabled = !repost && none;
+    document.getElementById('manage-cross-submit').textContent = repost ? 'Repost' : 'Post';
+    document.getElementById('manage-post-title').textContent = repost ? 'Repost on this account' : action === 'backup_accounts' ? 'Post on accounts' : 'Post to other accounts';
+    document.getElementById('manage-post-help').textContent = `${selectedListingIds.size} listing(s) selected. ` + (repost ? 'Each listing will be deleted and posted again on this account.' : 'Choose accounts and enter a delay.');
+    document.getElementById('manage-cross-error').textContent = '';
+    const panel = document.getElementById(action === 'backup_accounts' ? 'backup-panel' : 'facebook-panel');
+    panel.querySelector('[data-posting-controls-slot]').appendChild(crossDialog);
+    crossDialog.hidden = false;
+    syncSelectionSummary();
+  }
   const facebookDeleteBtn = document.getElementById('listing-facebook-delete-btn');
-  const cancelSelectionBtn = document.getElementById('listing-cancel-selection-btn');
-  const selectAllWrap = document.getElementById('listing-select-all-wrap');
   let timer = null;
+  let polling = false;
   let selectionMode = false;
+  let selectionScope = 'all';
   let localStatusMessage = '';
   let facebookDeleteRunning = !!facebookDeleteBtn && facebookDeleteBtn.dataset.running === 'true';
   const selectedListingIds = new Set();
+
+  function setSelectionScope(scope) {
+    selectionScope = scope;
+    const data = window.__lastDeleteData || {};
+    const scheduled = new Set((data.scheduled_repost_ids || []).map(String));
+    grid.querySelectorAll('.listing-check').forEach(box => {
+      const item = (data.listings || []).find(item => String(item.id) === box.value);
+      const backup = item && (item.facebook_present === false || (item.source_deleted && !item.facebook_reposted));
+      box.disabled = scheduled.has(box.value) || (scope === 'facebook' && backup) || (scope === 'backups' && !backup);
+      if (box.disabled) { box.checked = false; selectedListingIds.delete(box.value); }
+    });
+    syncSelectionSummary();
+  }
+
+  function syncSelectionSummary() {
+    for (const [scope, panelId] of [['facebook','facebook-panel'], ['backups','backup-panel']]) {
+      const panel = document.getElementById(panelId);
+      if (!panel) continue;
+      const active = selectionMode && selectionScope === scope;
+      panel.classList.toggle('selection-mode', active);
+      panel.querySelector('[data-selection-controls]').classList.toggle('delete-hidden', !active);
+      const boxes = [...panel.querySelectorAll('.listing-check:not(:disabled)')];
+      const checked = boxes.filter(box => box.checked).length;
+      const all = panel.querySelector('.listing-select-all');
+      all.checked = !!boxes.length && checked === boxes.length;
+      all.indeterminate = checked > 0 && checked < boxes.length;
+      all.disabled = !active || !boxes.length;
+      panel.querySelector('.listing-selected-count').textContent = `${checked} selected`;
+      if (active && !crossDialog.hidden) {
+        const repost = postingAction === 'facebook_repost';
+        document.getElementById('manage-post-help').textContent = `${checked} listing(s) selected. ` + (repost ? 'Delete and repost on this account after the selected delay.' : 'Choose accounts above and enter the delay below.');
+        document.getElementById('manage-cross-submit').disabled = submittingPosts || !checked || (!repost && !accountChoices.some(box => !box.disabled));
+      }
+    }
+  }
 
   function escapeHtml(value) {
     return String(value || '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
@@ -172,16 +307,18 @@
 
   function leaveSelectionMode() {
     selectionMode = false;
+    crossDialog.hidden = true;
+    postingAction = null;
+    selectionScope = 'all';
     selectedListingIds.clear();
-    if (selectAll) selectAll.checked = false;
-    if (grid) grid.classList.remove('selection-mode');
-    if (selectAllWrap) selectAllWrap.classList.add('delete-hidden');
     if (facebookDeleteBtn) facebookDeleteBtn.textContent = 'Delete from Facebook';
-    if (cancelSelectionBtn) cancelSelectionBtn.classList.add('delete-hidden');
+    if (crossPostBtn) crossPostBtn.textContent = 'Post to other accounts';
+    if (grid) grid.querySelectorAll('.listing-check').forEach(box => { box.checked = false; });
+    syncSelectionSummary();
   }
 
   function render(data) {
-    const items = Array.isArray(data.listings) ? data.listings : [];
+    const items = (Array.isArray(data.listings) ? data.listings : []).filter(item => Boolean(item.facebook_present === false || (item.source_deleted && !item.facebook_reposted)) === backupsPage);
     const status = data.import_status || {};
     const clickStatus = data.click_refresh_status || {};
     const facebookStatus = data.facebook_delete_status || {};
@@ -207,12 +344,13 @@
     if (selectionMode) {
       document.querySelectorAll('.listing-check:checked').forEach(box => selectedListingIds.add(box.value));
     }
-    grid.innerHTML = items.map(item => {
+    const isBackup = item => item.facebook_present === false || (item.source_deleted && !item.facebook_reposted);
+    const cardHtml = item => {
       const title = escapeHtml([item.year,item.make,item.model].filter(Boolean).join(' '));
       const price = escapeHtml((item.details || {}).price || item.price || 'Price unavailable');
       const date = escapeHtml(item.listed_date ? `Listed on ${item.listed_date}` : 'Date unavailable');
       const clicks = Number.isFinite(Number(item.clicks)) ? Number(item.clicks) : 0;
-      const clickLabel = item.clicks_confirmed === false
+      const clickLabel = isBackup(item) ? 'Not posted on Facebook' : item.clicks_confirmed === false
         ? 'Reading clicks...'
         : `${clicks.toLocaleString()} clicks`;
       const localPhotos = Array.isArray(item.downloaded_images) ? item.downloaded_images : [];
@@ -224,17 +362,34 @@
         : '<span class="listing-photo listing-photo-placeholder">No image</span>';
       const scheduled = scheduledRepostIds.has(String(item.id || ''));
       const removed = item.facebook_present === false || (item.source_deleted && !item.facebook_reposted);
+      const unavailable = scheduled || (selectionScope === 'facebook' && removed) || (selectionScope === 'backups' && !removed);
       const storageStatus = `<span class="listing-storage-status" aria-label="Listing storage status">${removed ? '' : '<span class="listing-source-badge is-posted">Posted on Facebook</span>'}<span class="listing-backup-badge">Saved as backup</span></span>`;
-      return `<div class="delete-card" data-id="${id}"><input class="listing-check" type="checkbox" value="${id}" ${scheduled ? 'disabled' : ''}>${photo}<span class="listing-details"><a class="listing-title" href="/delete_listings/detail/${encodeURIComponent(item.id)}">${title}</a><span class="listing-price">${price}</span><span class="listing-meta"><span>${clickLabel}</span><span>${date}</span></span>${storageStatus}</span><span class="listing-actions"><a class="listing-view-btn" href="/delete_listings/detail/${encodeURIComponent(item.id)}">View</a></span></div>`;
-    }).join('');
+      const clearOne = removed ? `<button type="button" class="listing-clear-one" data-clear-backup="${id}" ${scheduled ? 'disabled' : ''}>Clear backup</button>` : '';
+      return `<div class="delete-card" data-id="${id}"><input class="listing-check" type="checkbox" aria-label="Select ${title}" value="${id}" ${unavailable ? 'disabled' : ''}>${photo}<span class="listing-details"><a class="listing-title" href="/delete_listings/detail/${encodeURIComponent(item.id)}">${title}</a><span class="listing-price">${price}</span><span class="listing-meta"><span>${clickLabel}</span><span>${date}</span></span>${storageStatus}</span><span class="listing-actions"><a class="listing-view-btn" href="/delete_listings/detail/${encodeURIComponent(item.id)}">View</a>${clearOne}</span></div>`;
+    };
+    const busy = !!status.running || !!clickStatus.running || !!facebookStatus.running || !!scheduledRepostIds.size;
+    const postedItems = items.filter(item => !isBackup(item));
+    const backupItems = items.filter(isBackup);
+    const postedMarkup = postedItems.map(cardHtml).join('') || '<p class="listing-section-empty">No Facebook listings saved yet.</p>';
+    const backupMarkup = backupItems.map(cardHtml).join('') || '<p class="listing-section-empty">No saved backups yet.</p>';
+    if (postedGrid && postedMarkup !== lastCardsMarkup.posted) { postedGrid.innerHTML = postedMarkup; lastCardsMarkup.posted = postedMarkup; }
+    if (backupGrid && backupMarkup !== lastCardsMarkup.backups) { backupGrid.innerHTML = backupMarkup; lastCardsMarkup.backups = backupMarkup; }
+    if (postedGrid) document.getElementById('facebook-heading').textContent = `Posted on Facebook (${postedItems.length})`;
+    if (backupGrid) document.getElementById('backup-heading').textContent = `Saved as backup (${backupItems.length})`;
+    grid.querySelectorAll('[data-clear-backups],[data-backup-action]').forEach(button => { button.disabled = busy || !backupItems.length; });
+    if (refreshClicksBtn) refreshClicksBtn.disabled = !postedItems.length || !!status.running || !!clickStatus.running || !!facebookStatus.running;
     grid.querySelectorAll('.listing-check').forEach(box => { box.checked = selectedListingIds.has(box.value); });
     const selectableItems = items.filter(item => !scheduledRepostIds.has(String(item.id || '')));
-    if (selectAll) selectAll.checked = !!selectableItems.length && selectableItems.every(item => selectedListingIds.has(String(item.id || '')));
-    grid.classList.toggle('delete-hidden', !items.length);
-    grid.classList.toggle('selection-mode', selectionMode && !!items.length);
+
     if (empty) empty.classList.toggle('delete-hidden', !!items.length);
-    if (selectAll) selectAll.disabled = !items.length;
+    syncSelectionSummary();
     if (clearStorageBtn) clearStorageBtn.disabled = !items.length || !!status.running || !!clickStatus.running || !!facebookStatus.running || !!scheduledRepostIds.size;
+    if (crossPostBtn) crossPostBtn.disabled = !postedItems.length || busy;
+    grid.querySelectorAll('[data-clear-facebook]').forEach(button => { button.disabled = busy || !postedItems.length; });
+    grid.querySelectorAll('[data-facebook-action]').forEach(button => { button.disabled = !postedItems.length || busy; });
+    if (feedback) feedback.textContent = facebookStatus.running
+      ? `${facebookStatus.message || 'Deleting listings...'} ${Number(facebookStatus.deleted || 0)}/${Number(facebookStatus.total || 0)} confirmed`
+      : localStatusMessage || facebookStatus.error || status.error || '';
     if (facebookDeleteBtn) {
       facebookDeleteBtn.disabled = (!items.length && !facebookDeleteRunning) || !!clickStatus.running || !!facebookStatus.stop_requested;
       if (facebookDeleteRunning) {
@@ -243,22 +398,22 @@
         facebookDeleteBtn.textContent = 'Delete from Facebook';
       }
     }
-    if (selectAllWrap) selectAllWrap.classList.toggle('delete-hidden', !selectionMode || !items.length);
     if (!items.length) {
       selectionMode = false;
       selectedListingIds.clear();
-      if (selectAllWrap) selectAllWrap.classList.add('delete-hidden');
-      if (grid) grid.classList.remove('selection-mode');
       if (facebookDeleteBtn) facebookDeleteBtn.textContent = 'Delete from Facebook';
-      if (cancelSelectionBtn) cancelSelectionBtn.classList.add('delete-hidden');
     }
+    syncSelectionSummary();
   }
   async function poll() {
+    if (polling) return;
+    polling = true;
     try {
-      const response = await fetch('{{ url_for("web.delete_listings_data") }}');
+      const response = await appFetch('{{ url_for("web.delete_listings_data") }}');
       window.__lastDeleteData = await response.json();
       render(window.__lastDeleteData);
     } catch (e) {}
+    finally { polling = false; }
     if (timer) clearTimeout(timer);
     const importRunning = !!((window.__lastDeleteData || {}).import_status || {}).running;
     const clickRefreshRunning = !!((window.__lastDeleteData || {}).click_refresh_status || {}).running;
@@ -271,8 +426,14 @@
       importBtn.disabled = true;
       importBtn.innerHTML = '<span class="button-operation-spinner" aria-hidden="true"></span>Importing...';
     }
-    await fetch(importForm.action, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}});
-    poll();
+    try {
+      const response = await appFetch(importForm.action, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}});
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.message || 'Could not start import.');
+    } catch (error) {
+      localStatusMessage = error.message || 'Could not reach the app.';
+      if (importBtn) { importBtn.disabled = false; importBtn.textContent = 'Import Listings'; }
+    } finally { poll(); }
   });
   if (stopForm) stopForm.addEventListener('submit', async e => {
     e.preventDefault();
@@ -280,7 +441,7 @@
     if (importBtn) importBtn.innerHTML = '<span class="button-operation-spinner" aria-hidden="true"></span>Stopping...';
     let message = 'Stop requested.';
     try {
-      const response = await fetch(stopForm.action, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}});
+      const response = await appFetch(stopForm.action, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}});
       const data = await response.json();
       if (data.message) message = data.message;
     } catch (error) {
@@ -293,7 +454,7 @@
     refreshClicksBtn.disabled = true;
     refreshClicksBtn.innerHTML = '<span class="click-refresh-spinner" aria-hidden="true"></span>Refreshing...';
     try {
-      const response = await fetch(refreshClicksBtn.dataset.url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}});
+      const response = await appFetch(refreshClicksBtn.dataset.url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}});
       const data = await response.json();
       if (!response.ok || !data.ok) {
         localStatusMessage = data.message || 'Could not refresh clicks.';
@@ -307,16 +468,20 @@
     }
     poll();
   });
-  if (selectAll) selectAll.addEventListener('change', () => {
-    document.querySelectorAll('.listing-check:not(:disabled)').forEach(box => {
-      box.checked = selectAll.checked;
-      if (selectAll.checked) selectedListingIds.add(box.value); else selectedListingIds.delete(box.value);
+  grid.querySelectorAll('.listing-select-all').forEach(all => all.addEventListener('change', () => {
+    const panel = all.closest('.listing-panel');
+    if (!selectionMode || !panel.classList.contains('selection-mode')) return;
+    panel.querySelectorAll('.listing-check:not(:disabled)').forEach(box => {
+      box.checked = all.checked;
+      if (all.checked) selectedListingIds.add(box.value); else selectedListingIds.delete(box.value);
     });
-  });
+    syncSelectionSummary();
+  }));
+  grid.querySelectorAll('[data-cancel-selection]').forEach(button => button.addEventListener('click', leaveSelectionMode));
   if (clearStorageBtn) clearStorageBtn.addEventListener('click', async () => {
     clearStorageBtn.disabled = true;
     try {
-      const response = await fetch('{{ url_for("web.delete_listings_storage_clear") }}', {method:'POST'});
+      const response = await appFetch('{{ url_for("web.delete_listings_storage_clear") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({account:activeAccount})});
       const data = await response.json();
       localStatusMessage = data.message || (data.ok ? 'Stored listings cleared.' : 'Stored listings could not be cleared.');
     } catch (error) {
@@ -329,8 +494,41 @@
     const box = event.target.closest('.listing-check');
     if (!box) return;
     if (box.checked) selectedListingIds.add(box.value); else selectedListingIds.delete(box.value);
+    syncSelectionSummary();
   });
   if (grid) grid.addEventListener('click', event => {
+    if (event.target.closest('[data-backup-action]')) { beginListingAction('backup_accounts'); return; }
+    if (event.target.closest('[data-facebook-action="repost"]')) { beginListingAction('facebook_repost'); return; }
+    const clearOne = event.target.closest('[data-clear-backup]');
+    if (clearOne) {
+      clearOne.disabled = true;
+      const id = clearOne.dataset.clearBackup;
+      appFetch('/delete_listings/backup/' + encodeURIComponent(id) + '/clear', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({account:activeAccount})})
+        .then(response => response.json()).then(data => {
+          localStatusMessage = data.message;
+          if (data.ok) {
+            selectedListingIds.delete(id);
+            grid.querySelectorAll('.listing-check').forEach(box => { if (box.value === id) box.checked = false; });
+          }
+        }).catch(error => { localStatusMessage = error.message; }).finally(poll);
+      return;
+    }
+    const clearFacebook = event.target.closest('[data-clear-facebook]');
+    if (clearFacebook) {
+      clearFacebook.disabled = true;
+      appFetch('{{ url_for("web.delete_listings_storage_clear") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({scope:'facebook',account:activeAccount})})
+        .then(response => response.json()).then(data => { localStatusMessage = data.message; if (data.ok) leaveSelectionMode(); })
+        .catch(() => { localStatusMessage = 'Could not clear local listings. Try again.'; }).finally(poll);
+      return;
+    }
+    const clearBackups = event.target.closest('[data-clear-backups]');
+    if (clearBackups) {
+      clearBackups.disabled = true;
+      appFetch('{{ url_for("web.delete_listings_storage_clear") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({scope:'backups',account:activeAccount})})
+        .then(response => response.json()).then(data => { localStatusMessage = data.message; leaveSelectionMode(); })
+        .catch(error => { localStatusMessage = error.message; }).finally(poll);
+      return;
+    }
     const card = event.target.closest('.delete-card');
     if (card && !selectionMode && !event.target.closest('input,a,button')) {
       window.location.href = '/delete_listings/detail/' + encodeURIComponent(card.dataset.id);
@@ -349,7 +547,7 @@
       button.disabled = true;
       button.innerHTML = '<span class="button-operation-spinner" aria-hidden="true"></span>Stopping...';
       try {
-        const response = await fetch('{{ url_for("web.delete_listings_delete_stop") }}', {method:'POST'});
+        const response = await appFetch('{{ url_for("web.delete_listings_delete_stop") }}', {method:'POST'});
         const data = await response.json();
         localStatusMessage = data.message || 'Stop requested.';
       } catch (error) {
@@ -359,18 +557,19 @@
       poll();
       return;
     }
+    crossDialog.hidden = true;
+    postingAction = null;
+    setSelectionScope('facebook');
     if (!selectionMode) {
       selectionMode = true;
       selectedListingIds.clear();
-      if (grid) grid.classList.add('selection-mode');
-      if (selectAllWrap) selectAllWrap.classList.remove('delete-hidden');
-      if (cancelSelectionBtn) cancelSelectionBtn.classList.remove('delete-hidden');
+      syncSelectionSummary();
       button.textContent = 'Confirm Facebook Delete';
       return;
     }
     const ids = await selectedIds();
     if (!ids) return;
-    const response = await fetch('{{ url_for("web.delete_listings_delete") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids})});
+    const response = await appFetch('{{ url_for("web.delete_listings_delete") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids})});
     const data = await response.json();
     localStatusMessage = data.message || (data.ok ? 'Delete completed.' : 'Delete request failed.');
     leaveSelectionMode();
@@ -381,7 +580,68 @@
     poll();
   }
   if (facebookDeleteBtn) facebookDeleteBtn.addEventListener('click', () => runFacebookDelete(facebookDeleteBtn));
-  if (cancelSelectionBtn) cancelSelectionBtn.addEventListener('click', leaveSelectionMode);
+  if (crossPostBtn) crossPostBtn.addEventListener('click', () => beginListingAction('facebook_cross'));
+  document.getElementById('manage-cross-cancel').addEventListener('click', leaveSelectionMode);
+  const mode = document.getElementById('manage-cross-mode');
+  const delayValue = document.getElementById('manage-cross-value');
+  const delayUnit = document.getElementById('manage-cross-unit');
+  mode.addEventListener('change', () => {
+    document.getElementById('manage-cross-delay').hidden = mode.value !== 'schedule';
+    delayValue.required = mode.value === 'schedule';
+    delayValue.disabled = mode.value !== 'schedule';
+  });
+  delayValue.disabled = false;
+  const accountChoices = [...crossForm.querySelectorAll('[name=cross_account]')];
+  document.getElementById('manage-account-select-all').addEventListener('click', () => {
+    const eligible = accountChoices.filter(box => !box.disabled);
+    const selected = eligible.filter(box => box.checked).length;
+    const select = selected < Math.min(19, eligible.length);
+    eligible.forEach((box, index) => { box.checked = select && index < 19; });
+  });
+  accountChoices.forEach(box => box.addEventListener('change', () => {
+    if (accountChoices.filter(input => input.checked).length > 19) {
+      box.checked = false;
+      document.getElementById('manage-cross-error').textContent = 'Choose up to 19 target accounts.';
+    }
+  }));
+  delayUnit.addEventListener('change', () => { delayValue.max = {minutes:59,hours:24,days:365}[delayUnit.value]; });
+  crossForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const targets = [...crossForm.querySelectorAll('[name=cross_account]:checked')].map(input => input.value);
+    const errorBox = document.getElementById('manage-cross-error');
+    if (postingAction !== 'facebook_repost' && !targets.length) { errorBox.textContent = 'Select at least one target account.'; return; }
+    const button = document.getElementById('manage-cross-submit');
+    button.disabled = true;
+    submittingPosts = true;
+    let queued = 0;
+    const scheduleBatch = 'manage_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    try {
+      const listingIds = ((window.__lastDeleteData || {}).listings || []).filter(item => selectedListingIds.has(String(item.id)) && Boolean(item.facebook_present === false || (item.source_deleted && !item.facebook_reposted)) === (postingAction === 'backup_accounts')).map(item => String(item.id));
+      if (!listingIds.length) throw new Error('Select at least one listing.');
+      for (const id of listingIds) {
+        const listing = ((window.__lastDeleteData || {}).listings || []).find(item => String(item.id) === id);
+        if (!listing) throw new Error('A selected listing is no longer available. Refresh and try again.');
+        const prefs = listing.repost_preferences || {};
+        const names = (listing.downloaded_images || []).map(photo => photo.name);
+        const order = [...(prefs.image_order || []).filter(name => names.includes(name))];
+        names.forEach(name => { if (!order.includes(name)) order.push(name); });
+        const endpoint = postingAction === 'facebook_repost' ? '{{ url_for("web.delete_listings_repost") }}' : '{{ url_for("web.cross_post_listing") }}';
+        const response = await appFetch(endpoint, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+          account:activeAccount, listing_id:id, target_accounts:targets, fields:prefs.fields || {}, image_order:order,
+          post_mode:'schedule', delay_value:Number(delayValue.value), delay_unit:delayUnit.value, backup_post:postingAction === 'backup_accounts', mass_post:true,
+          schedule_batch:scheduleBatch, schedule_position:queued
+        })});
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.message || 'Could not queue posting.');
+        queued++; selectedListingIds.delete(id);
+        grid.querySelectorAll('.listing-check').forEach(box => { if (box.value === id) box.checked = false; });
+      }
+      localStatusMessage = postingAction === 'facebook_repost' ? `Queued ${queued} listing(s) for reposting. See Reposting Results.` : `Queued ${queued} listing(s) for ${targets.length} account(s). See Posting Results.`;
+      leaveSelectionMode();
+    } catch (error) {
+      errorBox.textContent = `${queued ? queued + ' listing(s) already queued. ' : ''}${error.message}`;
+    } finally { submittingPosts = false; syncSelectionSummary(); poll(); }
+  });
   poll();
 })();
 </script>

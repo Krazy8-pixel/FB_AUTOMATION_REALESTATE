@@ -31,15 +31,17 @@
     </div>
     <div class="stat-card">
       <span class="stat-label">Next Run</span>
-      <span class="stat-value" id="stat-next">-</span>
+      <span class="stat-value next-run-value" id="stat-next">{{ next_run_label or '-' }}</span>
     </div>
   </div>
 
   <div class="schedular-table">
     <div class="table-head">
-      <h2>Queue</h2>
-      <span class="table-sub">Auto refreshes every 5 seconds.</span>
+      <div><h2>Latest activity</h2><span class="table-sub">Newest first · Times use the app computer's time zone · Refreshes every 5 seconds</span></div>
+      <button class="delete-btn" type="button" id="clear-posting-results" data-url="{{ url_for('web.clear_posting_results') }}" {% if not active_account %}disabled{% endif %}>Clear Results</button>
     </div>
+    <p class="table-sub">Clears finished results for this account. Pending and running posts stay.</p>
+    <p id="clear-results-message" role="status" aria-live="polite"></p>
 
     <div class="table-wrap">
       <table>
@@ -48,7 +50,7 @@
             <th>Vehicle</th>
             <th>Accounts</th>
             <th>Status</th>
-            <th>Scheduled For</th>
+            <th>Time &amp; date</th>
             <th>Time Remaining</th>
             <th>Action</th>
           </tr>
@@ -61,7 +63,7 @@
             </td>
             <td>{% if item.source == 'Cross posting' %}Cross posting<br>{{ item.source_account }} &rarr; {{ item.account }}{% else %}{{ active_account }}{% endif %}</td>
             <td><span class="status-pill status-{{ item.status }}">{{ item.status }}</span>{% if item.error %}<p>{{ item.error }}</p>{% endif %}</td>
-            <td>{{ item.run_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+            <td class="posting-time"><span class="posting-time-label">{{ item.time_label }}</span><time datetime="{{ item.time_iso }}"><strong class="posting-time-clock">{{ item.time_clock }}</strong><span class="posting-time-date">{{ item.time_date }} · {{ item.time_zone }}</span></time></td>
             <td data-remaining="{{ item.remaining_seconds }}" data-status="{{ item.status }}"></td>
             <td>
               {% if item.status in ["pending", "waiting", "posting"] %}
@@ -88,6 +90,11 @@
   const statPending = document.getElementById("stat-pending");
   const statPosted = document.getElementById("stat-posted");
   const statNext = document.getElementById("stat-next");
+  const resultsPage = document.querySelector('.schedular-page');
+  const clearResults = document.getElementById('clear-posting-results');
+  const clearMessage = document.getElementById('clear-results-message');
+  let scheduleLoading = false, scheduleTimer = null;
+  let scheduleGeneration = 0, refreshAgain = false;
   function escapeSchedule(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[ch]));
   }
@@ -109,18 +116,22 @@
       const remaining = parseInt(cell.getAttribute("data-remaining"), 10) || 0;
       const status = cell.dataset.status;
       cell.textContent = status === 'posted' ? 'Completed' : status === 'failed' ? 'Failed'
+        : status === 'cancelled' ? 'Cancelled'
         : status === 'waiting' ? 'Waiting for previous post' : status === 'pending' && remaining <= 0 ? 'Queued' : formatRemaining(remaining);
     });
   }
 
   async function refreshSchedule() {
-    const response = await fetch("/post_schedular_data");
-    const result = await response.json();
-    const message = document.querySelector('[data-active-task-message]');
-    if (message) message.textContent = result.message || (result.ok ? 'Scheduled post cancelled.' : 'Could not cancel this post.');
+    if (scheduleLoading) { refreshAgain = true; return; }
+    scheduleLoading = true;
+    const generation = scheduleGeneration;
+    clearTimeout(scheduleTimer);
+    try {
+    const response = await appFetch("/post_schedular_data");
     if (!response.ok) return;
     const data = await response.json();
     if (!data.ok) return;
+    if (generation !== scheduleGeneration) return;
 
     statPending.textContent = data.pending_count;
     statPosted.textContent = data.posted_count;
@@ -128,8 +139,7 @@
       statNext.textContent = "-";
       schedularRows.innerHTML = '<tr><td colspan="6" class="empty">No scheduled posts in the queue for this account.</td></tr>';
     } else {
-      const next = data.items.find(item => ['pending', 'waiting'].includes(item.status));
-      statNext.textContent = next ? next.run_at : '-';
+      statNext.textContent = data.next_run_label || '-';
 
       const rows = data.items.map((item) => {
         const action = ["pending", "waiting", "posting"].includes(item.status)
@@ -140,7 +150,7 @@
           <td>${escapeSchedule(item.title || item.make || "-")}</td>
           <td>${item.source === 'Cross posting' ? 'Cross posting<br>' + escapeSchedule(item.source_account) + ' &rarr; ' + escapeSchedule(item.account) : escapeSchedule(item.account)}</td>
             <td><span class="status-pill status-${escapeSchedule(item.status)}">${escapeSchedule(item.status)}</span>${item.error ? '<p>' + escapeSchedule(item.error) + '</p>' : ''}</td>
-            <td>${item.run_at}</td>
+            <td class="posting-time"><span class="posting-time-label">${escapeSchedule(item.time_label)}</span><time datetime="${escapeSchedule(item.time_iso)}"><strong class="posting-time-clock">${escapeSchedule(item.time_clock)}</strong><span class="posting-time-date">${escapeSchedule(item.time_date)} · ${escapeSchedule(item.time_zone)}</span></time></td>
             <td data-remaining="${item.remaining_seconds}" data-status="${escapeSchedule(item.status)}"></td>
             <td>${action}</td>
           </tr>
@@ -151,10 +161,37 @@
     }
 
     updateRemainingCells();
+    } catch (error) {
+      const message = document.querySelector('[data-active-task-message]');
+      if (message) message.textContent = 'Could not refresh posting results. Retrying shortly.';
+    } finally {
+      scheduleLoading = false;
+      scheduleTimer = setTimeout(refreshSchedule, refreshAgain ? 0 : 5000);
+      refreshAgain = false;
+    }
   }
 
+  clearResults.addEventListener('click', async () => {
+    if (!window.confirm('Clear completed, failed, and cancelled posting results for this account?')) return;
+    clearResults.disabled = true;
+    clearMessage.textContent = 'Clearing results…';
+    try {
+      const response = await appFetch(clearResults.dataset.url, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({account:resultsPage.dataset.account})
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.message || 'Could not clear results.');
+      scheduleGeneration++;
+      clearMessage.textContent = result.message;
+      await refreshSchedule();
+    } catch (error) {
+      clearMessage.textContent = error.message || 'Could not clear results. Try again.';
+    } finally { clearResults.disabled = !resultsPage.dataset.account; }
+  });
+
   async function deleteJob(jobId) {
-    const response = await fetch("/post_schedular_delete", {
+    const response = await appFetch("/post_schedular_delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ job_id: jobId })
@@ -171,6 +208,5 @@
 
   updateRemainingCells();
   refreshSchedule();
-  setInterval(refreshSchedule, 5000);
 </script>
 {% endblock %}

@@ -1,3 +1,4 @@
+from automation.responsiveness import RequestLock
 import json
 from automation.task_control import cancellable
 import os
@@ -21,8 +22,8 @@ HEALTHY = "Valid"
 EXPIRED = "Expired"
 UNKNOWN = "Check failed"
 
-_health_lock = threading.Lock()
-_check_job_lock = threading.Lock()
+_health_lock = RequestLock('session_health._health_lock')
+_check_job_lock = RequestLock('session_health._check_job_lock')
 _check_job = None
 
 
@@ -248,10 +249,12 @@ class SessionCheckJob:
             self.running = False
         driver = self.driver_holder.get("driver")
         if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
+            def close_browser():
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+            threading.Thread(target=close_browser, daemon=True, name='stop-session-check').start()
 
     def _run(self):
         try:

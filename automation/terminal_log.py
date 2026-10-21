@@ -4,6 +4,7 @@ import logging
 import sys
 import threading
 from logging.handlers import RotatingFileHandler
+from automation.responsiveness import RequestLock
 
 _disk_handler = None
 
@@ -54,9 +55,20 @@ def export_text():
                     pass
         else:
             parts.append(snapshot()['text'])
+        # Slow-request thread captures use a separate writer so a blocked
+        # stdout/logging lock cannot prevent collecting evidence of a freeze.
+        try:
+            from automation.runtime_paths import data_dir
+            freeze = data_dir() / 'freeze-diagnostics.log'
+            for suffix in ('.2', '.1', ''):
+                source = Path(str(freeze) + suffix)
+                if source.is_file():
+                    parts.append(source.read_text(encoding='utf-8', errors='replace'))
+        except OSError:
+            pass
         return ''.join(parts)
 
-_lock = threading.RLock()
+_lock = RequestLock('terminal_log', reentrant=True)
 _chunks = deque()
 _sequence = 0
 _size = 0

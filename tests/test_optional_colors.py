@@ -14,14 +14,14 @@ class OptionalColorsTests(unittest.TestCase):
         with patch.object(poster, 'WebDriverWait') as wait:
             wait.return_value.until.side_effect = TimeoutError('missing')
             self.assertIsNone(poster._fill_optional_color(MagicMock(), 'Exterior colour', 'Blue'))
-            self.assertLessEqual(wait.call_args.args[1], 15)
+            self.assertLessEqual(wait.call_args.args[1], 25)
 
     def test_selects_mapped_color_with_shared_budget(self):
         driver, combo, option = MagicMock(), MagicMock(), MagicMock()
         with patch.object(poster, 'WebDriverWait') as wait, patch.object(poster, '_marketplace_combo_value', return_value=''):
             wait.return_value.until.side_effect = [combo, [(option, 'Blue')], True]
             self.assertEqual(poster._fill_optional_color(driver, 'Interior colour', 'Navy'), 'Blue')
-            self.assertTrue(all(call.args[1] <= 15 for call in wait.call_args_list))
+            self.assertTrue(all(call.args[1] <= 25 for call in wait.call_args_list))
 
 
 if __name__ == '__main__':

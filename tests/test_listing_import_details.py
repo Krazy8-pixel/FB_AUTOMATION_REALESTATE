@@ -72,7 +72,7 @@ class ImportDetailsTests(unittest.TestCase):
         reader.assert_called_once()
         self.assertEqual(len(result), 1)
 
-    def test_available_filter_confirms_radio_and_waits_five_seconds(self):
+    def test_available_filter_confirms_radio_without_fixed_delay(self):
         driver, radio = MagicMock(), MagicMock()
         radio.is_displayed.return_value = True
         checked = ['false']
@@ -83,7 +83,7 @@ class ImportDetailsTests(unittest.TestCase):
             wait.return_value.until.side_effect = lambda condition: condition(driver)
             self.assertTrue(importer._set_available_filter(driver))
         radio.click.assert_called_once()
-        sleep.assert_called_once_with(5)
+        sleep.assert_not_called()
 
     def test_unconfirmed_filter_returns_false(self):
         driver, radio = MagicMock(), MagicMock()
@@ -657,7 +657,7 @@ class ImportDetailsTests(unittest.TestCase):
         stored = {'id': 'one', 'year': '2020', 'make': 'Ford', 'model': 'Focus', 'price': '$100', '_source_listing_id': '123'}
         with patch.object(importer, '_open_prelogged_facebook', return_value=driver), \
              patch.object(importer, 'WebDriverWait'), patch.object(importer, '_click_manage_listings'), \
-             patch.object(importer, '_extract_visible_listing_candidates', return_value=candidates), \
+             patch.object(importer, 'extract_delete_candidates', return_value=candidates), \
              patch.object(importer, '_verify_repost_source', side_effect=[False, True]) as verify, \
              patch.object(importer, '_complete_facebook_delete_dialog') as confirm:
             result = importer.delete_selected_listings_from_facebook('account', [stored], stop_event=stop)

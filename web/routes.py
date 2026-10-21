@@ -1,7 +1,9 @@
+from automation.responsiveness import AppBusyError, RequestLock
 from automation.diagnostics import event as diagnostic_event
 from automation.listing_videos import saved_paths as saved_video_paths
-from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify, send_from_directory, Response
+from flask import Blueprint, current_app, render_template, request, redirect, url_for, session, jsonify, send_from_directory, Response
 import copy
+import sqlite3
 import sys
 from automation.fb_login import MAX_ACCOUNTS
 from automation.cdp_login import cleanup_expired_cdp_logins, cleanup_orphaned_cdp_accounts, close_cdp_browser, delete_cdp_account, get_cdp_account, list_cdp_accounts, start_cdp_login
@@ -63,6 +65,28 @@ from automation.groups import (
 )
 web_bp = Blueprint("web", __name__)
 
+@web_bp.app_errorhandler(AppBusyError)
+def app_busy(error):
+    return _busy_response()
+
+
+@web_bp.app_errorhandler(sqlite3.OperationalError)
+def database_busy(error):
+    if 'locked' not in str(error).lower() and 'busy' not in str(error).lower():
+        raise error
+    return _busy_response()
+
+
+def _busy_response():
+    message = 'Another action is taking longer than expected. Check Posting Results before retrying a post.'
+    if request.method != 'GET' or request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.path.endswith(('/data', '_data', '/status')):
+        return jsonify(ok=False, message=message), 503, {'Retry-After': '2'}
+    # Recovery must not run the normal page context processors (disk scans,
+    # account reads, etc.) that may be part of the stall.
+    html = current_app.jinja_env.get_template('app_busy.html').render(message=message)
+    return Response(html, status=503, mimetype='text/html', headers={'Retry-After': '2'})
+
+
 # Keep group automation available internally while hiding its UI.
 GROUP_UI_ENABLED = False
 
@@ -83,18 +107,18 @@ else:
 scheduled_posts = {}
 cross_post_queue_lock = threading.Lock()
 PORTAL_AUTH_PATH = str(data_dir() / "portal_auth.json")
-portal_auth_lock = threading.RLock()
-groups_jobs_lock = threading.Lock()
+portal_auth_lock = RequestLock('portal_auth_lock', reentrant=True)
+groups_jobs_lock = RequestLock('groups_jobs_lock')
 groups_jobs = {}
 groups_cancel_events = {}
-listing_import_jobs_lock = threading.Lock()
+listing_import_jobs_lock = RequestLock('listing_import_jobs_lock')
 listing_import_jobs = {}
 listing_import_cancel_events = {}
 LISTING_AUTO_REFRESH_INTERVAL = timedelta(hours=24)
 LISTING_AUTO_REFRESH_CHECK_JOB_ID = "delete-listings-auto-refresh-check"
-listing_click_jobs_lock = threading.Lock()
+listing_click_jobs_lock = RequestLock('listing_click_jobs_lock')
 listing_click_jobs = {}
-facebook_delete_jobs_lock = threading.Lock()
+facebook_delete_jobs_lock = RequestLock('facebook_delete_jobs_lock')
 facebook_delete_jobs = {}
 facebook_delete_cancel_events = {}
 
@@ -542,9 +566,12 @@ def _active_repost_listing_ids(account):
     active = set()
     if not account:
         return active
+    listings = load_listings(account).get('listings', [])
+    shared_ids = {str(item['id']) for item in listings
+                  if item.get('facebook_present') is False or (item.get('source_deleted') and not item.get('facebook_reposted'))}
     with repost_jobs_lock:
         for meta in repost_jobs.values():
-            if meta.get("account") != account:
+            if meta.get("account") != account and str(meta.get('listing_id') or '') not in shared_ids:
                 continue
             if meta.get("status") in {"pending", "reading", "posting", "deleting"}:
                 listing_id = str(meta.get("listing_id") or "").strip()
@@ -552,9 +579,14 @@ def _active_repost_listing_ids(account):
                     active.add(listing_id)
     with scheduled_posts_lock:
         for meta in scheduled_posts.values():
-            if (meta.get('source') == 'Cross posting' and meta.get('source_account') == account
+            if (meta.get('source') == 'Cross posting' and (meta.get('source_account') == account or str(meta.get('source_listing_id') or '') in shared_ids)
                     and meta.get('status') in {'pending', 'waiting', 'posting'}):
                 active.add(str(meta['source_listing_id']))
+    from automation.backup_duplicates import backup_groups
+    for group in backup_groups(listings):
+        ids = {str(item['id']) for item in group}
+        if active & ids:
+            active.update(ids)
     return active
 
 
@@ -637,6 +669,8 @@ def _run_saved_listing_repost(listing, account, job_id=None):
                 # Scheduled jobs use the saved source and frozen preferences.
                 if not listing.get('details'):
                     raise ValueError('Saved listing details are missing. Import this listing first.')
+                if listing.get('source_deleted') and listing.get('facebook_reposted') and listing.get('facebook_present') is not False:
+                    raise ValueError('Import this listing again to save its current Facebook listing ID before reposting.')
                 if not listing.get('source_deleted') and not _extract_listing_id(listing.get('edit_url') or listing.get('url') or ''):
                     raise ValueError('The saved Facebook listing ID is missing. Import this listing again before reposting.')
                 diagnostic_event('REPOST', 'START', account=account, listing_id=listing.get('id'), job_id=job_id)
@@ -689,7 +723,8 @@ def _run_saved_listing_repost(listing, account, job_id=None):
                     if int((result or {}).get('deleted') or 0) != 1:
                         raise RuntimeError('The original Facebook listing could not be deleted. Reposting was stopped; the saved backup was kept.')
                     update_listing_fields(account, str(listing['id']), {
-                        'source_deleted': True, 'facebook_deleted_at': datetime.now(timezone.utc).isoformat(timespec='seconds')})
+                        'source_deleted': True, 'facebook_present': False, 'facebook_reposted': False,
+                        'facebook_deleted_at': datetime.now(timezone.utc).isoformat(timespec='seconds')})
 
                 if job_id:
                     with repost_jobs_lock:
@@ -751,16 +786,16 @@ def _run_saved_listing_repost(listing, account, job_id=None):
 
 
 activity_log = _load_activity_log()
-activity_log_lock = threading.Lock()
-delete_jobs_lock = threading.Lock()
+activity_log_lock = RequestLock('activity_log_lock')
+delete_jobs_lock = RequestLock('delete_jobs_lock')
 delete_jobs_by_account = {}
-post_jobs_lock = threading.Lock()
+post_jobs_lock = RequestLock('post_jobs_lock')
 post_locks_by_account = {}
-scheduled_posts_lock = threading.Lock()
-repost_jobs_lock = threading.Lock()
+scheduled_posts_lock = RequestLock('scheduled_posts_lock')
+repost_jobs_lock = RequestLock('post_jobs_lock')
 repost_jobs = {}
-repost_history_lock = threading.Lock()
-repost_run_locks_lock = threading.Lock()
+repost_history_lock = RequestLock('repost_history_lock')
+repost_run_locks_lock = RequestLock('repost_run_locks_lock')
 repost_run_locks_by_account = {}
 
 
@@ -879,6 +914,16 @@ def _post_single_listing(post_data, account, job_id=None):
                 from automation.desktop_state import checkpoint
                 checkpoint()
             result = post_to_fb_marketplace(post_data, account, post_mode=post_mode, group_names=group_names)
+            if result and post_data.get('_manual_record_id') and post_data.get('_require_publish_confirmation'):
+                try:
+                    from automation.manual_backups import save_manual_listing
+                    save_manual_listing(account, post_data, confirmed=True)
+                except Exception as storage_error:
+                    _runtime_log(f'[ManualPosting] Confirmed post backup failed: {storage_error}')
+                    if job_id:
+                        with scheduled_posts_lock:
+                            if job_id in scheduled_posts:
+                                scheduled_posts[job_id]['error'] = f'Posted on Facebook, but saving the local backup failed: {storage_error}'
         if job_id:
             with scheduled_posts_lock:
                 if job_id in scheduled_posts:
@@ -1003,9 +1048,11 @@ def _collect_account_schedule(active_account):
     # here for their account's one-at-a-time posting lock.
     visible_job_ids = {item["job_id"] for item in items}
     with scheduled_posts_lock:
-        scheduled_snapshot = list(scheduled_posts.items())
+        scheduled_snapshot = [(job_id, dict(meta)) for job_id, meta in scheduled_posts.items()]
 
     for job_id, meta in scheduled_snapshot:
+        if active_account in meta.get('results_cleared_for', []):
+            continue
         if meta.get('source') == 'Cross posting':
             if active_account not in {meta.get('account'), meta.get('source_account')} or meta.get('status') == 'deleted':
                 continue
@@ -1024,7 +1071,7 @@ def _collect_account_schedule(active_account):
         if meta.get("account") != active_account:
             continue
         meta_status = str(meta.get("status") or "").strip().lower()
-        if meta_status not in {"waiting", "posting"} or job_id in visible_job_ids:
+        if meta_status not in {"pending", "waiting", "posting", "posted", "failed", "cancelled"} or job_id in visible_job_ids:
             continue
         run_at = meta.get("started_at") or meta.get("run_at") or now
         items.append({
@@ -1035,9 +1082,10 @@ def _collect_account_schedule(active_account):
             "source": "Manual / Excel",
             "status": meta_status,
             "run_at": run_at,
-            "remaining_seconds": 0
+            "error": meta.get('error', ''),
+            "remaining_seconds": max(0, int((run_at - now).total_seconds())) if meta_status == 'pending' else 0
         })
-        if meta_status == "waiting":
+        if meta_status in {"pending", "waiting"}:
             pending_count += 1
 
     with scheduled_posts_lock:
@@ -1046,23 +1094,38 @@ def _collect_account_schedule(active_account):
             if (p.get("account") == active_account or
                  (p.get('source') == 'Cross posting' and p.get('source_account') == active_account))
             and p.get("status") == "posted"
+            and active_account not in p.get('results_cleared_for', [])
         )
 
-    local_tz = datetime.now().astimezone().tzinfo
+    metadata = dict(scheduled_snapshot)
+    for item in items:
+        meta = metadata.get(item['job_id'], {})
+        status = item['status']
+        event_key, label = {'posted': ('posted_at', 'Posted'), 'failed': ('posted_at', 'Failed'),
+                            'posting': ('started_at', 'Started')}.get(status, ('run_at', 'Scheduled'))
+        event_at = meta.get(event_key)
+        if not isinstance(event_at, datetime):
+            event_at, label = item['run_at'], 'Scheduled'
+        local = event_at.astimezone()
+        item.update(time_label=label, time_clock=local.strftime('%I:%M:%S %p').lstrip('0'),
+                    time_date=local.strftime('%d %b %Y'), time_zone=local.tzname() or 'Local time',
+                    time_iso=local.isoformat(timespec='seconds'))
+        # A far-future schedule should not push a freshly completed result down.
+        activity_at = meta.get('posted_at') or meta.get('started_at') or meta.get('created_at') or item['run_at']
+        item['_activity_timestamp'] = activity_at.timestamp()
 
-    def _run_at_sort_key(item):
-        run_at = item.get("run_at")
-        if not isinstance(run_at, datetime):
-            return float("inf")
-        if run_at.tzinfo is None:
-            return run_at.replace(tzinfo=local_tz).astimezone(timezone.utc).timestamp()
-        return run_at.astimezone(timezone.utc).timestamp()
-
-    items.sort(key=_run_at_sort_key)
+    next_item = min((item for item in items if item['status'] in {'pending', 'waiting'}),
+                    key=lambda item: item['run_at'].timestamp(), default=None)
+    next_run_label = ''
+    if next_item:
+        next_local = next_item['run_at'].astimezone()
+        next_run_label = next_local.strftime('%d %b, %I:%M %p') + ' ' + (next_local.tzname() or 'Local time')
+    items.sort(key=lambda item: item['_activity_timestamp'], reverse=True)
     return {
         "items": items,
         "pending_count": pending_count,
-        "posted_count": posted_count
+        "posted_count": posted_count,
+        "next_run_label": next_run_label,
     }
 
 
@@ -1078,11 +1141,8 @@ def _is_auto_listing_running_for_account(account):
             if str(meta.get("status") or "").strip().lower() in {"pending", "waiting", "posting"}:
                 return True
 
-    schedule_data = _collect_account_schedule(account)
-    for item in schedule_data.get("items", []):
-        status = str(item.get("status") or "").strip().lower()
-        if status in {"pending", "posting"}:
-            return True
+    # The registry is restored at desktop startup. Navigation must not wait
+    # on APScheduler's job-store lock or query its database.
     return False
 
 
@@ -2427,11 +2487,14 @@ def auto_listing_manual_post():
             groups=groups,
         )
 
+    save_template = request.form.get('submit_action') == 'save_template'
+    if request.form.get('account') and request.form['account'] != active_account:
+        return _render_manual('The active account changed. Reload the form before saving or posting.', 'failed')
     post_action = (request.form.get("post_action") or "simple").strip().lower()
     if post_action not in {"simple", "group"}:
         return _render_manual("Unsupported posting action. Choose a Facebook posting option.", "failed")
 
-    multi_account = request.form.get("multi_account") == "1"
+    multi_account = request.form.get("multi_account") == "1" and not save_template
     saved_account_set = {str(account).strip() for account in accounts if str(account).strip()}
     requested_accounts = [
         str(account or "").strip()
@@ -2482,18 +2545,19 @@ def auto_listing_manual_post():
 
     delay_unit = (request.form.get("delay_unit") or "").strip().lower()
     delay_value_raw = (request.form.get("delay_value") or "").strip()
-    if delay_unit not in {"hours", "minutes"}:
+    immediate = save_template or request.form.get('manual_timing') == 'now'
+    if not immediate and delay_unit not in {"hours", "minutes"}:
         return _render_manual("Please select a valid delay unit.", "failed")
 
     try:
-        delay_value = int(delay_value_raw)
+        delay_value = 0 if immediate else int(delay_value_raw)
     except ValueError:
         return _render_manual("Delay value must be a whole number.", "failed")
 
-    if delay_value < 1:
+    if not immediate and delay_value < 1:
         return _render_manual(f"{delay_unit.capitalize()} delay must be at least 1.", "failed")
 
-    delay_seconds = delay_value * {"hours": 3600, "minutes": 60}[delay_unit]
+    delay_seconds = 0 if immediate else delay_value * {"hours": 3600, "minutes": 60}[delay_unit]
     run_at = datetime.now() + timedelta(seconds=delay_seconds)
 
     price = str(request.form.get("price") or "").strip()
@@ -2501,6 +2565,17 @@ def auto_listing_manual_post():
         return _render_manual("Price is required.", "failed")
 
     post_data = _build_manual_post_data(request.form)
+    mandatory = ['vehicle_type', 'year', 'make', 'model', 'mileage', 'price']
+    if post_data['vehicle_type'].casefold() == 'car':
+        mandatory.append('body_style')
+    missing = [field.replace('_', ' ').title() for field in mandatory if not post_data.get(field)]
+    if missing:
+        return _render_manual('Required fields: ' + ', '.join(missing), 'failed')
+    try:
+        if not 1900 <= int(post_data['year']) <= 2100 or float(post_data['mileage'].replace(',', '')) <= 300 or float(price.replace(',', '')) < 0:
+            raise ValueError()
+    except ValueError:
+        return _render_manual('Enter a valid year, nonnegative price, and mileage greater than 300.', 'failed')
     # Color validation is disabled for now. Exterior and interior colors are
     # intentionally optional and are not required before scheduling a post.
     # missing_color_fields = [
@@ -2560,11 +2635,21 @@ def auto_listing_manual_post():
         post_data[f"image_path{index}"] = image_path
 
     post_data["video_paths"] = _save_manual_videos(request.files.getlist("videos"))
+    if save_template:
+        from automation.manual_backups import save_manual_listing
+        post_data['_manual_record_id'] = uuid4().hex[:20]
+        try:
+            save_manual_listing(active_account, post_data)
+        except (ValueError, OSError) as exc:
+            return _render_manual(f'Template could not be saved: {exc}', 'failed')
+        return redirect(url_for('web.backup_listings_page', message='Template saved as backup.', message_type='success'))
 
     scheduled_jobs = []
     for account_index, target_account in enumerate(target_accounts):
         account_post_data = copy.deepcopy(post_data)
-        account_run_at = run_at + timedelta(seconds=delay_seconds * account_index)
+        account_post_data['_manual_record_id'] = uuid4().hex[:20]
+        account_post_data['_require_publish_confirmation'] = True
+        account_run_at = run_at + timedelta(seconds=delay_seconds * account_index or 1)
         safe_account = re.sub(r"[^a-zA-Z0-9_]+", "_", target_account or "account")
         job_id = f"manual_{safe_account}_{int(datetime.now().timestamp())}_{uuid4().hex[:8]}"
         scheduler.add_job(
@@ -2588,6 +2673,8 @@ def auto_listing_manual_post():
             details=f"Added manual scheduled job {job_id} for {account_run_at.strftime('%Y-%m-%d %H:%M:%S')}",
         )
 
+    if immediate:
+        return _render_manual('Posting queued. The listing will appear in Manage Listings after Facebook confirms publication.', 'success')
     if post_action == "group":
         group_count = len(group_names) if group_names else 0
         group_label = f"{group_count} group(s)" if group_count else "selected groups"
@@ -2635,6 +2722,7 @@ def post_schedular():
         scheduled_items=schedule_data["items"],
         pending_count=schedule_data["pending_count"],
         posted_count=schedule_data["posted_count"],
+        next_run_label=schedule_data["next_run_label"],
     )
 
 @web_bp.route("/post_schedular_data", methods=["GET"])
@@ -2655,7 +2743,8 @@ def post_schedular_data():
             "error": item.get("error", ""),
             "status": item["status"],
             "run_at": item["run_at"].strftime("%Y-%m-%d %H:%M:%S"),
-            "remaining_seconds": item["remaining_seconds"]
+            "remaining_seconds": item["remaining_seconds"],
+            **{key: item[key] for key in ('time_label', 'time_clock', 'time_date', 'time_zone', 'time_iso')},
         })
 
     return jsonify({
@@ -2663,8 +2752,42 @@ def post_schedular_data():
         "account": active_account,
         "pending_count": schedule_data["pending_count"],
         "posted_count": schedule_data["posted_count"],
+        "next_run_label": schedule_data["next_run_label"],
         "items": items_payload,
     })
+
+@web_bp.route('/post_schedular/clear_results', methods=['POST'])
+def clear_posting_results():
+    account = get_active_account()
+    if not account:
+        return jsonify(ok=False, message='Select an account first.'), 400
+    data = request.get_json(silent=True) or {}
+    if data.get('account') != account:
+        return jsonify(ok=False, message='The active account changed. Reopen Posting Results.'), 409
+    cleared = 0
+    with scheduled_posts_lock:
+        for job_id, meta in list(scheduled_posts.items()):
+            owners = {meta.get('account')}
+            if meta.get('source') == 'Cross posting':
+                owners.add(meta.get('source_account'))
+            owners.discard(None)
+            hidden = set(meta.get('results_cleared_for') or [])
+            if account not in owners or account in hidden or meta.get('status') not in {'posted', 'failed', 'cancelled'}:
+                continue
+            cleared += 1
+            hidden.add(account)
+            if owners <= hidden:
+                scheduled_posts.pop(job_id)
+            else:
+                # A cross-post is visible to two accounts. Clearing the source
+                # must not remove the target account's result (or vice versa).
+                meta['results_cleared_for'] = sorted(hidden)
+    if DESKTOP_MODE:
+        from automation.desktop_state import checkpoint
+        checkpoint()
+    return jsonify(ok=True, cleared_count=cleared,
+                   message=f'Cleared {cleared} finished posting result(s).' if cleared else 'No finished results to clear.')
+
 
 @web_bp.route("/post_schedular_delete", methods=["POST"])
 def post_schedular_delete():
@@ -2735,11 +2858,26 @@ def _facebook_delete_snapshot(account):
         return dict(facebook_delete_jobs.get(account) or {"running": False}) if account else {"running": False}
 
 
-def _render_delete_listings_page(message=None, message_type=None):
+def _ordered_manage_listings(items):
+    def timestamp(item):
+        for key in ('facebook_posted_at', 'cross_posted_at', 'facebook_reposted_at', 'listed_date', 'created_at'):
+            try:
+                return datetime.fromisoformat(str(item.get(key) or '')).timestamp()
+            except (ValueError, TypeError, OSError):
+                continue
+        return 0
+    def backup(item):
+        return item.get('facebook_present') is False or (item.get('source_deleted') and not item.get('facebook_reposted'))
+    from automation.backup_duplicates import unique_listings
+    return unique_listings(sorted(items, key=lambda item: (bool(backup(item)), -timestamp(item))))
+
+
+def _render_delete_listings_page(message=None, message_type=None, *, backups_page=False):
     accounts = get_all_accounts()
     active_account = get_active_account()
     stored = (load_listings(active_account) if active_account else None) or {"listings": [], "updated_at": None}
-    listings = [item for item in (stored.get("listings") or []) if isinstance(item, dict)]
+    listings = _ordered_manage_listings([item for item in (stored.get("listings") or []) if isinstance(item, dict)])
+    listings = [item for item in listings if bool(item.get('facebook_present') is False or (item.get('source_deleted') and not item.get('facebook_reposted'))) == backups_page]
     for listing in listings:
         listing['display_status'] = _repost_listing_status(active_account, listing)
     import_status = _delete_import_snapshot(active_account)
@@ -2749,7 +2887,8 @@ def _render_delete_listings_page(message=None, message_type=None):
         message_type=message_type,
         accounts=accounts,
         active_account=active_account,
-        active_page="delete",
+        active_page="backups" if backups_page else "delete",
+        backups_page=backups_page,
         listings=listings,
         listings_updated_at=stored.get("updated_at"),
         import_status=import_status,
@@ -2774,6 +2913,8 @@ def _listing_import_account_lock(account, stop_event):
 
 
 def _start_listing_import_job(account, automatic=False):
+    if automatic:
+        return False, 'Automatic imports are disabled. Use Import Listings to start a manual import.'
     if not account:
         return False, "No active account selected."
     with groups_jobs_lock:
@@ -2785,6 +2926,7 @@ def _start_listing_import_job(account, automatic=False):
         return False, "Wait for Facebook deletion to finish."
     if _active_repost_listing_ids(account):
         return False, "Wait for scheduled reposting to finish."
+    existing_total = len(load_listings(account).get("listings") or [])
     with listing_import_jobs_lock:
         current = listing_import_jobs.get(account) or {}
         if automatic and current.get('stop_requested'):
@@ -2798,7 +2940,7 @@ def _start_listing_import_job(account, automatic=False):
             "started_at": time.time(),
             "finished_at": None,
             "new_count": 0,
-            "total_count": len(load_listings(account).get("listings") or []),
+            "total_count": existing_total,
             "message": "Starting automatic listing refresh..." if automatic else "Starting listing import...",
             "error": None,
             "stop_requested": False,
@@ -2834,12 +2976,13 @@ def _start_listing_import_job(account, automatic=False):
             if DESKTOP_MODE:
                 from automation.maintenance import record
                 record(account, "import", True)
+            total_count = len(load_listings(account).get("listings") or [])
             with listing_import_jobs_lock:
                 job = listing_import_jobs.get(account) or {}
                 job.update({
                     "running": False,
                     "finished_at": time.time(),
-                    "total_count": len(load_listings(account).get("listings") or []),
+                    "total_count": total_count,
                     "message": "Automatic listing refresh complete." if automatic else "Listing import complete.",
                 })
                 listing_import_jobs[account] = job
@@ -2849,7 +2992,7 @@ def _start_listing_import_job(account, automatic=False):
                 job.update({
                     "running": False,
                     "finished_at": time.time(),
-                    "total_count": len(load_listings(account).get("listings") or []),
+                    "total_count": job.get("total_count", existing_total),
                     "message": "Listing import stopped.",
                 })
                 listing_import_jobs[account] = job
@@ -2889,22 +3032,8 @@ def _listing_snapshot_is_due(account, now=None):
 
 
 def _refresh_due_listing_snapshots():
-    """Start non-overlapping refreshes for imported account snapshots that are due."""
-    with listing_import_jobs_lock:
-        if any((job or {}).get("running") for job in listing_import_jobs.values()):
-            return
-    now = datetime.now(timezone.utc)
-    for account in get_all_accounts():
-        if not _listing_snapshot_is_due(account, now=now):
-            continue
-        ok, message = _start_listing_import_job(account, automatic=True)
-        if ok:
-            _runtime_log(f"[DeleteListings] 24-hour refresh started account={account}")
-            # Avoid launching several Selenium browsers at once. Any other due
-            # account will be picked up by the next scheduler check.
-            return
-        elif "already" not in message.lower():
-            _runtime_log(f"[DeleteListings] 24-hour refresh deferred account={account}: {message}")
+    """No-op for legacy saved schedules; listing imports are manual only."""
+    return
 
 
 def _start_listing_click_refresh_job(account):
@@ -2974,6 +3103,11 @@ def _start_listing_click_refresh_job(account):
     threading.Thread(target=_runner, daemon=True, name=f"listing-click-refresh-{account}").start()
     _runtime_log(f"[RefreshClicks] background job started account={account} total={total}")
     return True, "Click refresh started."
+
+
+@web_bp.route('/backup_listings', methods=['GET'])
+def backup_listings_page():
+    return _render_delete_listings_page(request.args.get('message'), request.args.get('message_type'), backups_page=True)
 
 
 @web_bp.route("/delete_listings", methods=["GET", "POST"])
@@ -3052,7 +3186,7 @@ def delete_listings_data():
     return jsonify({
         "ok": True,
         "account": account,
-        "listings": stored.get("listings") or [],
+        "listings": _ordered_manage_listings(stored.get("listings") or []),
         "updated_at": stored.get("updated_at"),
         "import_status": _delete_import_snapshot(account),
         "click_refresh_status": _listing_click_snapshot(account),
@@ -3116,7 +3250,8 @@ def listing_detail(listing_id):
     return render_template('listing_detail.html', listing=listing, fields=REPOST_EDIT_FIELDS,
                            required_fields=REPOST_REQUIRED_FIELDS,
                            busy=busy, repost_status=_repost_listing_status(account, listing),
-                           accounts=get_all_accounts(), active_account=account, active_page='delete')
+                           accounts=get_all_accounts(), active_account=account,
+                           active_page='backups' if (listing.get('facebook_present') is False or (listing.get('source_deleted') and not listing.get('facebook_reposted'))) else 'delete')
 
 
 @web_bp.route('/delete_listings/photo/<listing_id>/<name>')
@@ -3185,14 +3320,19 @@ def _cross_post_payload(payload, account, job_id):
 
 
 def _run_cross_post_batch(job_ids):
+    # Jobs are handed here by APScheduler only when their scheduled time is due.
+    with scheduled_posts_lock:
+        for job_id in job_ids:
+            meta = scheduled_posts.get(job_id)
+            if meta and meta['status'] == 'pending':
+                meta['status'] = 'waiting'
     # One global queue also prevents two cross-post batches overlapping.
     with cross_post_queue_lock:
         for job_id in job_ids:
             with scheduled_posts_lock:
                 meta = scheduled_posts.get(job_id)
-                if not meta or meta['status'] != 'pending':
+                if not meta or meta['status'] != 'waiting':
                     continue
-                meta['status'] = 'waiting'
                 account = meta['account']
                 payload = copy.deepcopy(meta['post_data'])
                 diagnostic_event('CROSS_POST', 'START', source_account=meta.get('source_account'), target_account=account, job_id=job_id)
@@ -3235,20 +3375,28 @@ def _run_cross_post_batch(job_ids):
 def cross_post_listing():
     account = get_active_account()
     data = request.get_json(silent=True) or {}
+    if data.get('mass_post') is True and data.get('post_mode') != 'schedule':
+        return jsonify(ok=False, message='Mass posting requires a delay.'), 400
     if not account:
         return jsonify(ok=False, message='Select a source account first.'), 400
     if data.get('account') != account:
         return jsonify(ok=False, message='The active account changed. Reopen the listing.'), 409
-    targets = data.get('target_accounts')
-    available = set(get_all_accounts()) - {account}
-    if (not isinstance(targets, list) or not 1 <= len(targets) < 20
-            or any(not isinstance(target, str) for target in targets)
-            or len(set(targets)) != len(targets) or not set(targets) <= available):
-        return jsonify(ok=False, message='Select 1 to 19 different saved accounts, excluding the source account.'), 400
     listing_id = str(data.get('listing_id') or '')
     listing = next((item for item in load_listings(account).get('listings', []) if str(item.get('id')) == listing_id), None)
     if not listing:
         return jsonify(ok=False, message='Listing was not found.'), 404
+    backup_post = data.get('backup_post') is True
+    is_backup = listing.get('facebook_present') is False or (listing.get('source_deleted') and not listing.get('facebook_reposted'))
+    if backup_post and not is_backup:
+        return jsonify(ok=False, message='This listing is no longer a backup. Refresh and try again.'), 409
+    targets = data.get('target_accounts')
+    available = set(get_all_accounts())
+    if not backup_post:
+        available.discard(account)
+    if (not isinstance(targets, list) or not 1 <= len(targets) < 20
+            or any(not isinstance(target, str) for target in targets)
+            or len(set(targets)) != len(targets) or not set(targets) <= available):
+        return jsonify(ok=False, message='Select 1 to 19 eligible saved accounts.'), 400
     if (listing_id in _active_repost_listing_ids(account) or _delete_import_snapshot(account).get('running')
             or _listing_click_snapshot(account).get('running') or _facebook_delete_snapshot(account).get('running')):
         return jsonify(ok=False, message='Wait for the current listing operation to finish.'), 409
@@ -3280,10 +3428,31 @@ def cross_post_listing():
             raise ValueError('Title and price are required.')
     except (ValueError, KeyError) as exc:
         return jsonify(ok=False, message=str(exc)), 400
+    schedule_batch = data.get('schedule_batch')
+    schedule_position = data.get('schedule_position', 0)
+    if schedule_batch is not None and (
+            data.get('mass_post') is not True or not isinstance(schedule_batch, str)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', schedule_batch)
+            or type(schedule_position) is not int or not 0 <= schedule_position <= 10000):
+        return jsonify(ok=False, message='Invalid posting schedule. Reopen the posting dialog.'), 400
     run_at = datetime.now() + timedelta(seconds=seconds or 1)
     batch_id = 'cross_' + uuid4().hex
     job_ids = []
     with scheduled_posts_lock:
+        schedule_anchor = datetime.now()
+        if schedule_batch is not None:
+            previous = [meta for meta in scheduled_posts.values()
+                        if meta.get('schedule_batch') == schedule_batch and meta.get('source_account') == account]
+            if previous:
+                first = previous[0]
+                if (first.get('schedule_interval_seconds') != seconds
+                        or {meta['account'] for meta in previous} != set(targets)
+                        or schedule_position != max(meta['schedule_position'] for meta in previous) + 1):
+                    return jsonify(ok=False, message='The posting schedule changed. Reopen the posting dialog.'), 409
+                schedule_anchor = first['schedule_anchor']
+            elif schedule_position != 0:
+                return jsonify(ok=False, message='The first scheduled listing is missing. Reopen the posting dialog.'), 409
+            run_at = schedule_anchor + timedelta(seconds=seconds * (schedule_position + 1))
         for index, target in enumerate(targets):
             job_id = f'{batch_id}_{index}'
             # Use simple posting's successful Publish click and post-click wait.
@@ -3293,6 +3462,8 @@ def cross_post_listing():
                 'source_listing_id': listing_id, 'source': 'Cross posting', 'platform': 'facebook',
                 'title': payload['title'], 'make': payload.get('make', ''), 'post_data': payload,
                 'run_at': run_at, 'status': 'pending', 'created_at': datetime.now(),
+                'schedule_batch': schedule_batch, 'schedule_position': schedule_position,
+                'schedule_interval_seconds': seconds, 'schedule_anchor': schedule_anchor,
                 'started_at': None, 'posted_at': None, 'error': '',
                 'target_listing_id': uuid4().hex[:20],
                 'listing_snapshot': {
@@ -3326,6 +3497,8 @@ def delete_listings_repost():
     if not account:
         return jsonify({"ok": False, "message": "No active account selected."}), 400
     data = request.get_json(silent=True) or {}
+    if (data.get('backup_batch') is True or data.get('mass_post') is True) and data.get('post_mode') != 'schedule':
+        return jsonify(ok=False, message='Mass reposting requires a delay.'), 400
     if data.get('account') and data['account'] != account:
         return jsonify(ok=False, message='The active account changed. Reopen the listing before continuing.'), 409
     immediate = data.get('post_mode') == 'now'
@@ -3353,6 +3526,10 @@ def delete_listings_repost():
     )
     if not listing:
         return jsonify({"ok": False, "message": "Listing was not found in stored listings."}), 404
+    if data.get('mass_post') is True and (listing.get('facebook_present') is False or (listing.get('source_deleted') and not listing.get('facebook_reposted'))):
+        return jsonify(ok=False, message='Use Post on accounts for saved backups.'), 409
+    if listing.get('source_deleted') and listing.get('facebook_reposted') and listing.get('facebook_present') is not False:
+        return jsonify(ok=False, message='Import this listing again to save its current Facebook listing ID before reposting.'), 400
     if _delete_import_snapshot(account).get('running') or _listing_click_snapshot(account).get('running') or _facebook_delete_snapshot(account).get('running'):
         return jsonify(ok=False, message='Wait for the current listing operation to finish.'), 409
     photos = listing.get('downloaded_images') or []
@@ -3393,7 +3570,7 @@ def delete_listings_repost():
         if any(str(meta.get("listing_id") or "") == listing_id for meta in active_jobs):
             return jsonify({"ok": False, "message": "This listing is already scheduled for reposting."}), 409
         previous_delay = max((int(meta.get("delay_seconds") or 0) for meta in active_jobs), default=0)
-        if active_jobs and delay_seconds <= previous_delay:
+        if active_jobs and delay_seconds <= previous_delay and not ((data.get('backup_batch') is True and listing.get('source_deleted')) or data.get('mass_post') is True):
             previous_label = (
                 f"{previous_delay // 86400} day(s)" if previous_delay % 86400 == 0
                 else f"{previous_delay // 3600} hour(s)" if previous_delay % 3600 == 0
@@ -3496,7 +3673,21 @@ def delete_listings_delete():
             'total': len(selected), 'error': None, 'stop_requested': False,
         }
 
+    confirmed_ids = set()
+
+    def _mark_confirmed(listing_id):
+        if listing_id not in selected_ids or listing_id in confirmed_ids:
+            return
+        update_listing_fields(account, listing_id, {'source_deleted': True,
+            'facebook_present': False, 'facebook_reposted': False,
+            'facebook_deleted_at': datetime.now(timezone.utc).isoformat(timespec='seconds')})
+        confirmed_ids.add(listing_id)
+        if target == 'both':
+            remove_listing_backups(account, [listing_id])
+
     def _progress(event):
+        if event.get('confirmed_deleted'):
+            _mark_confirmed(str(event.get('listing_id') or ''))
         with facebook_delete_jobs_lock:
             facebook_delete_jobs[account].update({
                 'clicked': int(event.get('clicked') or 0), 'deleted': int(event.get('deleted') or 0),
@@ -3508,10 +3699,9 @@ def delete_listings_delete():
             with _get_post_lock(account):
                 result = delete_selected_listings_from_facebook(account, live, stop_event=stop_event,
                     progress_callback=_progress) if live else {'deleted_ids': [], 'deleted': 0}
-                deleted_ids = set(result.get('deleted_ids') or []) & selected_ids
+                deleted_ids = (set(result.get('deleted_ids') or []) | confirmed_ids) & selected_ids
                 for listing_id in deleted_ids:
-                    update_listing_fields(account, listing_id, {'source_deleted': True,
-                        'facebook_deleted_at': datetime.now(timezone.utc).isoformat(timespec='seconds')})
+                    _mark_confirmed(listing_id)
                 completed_ids = deleted_ids | {item['id'] for item in selected if item.get('source_deleted')}
                 removed_ids = completed_ids if target == 'both' else set()
                 if removed_ids:
@@ -3560,12 +3750,31 @@ def delete_listings_delete_stop():
     return jsonify({"ok": True, "message": "Stop requested. Facebook deletion is stopping."})
 
 
+@web_bp.route('/delete_listings/backup/<listing_id>/clear', methods=['POST'])
+def clear_single_listing_backup(listing_id):
+    account = get_active_account()
+    data = request.get_json(silent=True) or {}
+    if not account:
+        return jsonify(ok=False, message='Select an account first.'), 400
+    if data.get('account') != account:
+        return jsonify(ok=False, message='The active account changed. Reload Manage Listings.'), 409
+    if listing_id in _active_repost_listing_ids(account):
+        return jsonify(ok=False, message='Wait for this listing\'s scheduled posting to finish.'), 409
+    from automation.listing_store import remove_backup
+    if not remove_backup(account, listing_id):
+        return jsonify(ok=False, message='Saved backup not found, or this listing is still posted on Facebook.'), 409
+    return jsonify(ok=True, message='Saved backup cleared. Facebook was unchanged.')
+
+
 @web_bp.route("/delete_listings/storage/clear", methods=["POST"])
 def delete_listings_storage_clear():
     """Clear every locally imported listing for the active account."""
     account = get_active_account()
     if not account:
         return jsonify({"ok": False, "message": "No active account selected."}), 400
+    data = request.get_json(silent=True) or {}
+    if data.get('account') and data['account'] != account:
+        return jsonify(ok=False, message='The active account changed. Reload Manage Listings.'), 409
     with listing_import_jobs_lock:
         if (listing_import_jobs.get(account) or {}).get("running"):
             return jsonify({"ok": False, "message": "Stop the listing import before clearing stored data."}), 409
@@ -3574,6 +3783,16 @@ def delete_listings_storage_clear():
             return jsonify({"ok": False, "message": "Wait for Facebook deletion to finish before clearing stored data."}), 409
     if _active_repost_listing_ids(account):
         return jsonify({"ok": False, "message": "Wait for scheduled reposting to finish before clearing stored data."}), 409
+    if data.get('scope') == 'facebook':
+        if _listing_click_snapshot(account).get('running'):
+            return jsonify(ok=False, message='Wait for click refresh to finish before clearing listings.'), 409
+        from automation.listing_store import clear_facebook
+        removed = clear_facebook(account)
+        return jsonify(ok=True, message=f'Cleared {removed} local Facebook listing record(s). Facebook posts and shared backups were unchanged.')
+    if data.get('scope') == 'backups':
+        from automation.listing_store import clear_backups
+        removed = clear_backups(account)
+        return jsonify(ok=True, message=f'Cleared {removed} saved backup(s). Facebook listings were kept.')
     removed = len(load_listings(account).get("listings") or [])
     save_listings(account, [])
     return jsonify({
@@ -3617,26 +3836,13 @@ def activity_log_clear():
 
 
 if DESKTOP_MODE:
-    from automation.maintenance import tick as maintenance_tick
     from automation.desktop_state import restore_state
     import sys
     restore_state(sys.modules[__name__])
-else:
-    maintenance_tick = _refresh_due_listing_snapshots
 
-scheduler.add_job(
-    maintenance_tick,
-    trigger="interval",
-    minutes=1 if DESKTOP_MODE else 5,
-    id=LISTING_AUTO_REFRESH_CHECK_JOB_ID,
-    replace_existing=True,
-    next_run_time=datetime.now(timezone.utc) + timedelta(seconds=30),
-    max_instances=1,
-    coalesce=True,
-)
-
-if not scheduler.running:
-    scheduler.start()
+# Load persisted schedules while paused so old maintenance cannot run first.
+from automation.maintenance import start_scheduler_without_maintenance
+start_scheduler_without_maintenance(scheduler)
 if DESKTOP_MODE:
     # Metadata for queued jobs is checkpointed without launching browsers.
     from automation.desktop_state import checkpoint

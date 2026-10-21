@@ -45,7 +45,7 @@
     if (stopped) return;
     if (!paused && !selecting && !selectedText()) {
       try {
-        const response = await fetch(`${output.dataset.url}?after=${cursor}`, {cache: 'no-store'});
+        const response = await appFetch(`${output.dataset.url}?after=${cursor}`, {cache: 'no-store'});
         if (!response.ok || response.redirected) throw new Error('unavailable');
         const data = await response.json();
         if (!paused && !selecting && !selectedText()) {

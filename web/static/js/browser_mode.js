@@ -12,7 +12,7 @@
     toggle.disabled = true;
     message.hidden = true;
     try {
-      const response = await fetch(form.action, {
+      const response = await appFetch(form.action, {
         method: 'POST', body, headers: {'X-Requested-With': 'XMLHttpRequest'},
       });
       if (!response.ok || response.redirected) throw new Error();

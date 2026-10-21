@@ -1,4 +1,4 @@
-"""One maintenance task at a time, with persistent clocks and retry backoff."""
+"""Manual task coordination and compatibility with retired maintenance schedules."""
 import json
 import os
 import threading
@@ -10,30 +10,8 @@ _cookie_running = False
 
 
 def start_cookie_check(account):
-    global _cookie_running
-    with _lock:
-        if _cookie_running:
-            return False, 'Cookie check already running.'
-        _cookie_running = True
-
-    from automation.task_control import cancellable
-
-    @cancellable
-    def daily_cookie_check(account):
-        global _cookie_running
-        from automation.session_health import check_account_login_cookie, set_session_health, UNKNOWN
-        try:
-            status = check_account_login_cookie(account)
-            if status is not None:
-                set_session_health(account, status)
-            record(account, 'cookies', status not in {None, UNKNOWN}, '' if status not in {None, UNKNOWN} else 'Cookie check could not finish.')
-        except Exception as exc:
-            record(account, 'cookies', False, str(exc))
-        finally:
-            with _lock:
-                _cookie_running = False
-    threading.Thread(target=daily_cookie_check, args=(account,), daemon=True, name='daily-cookie-check').start()
-    return True, 'Cookie check started.'
+    """Compatibility entry point; daily automatic cookie checks were removed."""
+    return False, 'Automatic cookie checks are disabled. Check sessions manually in Accounts.'
 
 
 def state():
@@ -73,33 +51,19 @@ def busy(routes, account=None):
 
 
 def tick():
-    from web import routes
-    from automation.desktop_state import checkpoint
-    checkpoint()
-    from automation.desktop_preferences import load
-    if not load().get('background_sync', True):
-        return
-    if getattr(routes, 'desktop_update_pending', False) or busy(routes):
-        return
-    payload = state()
-    for account in routes.get_all_accounts():
-        if busy(routes, account):
-            continue
-        for task, interval in [('import', 24 * 3600), ('clicks', 4 * 3600), ('cookies', 24 * 3600)]:
-            item = payload.get(account, {}).get(task, {})
-            if time.time() - item.get('last_attempt', 0) < 15 * 60:
-                continue
-            if task == 'import':
-                due = routes._listing_snapshot_is_due(account)
-            elif task == 'cookies':
-                due = time.time() - max(item.get('last_success', 0), item.get('last_attempt', 0)) >= interval
-            else:
-                due = time.time() - item.get('last_success', 0) >= interval
-            if not due:
-                continue
-            record(account, task, False, 'Waiting for completion')
-            ok, message = (routes._start_listing_import_job(account, automatic=True) if task == 'import' else
-                           routes._start_listing_click_refresh_job(account) if task == 'clicks' else start_cookie_check(account))
-            if not ok:
-                record(account, task, False, message)
-            return
+    """No-op for old persisted jobs; automatic Facebook maintenance is disabled."""
+    return
+
+
+def start_scheduler_without_maintenance(scheduler):
+    """Remove the legacy recurring job before any persisted schedule can run."""
+    from apscheduler.jobstores.base import JobLookupError
+    if scheduler.running:
+        scheduler.pause()
+    else:
+        scheduler.start(paused=True)
+    try:
+        scheduler.remove_job('delete-listings-auto-refresh-check')
+    except JobLookupError:
+        pass
+    scheduler.resume()

@@ -175,7 +175,7 @@ def _normalize_marketplace_vehicle_settings(data):
     vehicle_type = _norm_text(normalized.get("vehicle_type")).casefold()
     other_vehicle_types = {"other", "motorcycle", "motorcycle/bike", "motorbike", "bike"}
     normalized["vehicle_type"] = "Other" if vehicle_type in other_vehicle_types else "Car"
-    normalized["vehicle_condition"] = _norm_text(normalized.get('vehicle_condition')) or "Excellent"
+    normalized["vehicle_condition"] = _norm_text(normalized.get('vehicle_condition'))
     # Colours can come from Excel, manual posting, scraper integrations, and
     # other callers. Preserve the supplied values regardless of source.
 
@@ -298,7 +298,7 @@ def _visible_vehicle_type_choices(driver):
     """) or []
 
 
-def _open_vehicle_type_menu(driver, timeout=5):
+def _open_vehicle_type_menu(driver, timeout=25):
     """Avoid toggling an open menu; retry clicks lost during form re-renders."""
     last_error = None
     for method in ('javascript', 'native', 'actions', 'keyboard'):
@@ -389,7 +389,7 @@ def _marketplace_combo_value(driver, label):
     """, combo, label))
 
 
-def _open_marketplace_combo(driver, label, timeout=5):
+def _open_marketplace_combo(driver, label, timeout=25):
     last_error = None
     # CDP Chrome may be behind another window; DOM clicks still reach React.
     for method in ('javascript', 'native', 'actions', 'keyboard'):
@@ -421,7 +421,7 @@ def _open_marketplace_combo(driver, label, timeout=5):
     raise RuntimeError(f'{label} menu did not show selectable choices after four opening attempts') from last_error
 
 
-def _select_marketplace_combo(driver, label, desired, fallback=None, timeout=20, exact_only=False):
+def _select_marketplace_combo(driver, label, desired, fallback=None, timeout=25, exact_only=False):
     """Wait for the menu, try the source value and then verify the fallback."""
     if label.casefold() == 'vehicle type':
         fallback = None
@@ -433,7 +433,7 @@ def _select_marketplace_combo(driver, label, desired, fallback=None, timeout=20,
     for value in values:
         if _norm_text(value) and _norm_text(value).casefold() not in [v.casefold() for v in candidates]:
             candidates.append(_norm_text(value))
-    wait_seconds = min(timeout, 5)
+    wait_seconds = timeout
     last_error = None
     available = []
     for candidate in candidates:
@@ -474,7 +474,7 @@ def _select_marketplace_combo(driver, label, desired, fallback=None, timeout=20,
                        f'Visible choices: {", ".join(available) or "none"}') from last_error
 
 
-def _fill_optional_color(driver, label, value, timeout=15, strict=False):
+def _fill_optional_color(driver, label, value, timeout=25, strict=False):
     """Use one shared time budget for finding, opening and selecting a color."""
     deadline = time.monotonic() + timeout
     combo = None
@@ -527,7 +527,7 @@ def _fill_saved_text_field(driver, label, value):
     controls = driver.find_elements(By.XPATH, _input_for_label_xpath(label))
     control = next((item for item in controls if item.is_displayed()), None)
     if control is None:
-        _select_marketplace_combo(driver, label, value, timeout=8, exact_only=True)
+        _select_marketplace_combo(driver, label, value, timeout=25, exact_only=True)
         return
     control.clear()
     control.send_keys(value)
@@ -542,6 +542,48 @@ def _input_for_label_xpath(label_text):
         "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')="
         f"\"{safe}\"]]//input"
     )
+
+
+def _fill_optional_trim(driver, model_input, model_value, trim_value):
+    """Try an existing Trim control once; otherwise continue with Model alone."""
+    from automation.task_control import check_cancelled
+    trim_value = _norm_text(trim_value)
+    if not trim_value:
+        return model_value
+    combo = None
+    try:
+        check_cancelled()
+        combo = _marketplace_combo(driver, 'Trim')
+        if combo:
+            if _marketplace_combo_value(driver, 'Trim').casefold() != trim_value.casefold():
+                driver.execute_script('arguments[0].click();', combo)
+                choices = WebDriverWait(driver, 25).until(lambda current: _marketplace_combo_choices(current, 'Trim'))
+                option = next((element for element, text in choices if text.casefold() == trim_value.casefold()), None)
+                if option is None:
+                    raise ValueError('Saved trim is not offered')
+                driver.execute_script('arguments[0].click();', option)
+                WebDriverWait(driver, 25).until(
+                    lambda current: _marketplace_combo_value(current, 'Trim').casefold() == trim_value.casefold())
+        else:
+            control = next((element for element in driver.find_elements(By.XPATH, _input_for_label_xpath('Trim'))
+                            if element.is_displayed() and element.is_enabled()), None)
+            if control is None:
+                raise ValueError('No visible Trim field')
+            control.clear()
+            control.send_keys(trim_value)
+            if _norm_text(control.get_attribute('value')) != trim_value:
+                raise ValueError('Trim value was not retained')
+        print(f'[AutoListing] Optional Trim filled: {trim_value}')
+        return model_value
+    except Exception as exc:
+        check_cancelled()
+        if combo is not None and combo:
+            try:
+                combo.send_keys(Keys.ESCAPE)
+            except Exception:
+                check_cancelled()
+        print(f'[AutoListing] Optional Trim unavailable; skipped, keeping Model unchanged: {exc}')
+    return model_value
 
 
 def _input_for_any_label_xpath(*label_texts):
@@ -1063,16 +1105,18 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
     indicator=False
     posting_error = None
     active_field = "initialization"
+    entered_fields = {}
 
     def debug_field_success(field_name, value=None):
         value_text = f" Value: {value}" if value not in (None, "") else ""
         print(f"[AutoListing][FIELD SUCCESS] {field_name} entered/selected.{value_text}", flush=True)
-        delay_seconds = 7 if str(field_name or "").strip().casefold() == "publish" else 5
-        print(
-            f"[AutoListing] Waiting {delay_seconds} seconds after {field_name}...",
-            flush=True,
-        )
-        cancellable_sleep(delay_seconds)
+        from automation.reposting import EDIT_FIELDS
+        for key, label in EDIT_FIELDS.items():
+            if label.casefold() == str(field_name).casefold() and key != 'clean_title':
+                entered_fields[key] = value if value not in (None, '') else data.get(key)
+        if str(field_name or "").strip().casefold() == "publish":
+            print('[AutoListing] Waiting 7 seconds after Publish...', flush=True)
+            cancellable_sleep(7)
 
     def debug_field_failure(field_name, error):
         print(f"[AutoListing][FIELD FAILED] {field_name}: {error}", flush=True)
@@ -1080,6 +1124,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
     if not isinstance(data, dict):
         print("❌ Invalid post data: expected dict.")
         return False
+    request_payload = data
     data = _normalize_marketplace_vehicle_settings(data)
     strict_fields = bool(data.get('_require_exact_fields'))
 
@@ -1140,9 +1185,15 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
     # Posting uses a dedicated tab in the account's persistent CDP Chrome.
     # The account lock prevents two posting jobs from driving the same profile.
     driver, posting_handle, original_handles, posting_lock = open_posting_tab(account)
-    driver.set_page_load_timeout(180)
-    wait = WebDriverWait(driver, 50)
-    actions = ActionChains(driver)
+    try:
+        driver.set_page_load_timeout(180)
+        wait = WebDriverWait(driver, 25)
+        actions = ActionChains(driver)
+    except BaseException:
+        # A disconnected browser here used to bypass the later cleanup block
+        # and leave the account's posting lock held until process restart.
+        close_posting_tab(driver, posting_handle, original_handles, posting_lock)
+        raise
 
     # ------------------------------
     # Go to Marketplace Create Page
@@ -1427,7 +1478,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             except Exception as diagnostic_error:
                 print(f"[AutoListing][VEHICLE TYPE DEBUG] Cannot inspect dropdown: {diagnostic_error!r}", flush=True)
 
-        def _click_and_verify_vehicle_type(option, option_text, timeout=8):
+        def _click_and_verify_vehicle_type(option, option_text, timeout=25):
             wanted = _norm_text(option_text).casefold()
             last_error = ""
             for method in ("javascript", "native", "actions", "keyboard"):
@@ -1514,7 +1565,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 _log_vehicle_type_failure(f"Prefix lookup failed for {prefix!r}", exc)
                 return ""
 
-        def _select_case_insensitive_combo(label, desired, fallback=None, timeout=20, exact_only=False):
+        def _select_case_insensitive_combo(label, desired, fallback=None, timeout=25, exact_only=False):
             return _select_marketplace_combo(driver, label, desired, fallback, timeout, exact_only)
 
         active_field = "Vehicle type"
@@ -1679,7 +1730,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         else:
             raise Exception("Mandatory model is missing.")
 
-        _fill_saved_text_field(driver, 'Trim', data.get('trim'))
+        _fill_optional_trim(driver, model_input, model_value, data.get('trim'))
 
         active_field = "Mileage"
         mileage_value_raw = _norm_text(data.get("mileage"))
@@ -1732,7 +1783,9 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         for color_label, color_key in (("Exterior colour", "exterior_color"),
                                        ("Interior colour", "interior_color")):
             active_field = color_label
-            _fill_optional_color(driver, color_label, data.get(color_key), timeout=15, strict=strict_fields)
+            selected_color = _fill_optional_color(driver, color_label, data.get(color_key), timeout=25, strict=strict_fields)
+            if selected_color:
+                entered_fields[color_key] = selected_color
 
         # Reposts must retain supplied fields. Fresh manual posts keep their
         # existing optional-field behavior.
@@ -1740,7 +1793,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         try:
             active_field = "Clean title"
             if not strict_fields or _norm_text(data.get('clean_title')):
-                clean_title_checkbox = WebDriverWait(driver, 15).until(
+                clean_title_checkbox = WebDriverWait(driver, 25).until(
                     EC.presence_of_element_located(
                         (By.XPATH, "//input[@type='checkbox' and @aria-label='This vehicle has a clean title.']")
                     )
@@ -1761,20 +1814,23 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
 
         try:
             active_field = "Vehicle condition"
-            condition_selected = _select_case_insensitive_combo(
-                "Vehicle condition", data.get('vehicle_condition') or "Excellent", fallback=None if strict_fields else "Very good", timeout=15
-            )
-            debug_field_success("Vehicle condition", condition_selected)
+            if _norm_text(data.get('vehicle_condition')):
+                condition_selected = _select_case_insensitive_combo(
+                    "Vehicle condition", data['vehicle_condition'], fallback=None if strict_fields else "Very good", timeout=25
+                )
+                debug_field_success("Vehicle condition", condition_selected)
+            else:
+                print('[AutoListing][FIELD SKIPPED] Vehicle condition: no value supplied.', flush=True)
         except Exception as exc:
             debug_field_failure("Vehicle condition (optional)", exc)
-            if strict_fields:
+            if strict_fields and _norm_text(data.get('vehicle_condition')):
                 raise
 
         fuel_type_value = _norm_text(data.get("fuel_type")) or "Other"
         try:
             active_field = "Fuel type"
             fuel_selected = _select_case_insensitive_combo(
-                "Fuel type", fuel_type_value, fallback=None if strict_fields else "Other", timeout=15
+                "Fuel type", fuel_type_value, fallback=None if strict_fields else "Other", timeout=25
             )
             debug_field_success("Fuel type", fuel_selected)
         except Exception as exc:
@@ -1786,7 +1842,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         try:
             active_field = "Transmission"
             transmission_selected = _select_case_insensitive_combo(
-                "Transmission", transmission_value, fallback=None if strict_fields else "Automatic transmission", timeout=15
+                "Transmission", transmission_value, fallback=None if strict_fields else "Automatic transmission", timeout=25
             )
             debug_field_success("Transmission", transmission_selected)
         except Exception as exc:
@@ -1821,7 +1877,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                         " | (//textarea)[last()]"
                     )
                     try:
-                        description_input = WebDriverWait(driver, 15).until(
+                        description_input = WebDriverWait(driver, 25).until(
                             EC.presence_of_element_located((By.XPATH, desc_xpath))
                         )
                     except Exception:
@@ -1832,7 +1888,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
 
                     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", description_input)
                     try:
-                        WebDriverWait(driver, 3).until(EC.element_to_be_clickable(description_input))
+                        WebDriverWait(driver, 25).until(EC.element_to_be_clickable(description_input))
                     except Exception:
                         pass
 
@@ -1895,21 +1951,48 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             if strict_fields:
                 raise
 
+        from automation.posting_recovery import wait_for_action, restore_empty_fields
+
+        def repair_cleared_fields():
+            def fill(key, label, value):
+                if key == 'vehicle_type':
+                    _open_vehicle_type_combo()
+                    if not _select_vehicle_type(str(value), timeout=25):
+                        raise RuntimeError('Cleared vehicle type could not be restored.')
+                elif key == 'description':
+                    if not _try_set_description():
+                        raise RuntimeError('Cleared description could not be restored.')
+                elif key in {'year', 'body_style', 'vehicle_condition', 'fuel_type', 'transmission'}:
+                    _select_case_insensitive_combo(label, str(value), timeout=25)
+                elif key in {'exterior_color', 'interior_color'}:
+                    _fill_optional_color(driver, label, value, timeout=25, strict=True)
+                elif key == 'make' and _marketplace_combo(driver, label):
+                    _select_case_insensitive_combo(label, str(value), timeout=25)
+                elif key == 'clean_title':
+                    return  # A checkbox is not a cleared text/dropdown field.
+                else:
+                    aliases = ('Mileage', 'Odometer') if key == 'mileage' else (label,)
+                    control = WebDriverWait(driver, 25).until(EC.element_to_be_clickable(
+                        (By.XPATH, _input_for_any_label_xpath(*aliases))))
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", control)
+                    control.click()
+                    control.clear()
+                    control.send_keys(str(value))
+                    control.send_keys(Keys.TAB)
+            return restore_empty_fields(driver, entered_fields, fill)
+
         cancellable_sleep(1)
         try:
             # Next step (click if present)
             try:
-                next_btn = WebDriverWait(driver, 6).until(
-                    EC.element_to_be_clickable(
-                        (By.XPATH, "//div[@role='button' and @aria-label='Next'] | //*[(@role='button' or self::button) and (@aria-label='Next' or normalize-space()='Next' or .//span[normalize-space()='Next'])]")
-                    )
-                )
-                try:
-                    next_btn.click()
-                except Exception:
-                    driver.execute_script("arguments[0].click();", next_btn)
-                print("Clicked Next")
-                cancellable_sleep(2)
+                next_btn = wait_for_action(driver, 'Next', repair_cleared_fields, alternative='Publish')
+                if next_btn is not None:
+                    try:
+                        next_btn.click()
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", next_btn)
+                    print("Clicked Next")
+                    cancellable_sleep(2)
             except Exception:
                 print("Next button not found; proceeding to Publish.")
 
@@ -1954,16 +2037,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
 
         try:
             active_field = "Publish"
-            publish_btn = WebDriverWait(driver, 15).until(
-                EC.element_to_be_clickable(
-                    (
-                        By.XPATH,
-                        "//div[@role='button' and @aria-label='Publish']"
-                        " | //*[(@role='button' or self::button) and"
-                        " (normalize-space()='Publish' or .//span[normalize-space()='Publish'])]",
-                    )
-                )
-            )
+            publish_btn = wait_for_action(driver, 'Publish', repair_cleared_fields)
             try:
                   
                 publish_btn.click()
@@ -1975,6 +2049,23 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 try:
                     WebDriverWait(driver, 45).until(_marketplace_publish_confirmed)
                     diagnostic_event("PUBLISH", "CONFIRMED_BY_UI", account=account, title=data.get("title"))
+                    if data.get('_manual_record_id'):
+                        # Reuse the confirmed page; URL capture is optional and
+                        # does not add a second publication check or navigation.
+                        confirmed_url = str(driver.current_url or '')
+                        if re.search(r'/marketplace/item/\d+(?:/|\?|$)', confirmed_url):
+                            request_payload['_confirmed_listing_url'] = confirmed_url
+                        else:
+                            try:
+                                links = driver.execute_script('''
+                                  return [...document.querySelectorAll('[role="dialog"] a[href*="/marketplace/item/"],[role="alert"] a[href*="/marketplace/item/"]')]
+                                    .filter(a => !!a.getClientRects().length && /view (?:your )?listing/i.test(a.innerText || a.getAttribute('aria-label') || ''))
+                                    .map(a => a.href);
+                                ''') or []
+                                if len(set(links)) == 1:
+                                    request_payload['_confirmed_listing_url'] = links[0]
+                            except Exception:
+                                pass
                 except Exception as exc:
                     raise RuntimeError(
                         'Publish was clicked, but Facebook did not confirm publication; '

@@ -14,6 +14,7 @@
 
   <div class="form-box manual-listing-form-box create-form-panel">
     <form method="POST" action="{{ url_for('web.auto_listing_manual') }}" enctype="multipart/form-data">
+      <input type="hidden" name="account" value="{{ active_account or '' }}">
       <fieldset>
         {% set prefill_data = prefill if prefill else {} %}
         {% set prefilled_images = request.form.getlist('prefilled_images') if 'prefilled_images' in request.form else prefill_data.get('prefilled_images', []) %}
@@ -145,6 +146,12 @@
         <label for="description" class="file-label">Description</label>
         <textarea id="description" name="description" rows="8" class="input-field">{{ request.form.get('description', '') }}</textarea>
 
+        <label for="manual_timing" class="file-label">When to post</label>
+        <select id="manual_timing" name="manual_timing" class="input-field">
+          <option value="now" {% if request.form.get('manual_timing', 'now') == 'now' %}selected{% endif %}>Post now</option>
+          <option value="schedule" {% if request.form.get('manual_timing') == 'schedule' %}selected{% endif %}>Post after a delay</option>
+        </select>
+        <div id="manual-delay-fields">
         <label for="delay_unit" class="file-label">Delay unit</label>
         <select id="delay_unit" name="delay_unit" class="input-field" required>
           <option value="">Select unit</option>
@@ -154,9 +161,11 @@
 
         <label for="delay_value" class="file-label">Delay value</label>
         <input id="delay_value" type="number" name="delay_value" class="input-field" required min="1" step="1" value="{{ request.form.get('delay_value', '') }}">
+        </div>
 
         <div class="manual-actions">
           <button type="submit" name="post_action" value="simple" class="manual-action-button">Simple Post</button>
+          <button type="button" id="manual-save-template" class="manual-action-button manual-action-secondary">Save template</button>
           {% if group_ui_enabled %}<button type="button" id="manual-group-trigger" class="manual-action-button">Group Post</button>{% endif %}
           <button type="button" id="manual-account-trigger" class="manual-action-button">Accounts Post</button>
         </div>
@@ -241,6 +250,26 @@
   (function () {
     const unitInput = document.getElementById("delay_unit");
     const valueInput = document.getElementById("delay_value");
+    const timing = document.getElementById('manual_timing');
+    const delayFields = document.getElementById('manual-delay-fields');
+    function syncTiming() {
+      const later = timing && timing.value === 'schedule';
+      if (delayFields) delayFields.hidden = !later;
+      [unitInput, valueInput].forEach(input => { if (input) { input.required = later; input.disabled = !later; } });
+    }
+    if (timing) timing.addEventListener('change', syncTiming);
+    syncTiming();
+    const saveTemplate = document.getElementById('manual-save-template');
+    if (saveTemplate) saveTemplate.addEventListener('click', () => {
+      const form = saveTemplate.closest('form');
+      [unitInput, valueInput].forEach(input => { if (input) { input.required = false; input.disabled = true; } });
+      if (!form.reportValidity()) { syncTiming(); return; }
+      const action = document.createElement('input');
+      action.type = 'hidden'; action.name = 'submit_action'; action.value = 'save_template';
+      form.appendChild(action);
+      saveTemplate.disabled = true; saveTemplate.textContent = 'Saving...';
+      form.submit();
+    });
     const accountTrigger = document.getElementById("manual-account-trigger");
     const accountModal = document.getElementById("manual-account-modal");
     const accountSubmit = document.getElementById("manual-account-submit");

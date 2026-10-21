@@ -79,6 +79,12 @@
   color: #1f2d3d;
 }
 
+.schedular-page .next-run-value { font-size: 16px; line-height: 1.5; text-align: right; }
+.schedular-page .posting-time { min-width: 170px; white-space: nowrap; }
+.schedular-page .posting-time-label { display: block; color: #55606b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+.schedular-page .posting-time-clock { display: block; color: #174c91; font-size: 18px; font-weight: 750; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.schedular-page .posting-time-date { display: block; color: #55606b; font-size: 12px; margin-top: 3px; }
+
 .schedular-table {
   background: #ffffff;
   border-radius: 0;
@@ -198,6 +204,11 @@ tbody tr:hover {
   background: #c0392b;
   transform: translateY(-1px);
 }
+
+.schedular-page .table-head { gap: 16px; flex-wrap: wrap; }
+.schedular-page #clear-posting-results { white-space: nowrap; }
+.schedular-page #clear-posting-results:disabled { opacity: .6; cursor: default; transform: none; }
+.schedular-page #clear-results-message { font-size: 13px; color: #174c91; }
 
 .muted {
   color: #9aa4ae;

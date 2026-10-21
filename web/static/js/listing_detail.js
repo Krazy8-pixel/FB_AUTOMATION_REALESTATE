@@ -53,7 +53,7 @@
     deleting = true; hideDeleteOptions();
     deleteButton.textContent = 'Deleting…'; deleteButton.disabled = true; start.disabled = true; message('');
     try {
-      const response = await fetch(page.dataset.deleteUrl, {method:'POST', headers:{'Content-Type':'application/json'},
+      const response = await appFetch(page.dataset.deleteUrl, {method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ids:[page.dataset.listingId], target:choice.dataset.deleteTarget, account:page.dataset.account})});
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.message || 'Deletion could not start.');
@@ -230,7 +230,7 @@
     submitting = true; document.getElementById('repost-fields').disabled = true;
     message(crossPosting ? 'Queuing cross posting...' : 'Submitting your repost...');
     try {
-      const response = await fetch(crossPosting ? crossAccounts.dataset.url : page.dataset.repostUrl, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      const response = await appFetch(crossPosting ? crossAccounts.dataset.url : page.dataset.repostUrl, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
       const result = await response.json();
       if (!response.ok || !result.ok) { message(result.message || 'Could not start the repost.', true); return; }
       exit(); if (!crossPosting) start.disabled = true;
@@ -244,7 +244,7 @@
   const labels = {queued:'Queued', pending:'Scheduled', reading:'Preparing repost', posting:'Reposting', deleting:'Deleting original listing', done:'Reposted', failed:'Repost failed', facebook_deleting:'Deleting from Facebook'};
   async function poll(scheduleNext=true) {
     try {
-      const response = await fetch(page.dataset.statusUrl); const data = await response.json();
+      const response = await appFetch(page.dataset.statusUrl); const data = await response.json();
       if (data.account !== page.dataset.account) {
         start.disabled = true; crossStart.disabled = true; deleteButton.disabled = true; hideDeleteOptions();
         message('The active account changed. Return to All listings to continue.', true);
@@ -278,4 +278,7 @@
     finally { if (scheduleNext) setTimeout(poll, 5000); }
   }
   refreshOrder(); timing(); setTimeout(poll, 5000);
+  const requestedAction = new URLSearchParams(window.location.search).get('action');
+  if (requestedAction === 'repost' && !start.disabled) openPosting(false);
+  if (requestedAction === 'cross' && !crossStart.disabled) openPosting(true);
 })();

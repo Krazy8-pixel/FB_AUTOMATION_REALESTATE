@@ -16,19 +16,17 @@ Ordinary updates replace program files only. From version 1.0.11, uninstalling a
 
 ## Background operation
 
-Closing the window cancels foreground automation and queued posts/reposts permanently. Manually started group fetching, listing imports, click refresh, and daily cookie checks continue in the tray. Exit App stops the process, including background maintenance, so program files can be replaced during installation. Start With Windows and Background Sync are enabled by default and can be changed in Settings.
+Closing the window cancels foreground automation and queued posts/reposts permanently. Manually started group fetching, listing imports, and click refreshes can finish in the tray. Exit App stops the process so program files can be replaced during installation. Start With Windows can be changed in Settings.
 
-Imports run once every 24 hours and click refreshes every 4 hours for each account. Maintenance runs one task at a time and waits for manual automation. Sleeping or powered-off PCs cannot run tasks. Each overdue maintenance task runs once after the app resumes. Pending schedules are restored; interrupted posting jobs require review to avoid duplicate posts.
+Automatic background Facebook maintenance has been removed: no 24-hour listing imports, 4-hour click refreshes, daily cookie checks, or catch-up maintenance after sleep or restart. Saved Background Sync preferences cannot re-enable it. Old recurring maintenance schedules are removed while the scheduler is paused at startup, before pending jobs can execute.
 
-Groups are imported only when the user starts Import Groups. Startup, adding an
-account, and background maintenance do not fetch groups or retry failed group
-imports automatically.
+Users can still import listings and groups, refresh clicks, and check sessions manually. User-created post and repost schedules remain available. Pending schedules are restored; interrupted posting jobs require review to avoid duplicate posts. Internal job-state persistence remains enabled.
 
 Scheduled Posts and Repost Status show running actions with
 Cancel controls. Queued schedules can be cancelled before they start. Running
 cancellation prevents further browser commands and interrupts posting delays;
 an action already submitted to Facebook cannot be undone. Updates and uninstall
-stop the actual app process; closing the window alone retains maintenance.
+stop the actual app process; closing the window alone leaves the app in the tray.
 
 ## Publish a code update from this PC
 
@@ -110,3 +108,59 @@ CLICKED separately from CONFIRMED_BY_UI or CLICK_ONLY_REVIEW_ON_FACEBOOK.
 CROSS_POST names the target account and reports each job result. A FINISHED
 marker describes function completion, not proof of publication or complete
 extraction. Verify final fields and media on Facebook as well.
+
+## Navigation responsiveness
+
+Page requests wait at most half a second for shared task/account metadata locks;
+busy requests return a retry message instead of occupying server workers
+indefinitely. Listing database lock waits are limited to one second for UI
+requests; background transactions retain their existing timeout. Create Listings
+uses the restored job registry instead of querying the scheduler to render its
+availability. Job-state disk writes no longer hold page-facing registry locks.
+
+UI API calls have a 15-second deadline; timed-out writes are never automatically resubmitted.
+A timeout does not cancel an operation already accepted by the server; review
+Posting Results before retrying a post. Running-actions polling waits for its
+previous response before scheduling another request.
+
+An independent local monitor records Python thread stacks when a request runs
+over ten seconds or a UI metadata-lock wait times out. Captures are throttled to
+once per minute and saved in `data/freeze-diagnostics.log` with two rotated
+backups (about 6 MB total). They are included in Download diagnostic report.
+The monitor records request method/path and stack locations, without query
+strings, submitted forms, cookies, or frame-local values. It does not run any
+Facebook automation or restart the app. Retest the rebuilt desktop app on the
+affected PC; these safeguards do not establish the exact cause of a past freeze.
+
+## Version 1.0.27 listing workflow
+
+Manage Listings contains the selected account's Facebook posts. Backup Posts is
+its own sidebar page and shows shared backups across all accounts. Save template
+stores local details/media and opens Backup Posts without publishing. Confirmed
+manual posts are saved under the target account; confirmed Facebook deletions
+move to shared backups immediately.
+
+Backup entries are grouped using year, make, model, price, and mileage only.
+Any differing or missing comparison field keeps entries separate. Internal
+records remain available for existing job references; clearing a grouped entry
+removes its matching backup copies. Facebook-posted records stay account scoped.
+Clear local listings removes only the selected account's database records.
+
+Bulk actions use selection within their page and inline account/delay controls.
+Backup posting can include the active account; Facebook cross posting excludes
+it. Bulk account posting schedules successive listings at interval multiples
+from one server start time (for example 5, 10, 15 minutes). Due jobs wait for the
+posting queue, and Posting Results shows their scheduled times. Existing queued
+jobs retain the schedules created before an update.
+
+Import media comes from the exact public listing in a separate tab; other fields
+come from its edit page. Images are saved without resizing; optional videos are
+saved when a direct HD source is available. Deletion scanning does not inspect
+images, uses 25-second element waits, and keeps the final five-second delay.
+Posting allows an empty condition and recovers supplied fields cleared by
+Facebook only after waiting for the action to render; the final seven-second
+Publish delay is retained. Manual posting and reposting use the existing UI
+confirmation; account-to-account posting retains its click-and-wait success rule.
+
+Finish active jobs and restart the app after updating Python routes. Refreshing
+an already running browser does not register newly added server endpoints.
