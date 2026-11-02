@@ -130,8 +130,8 @@ def install():
             plan = {'install_dir': str(Path(sys.executable).resolve().parent), 'data_dir': str(data_dir()), 'package': str(package), 'public_key': config()['update_public_key'], 'pid': os.getpid()}
             (folder / 'plan.json').write_text(json.dumps(plan), encoding='utf-8')
             # A previous updater may still be cleaning up after restarting the UI.
-            updater = folder / ('TayyaraUpdater-' + uuid4().hex + '.exe')
-            shutil.copy2(resource_root() / 'TayyaraUpdater.exe', updater)
+            updater = folder / ('RealEstateUpdater-' + uuid4().hex + '.exe')
+            shutil.copy2(resource_root() / 'RealEstateUpdater.exe', updater)
             from automation.desktop_state import checkpoint
             checkpoint()
             set_status(state='installing', message='Installing update. The app will restart.')

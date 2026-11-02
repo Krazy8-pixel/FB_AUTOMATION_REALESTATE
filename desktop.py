@@ -31,7 +31,7 @@ def main():
         sys.stderr = log
     kernel = ctypes.windll.kernel32
     kernel.CreateMutexW.restype = ctypes.c_void_p
-    mutex_name = 'Local\\TayyaraMotorsDesktop'
+    mutex_name = 'Local\\FBAutomationRealEstateDesktop'
     if args.smoke_test or args.driver_smoke_test:
         mutex_name += f'SmokeTest-{os.getpid()}'
     mutex = kernel.CreateMutexW(None, False, mutex_name)
@@ -66,7 +66,7 @@ def main():
     thread.start()
     port = server.effective_port
     shutting_down = threading.Event()
-    window = webview.create_window('Tayyara Motors', f'http://127.0.0.1:{port}/', width=1380, height=900, min_size=(390, 600), hidden=args.background)
+    window = webview.create_window('FB Automation Real Estate', f'http://127.0.0.1:{port}/', width=1380, height=900, min_size=(390, 600), hidden=args.background)
 
     def show(icon=None, item=None):
         set_window_open(True)
@@ -101,7 +101,7 @@ def main():
         return True
 
     window.events.closing += closing
-    tray = pystray.Icon('TayyaraMotors', Image.open(resource_root() / 'assets/app-logo.png'), 'Tayyara Motors — background sync', menu=pystray.Menu(pystray.MenuItem('Open Tayyara Motors', show, default=True), pystray.MenuItem('Exit App', lambda icon, item: quit_app(icon, item))))
+    tray = pystray.Icon('FBAutomationRealEstate', Image.open(resource_root() / 'assets/app-logo.png'), 'FB Automation Real Estate — background sync', menu=pystray.Menu(pystray.MenuItem('Open FB Automation Real Estate', show, default=True), pystray.MenuItem('Exit App', lambda icon, item: quit_app(icon, item))))
     tray.run_detached()
     app_updates.exit_callback = lambda: quit_app(updating=True)
 
@@ -149,5 +149,5 @@ if __name__ == '__main__':
         import traceback
         traceback.print_exc()
         if '--smoke-test' not in sys.argv and '--driver-smoke-test' not in sys.argv:
-            ctypes.windll.user32.MessageBoxW(None, str(exc), 'Tayyara Motors startup error', 0x10)
+            ctypes.windll.user32.MessageBoxW(None, str(exc), 'FB Automation Real Estate startup error', 0x10)
         raise

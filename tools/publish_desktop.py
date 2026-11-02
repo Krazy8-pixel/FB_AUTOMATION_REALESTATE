@@ -17,8 +17,8 @@ def main():
     from packaging.version import Version
     Version(args.version)
     release = ROOT / 'release'
-    files = [release / f'FacebookMarketplaceAutomation-Setup-{args.version}.exe',
-             release / f'FacebookMarketplaceAutomation-{args.version}.zip',
+    files = [release / f'FBAutomationRealEstate-Setup-{args.version}.exe',
+             release / f'FBAutomationRealEstate-{args.version}.zip',
              release / 'manifest.json', release / 'manifest.sig']
     if not all(path.is_file() for path in files):
         parser.error('Build all four release files before publishing.')
@@ -34,8 +34,8 @@ def main():
         if hashlib.file_digest(stream, 'sha256').hexdigest() != manifest['sha256']:
             parser.error('The update archive checksum does not match the manifest.')
     notes = release / 'release-notes.md'
-    notes.write_text('Download **FacebookMarketplaceAutomation-Setup-' + args.version + '.exe** for a new Windows installation.\n\nExisting installations can check for this release in **Settings → Check for Updates**. The ZIP and manifest files are used by the app updater.\n\n' + ('This release resets saved listings; accounts and groups are kept.' if manifest['reset_databases'] else 'This release preserves saved app data.'), encoding='utf-8')
-    repository = 'Krazy8-pixel/facebook-marketplace-automation-exe-app'
+    notes.write_text('Download **FBAutomationRealEstate-Setup-' + args.version + '.exe** for a new Windows installation.\n\nExisting installations can check for this release in **Settings → Check for Updates**. The ZIP and manifest files are used by the app updater.\n\n' + ('This release resets saved listings; accounts and groups are kept.' if manifest['reset_databases'] else 'This release preserves saved app data.'), encoding='utf-8')
+    repository = config['repository']
     existing = subprocess.run([args.gh, 'release', 'view', 'v' + args.version, '--repo', repository, '--json', 'isDraft'], capture_output=True, text=True)
     if existing.returncode == 0:
         if not json.loads(existing.stdout)['isDraft']:

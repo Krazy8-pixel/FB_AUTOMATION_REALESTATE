@@ -36,15 +36,15 @@ def main():
     run(str(compiler), '/DGENERATE_UNINSTALLER', '/DAPP_VERSION=' + args.version, str(ROOT / 'packaging/installer.nsi'))
     run(str(ROOT / 'build/uninstall/MakeUninstaller.exe'), '/S')
     if args.reuse_updater:
-        if not (ROOT / 'build/updater/TayyaraUpdater.exe').is_file():
+        if not (ROOT / 'build/updater/RealEstateUpdater.exe').is_file():
             raise RuntimeError('No existing updater binary to reuse.')
     else:
-        run(sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile', '--noconsole', '--name', 'TayyaraUpdater', '--distpath', 'build/updater', '--workpath', 'build/updater-work', '--specpath', 'packaging', 'updater.py')
+        run(sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile', '--noconsole', '--name', 'RealEstateUpdater', '--distpath', 'build/updater', '--workpath', 'build/updater-work', '--specpath', 'packaging', 'updater.py')
     # PyInstaller can reuse the EXE when only the icon file contents change.
     # Rebuild its resource container while retaining the dependency cache.
     (ROOT / 'build/desktop/EXE-00.toc').unlink(missing_ok=True)
     run(sys.executable, '-m', 'PyInstaller', '--noconfirm', 'desktop.spec')
-    shutil.copy2(ROOT / 'build/uninstall/Uninstall.exe', ROOT / 'dist/TayyaraMotors/Uninstall.exe')
+    shutil.copy2(ROOT / 'build/uninstall/Uninstall.exe', ROOT / 'dist/FBAutomationRealEstate/Uninstall.exe')
     # Selenium exposes browser drivers through lazy imports, which PyInstaller
     # cannot discover from the app's webdriver.Chrome call alone.
     from PyInstaller.archive.readers import ZlibArchiveReader
@@ -61,19 +61,19 @@ def main():
         raise RuntimeError('Selenium modules missing from desktop build: ' + ', '.join(sorted(missing)))
     release = ROOT / 'release'
     release.mkdir(exist_ok=True)
-    asset = f'FacebookMarketplaceAutomation-{args.version}.zip'
+    asset = f'FBAutomationRealEstate-{args.version}.zip'
     package = release / asset
     compression = {'compression': zipfile.ZIP_DEFLATED, 'compresslevel': 1} if args.fast else {'compression': zipfile.ZIP_LZMA}
     with zipfile.ZipFile(package, 'w', **compression) as archive:
-        for path in (ROOT / 'dist/TayyaraMotors').rglob('*'):
+        for path in (ROOT / 'dist/FBAutomationRealEstate').rglob('*'):
             if path.is_file():
-                archive.write(path, path.relative_to(ROOT / 'dist/TayyaraMotors'))
+                archive.write(path, path.relative_to(ROOT / 'dist/FBAutomationRealEstate'))
     with package.open('rb') as stream:
         checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
-    manifest = {'app': 'TayyaraMotors', 'version': args.version, 'asset': asset, 'sha256': checksum, 'reset_databases': ['listings'] if args.reset_listings else []}
+    manifest = {'app': 'FBAutomationRealEstate', 'version': args.version, 'asset': asset, 'sha256': checksum, 'reset_databases': ['listings'] if args.reset_listings else []}
     raw = json.dumps(manifest, sort_keys=True).encode()
     (release / 'manifest.json').write_bytes(raw)
-    key = Ed25519PrivateKey.from_private_bytes((ROOT / '.release_keys/ed25519.key').read_bytes())
+    key = Ed25519PrivateKey.from_private_bytes((ROOT / '.release_keys/realestate-ed25519.key').read_bytes())
     (release / 'manifest.sig').write_bytes(key.sign(raw))
     compiler = next((ROOT / 'packaging/compiler').rglob('makensis.exe'))
     options = ['/DFAST_BUILD'] if args.fast else []

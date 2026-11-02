@@ -22,10 +22,10 @@ def save(background_sync, start_with_windows):
         import winreg
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\Run') as key:
             if start_with_windows:
-                winreg.SetValueEx(key, 'TayyaraMotors', 0, winreg.REG_SZ, '"' + sys.executable + '" --background')
+                winreg.SetValueEx(key, 'FBAutomationRealEstate', 0, winreg.REG_SZ, '"' + sys.executable + '" --background')
             else:
                 try:
-                    winreg.DeleteValue(key, 'TayyaraMotors')
+                    winreg.DeleteValue(key, 'FBAutomationRealEstate')
                 except FileNotFoundError:
                     pass
     path = data_dir() / 'desktop_preferences.json'

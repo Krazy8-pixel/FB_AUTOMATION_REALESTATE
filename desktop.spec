@@ -9,7 +9,7 @@ datas = [
     (str(ROOT / 'assets'), 'assets'),
     (str(ROOT / 'app_config.json'), '.'),
     (str(ROOT / '.ocr_runtime'), 'ocr_runtime'),
-    (str(ROOT / 'build/updater/TayyaraUpdater.exe'), '.'),
+    (str(ROOT / 'build/updater/RealEstateUpdater.exe'), '.'),
 ]
 # Some Python distributions require this adjacent SSL trust-support file.
 # Preserve their certificate policy in the frozen runtime as well.
@@ -23,5 +23,5 @@ a = Analysis([str(ROOT / 'desktop.py')], pathex=[str(ROOT), str(ROOT / '.desktop
              hiddenimports=collect_submodules('webview') + collect_submodules('pystray') + collect_submodules('selenium') + ['apscheduler.jobstores.sqlalchemy'],
              excludes=['pytest', 'tkinter', 'matplotlib', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'IPython', 'notebook'])
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='TayyaraMotors', console=False, icon=str(ROOT / 'assets/app.ico'))
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='TayyaraMotors')
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='FBAutomationRealEstate', console=False, icon=str(ROOT / 'assets/app.ico'))
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='FBAutomationRealEstate')

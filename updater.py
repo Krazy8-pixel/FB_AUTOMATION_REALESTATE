@@ -59,7 +59,7 @@ def rename_with_retry(source, destination, timeout=60):
                 raise
             if time.monotonic() >= deadline:
                 raise RuntimeError(
-                    f'Windows is still using {source.name}. Close all Tayyara Motors '
+                    f'Windows is still using {source.name}. Close all FB Automation Real Estate '
                     'windows and try again, or restart Windows and run the latest installer. '
                     'Your saved listings are stored separately.'
                 ) from exc
@@ -102,7 +102,7 @@ def main(plan_path):
             raise ValueError('Update checksum mismatch')
     root = Path(plan['install_dir']).resolve()
     data = Path(plan['data_dir']).resolve()
-    if not (root / 'TayyaraMotors.exe').is_file() or data.is_relative_to(root):
+    if not (root / 'FBAutomationRealEstate.exe').is_file() or data.is_relative_to(root):
         raise ValueError('Invalid installation/data layout')
     release_install_directory(root, folder)
     staging = root.with_name(root.name + '.staging-' + str(os.getpid()))
@@ -112,7 +112,7 @@ def main(plan_path):
     staging.mkdir()
     with zipfile.ZipFile(package) as archive:
         safe_extract(archive, staging)
-    if not (staging / 'TayyaraMotors.exe').is_file():
+    if not (staging / 'FBAutomationRealEstate.exe').is_file():
         raise ValueError('The release is missing its executable')
     new_config = json.loads((staging / '_internal/app_config.json').read_text(encoding='utf-8'))
     if new_config['version'] != manifest['version']:
@@ -142,7 +142,7 @@ def main(plan_path):
         move_program_files(staging, root, installed, executable_last=True)
         health = folder / 'healthy.json'
         health.unlink(missing_ok=True)
-        child = launch_independent([str(root / 'TayyaraMotors.exe'), '--health-file', str(health)], data)
+        child = launch_independent([str(root / 'FBAutomationRealEstate.exe'), '--health-file', str(health)], data)
         deadline = time.monotonic() + 90
         while not startup_healthy(health, manifest['version']):
             if child.poll() is not None or time.monotonic() > deadline:
@@ -160,7 +160,7 @@ def main(plan_path):
             (folder / 'last-update.json').write_text(json.dumps({'version': manifest['version'], 'success': False, 'error': str(exc)}), encoding='utf-8')
         except OSError:
             pass
-        launch_independent([str(root / 'TayyaraMotors.exe')], data)
+        launch_independent([str(root / 'FBAutomationRealEstate.exe')], data)
         raise
 
     # The new app is healthy. Cleanup errors must never trigger rollback.
@@ -169,7 +169,7 @@ def main(plan_path):
         shutil.rmtree(staging)
         # Keep one previous program version; remove only verified sibling backups.
         for old in root.parent.glob(root.name + '.previous-*'):
-            if old != previous and (old / 'TayyaraMotors.exe').is_file():
+            if old != previous and (old / 'FBAutomationRealEstate.exe').is_file():
                 shutil.rmtree(old)
         package.unlink(missing_ok=True)
     except OSError:
@@ -180,4 +180,4 @@ if __name__ == '__main__':
     try:
         main(sys.argv[1])
     except Exception as exc:
-        ctypes.windll.user32.MessageBoxW(None, str(exc), 'Tayyara Motors update', 0x10)
+        ctypes.windll.user32.MessageBoxW(None, str(exc), 'FB Automation Real Estate update', 0x10)

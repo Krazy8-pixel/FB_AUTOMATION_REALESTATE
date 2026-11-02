@@ -47,27 +47,27 @@ def runtime_root():
         return _runtime_root_cache
 
     candidates = []
-    env_home = os.getenv("FB_AUTOMATION_HOME", "").strip()
+    env_home = os.getenv("FB_REALESTATE_HOME", "").strip()
     if env_home:
         candidates.append(Path(env_home))
 
     if getattr(sys, "frozen", False):
-        candidates.append(Path(os.getenv("LOCALAPPDATA") or Path.home()) / "TayyaraMotors")
+        candidates.append(Path(os.getenv("LOCALAPPDATA") or Path.home()) / "FBAutomationRealEstate")
     else:
         candidates.append(project_root())
 
     local_app_data = os.getenv("LOCALAPPDATA", "").strip()
     if local_app_data:
-        candidates.append(Path(local_app_data) / "FBAutomation")
-    candidates.append(Path.home() / "FBAutomation")
-    candidates.append(Path(tempfile.gettempdir()) / "FBAutomation")
+        candidates.append(Path(local_app_data) / "FBAutomationRealEstate")
+    candidates.append(Path.home() / "FBAutomationRealEstate")
+    candidates.append(Path(tempfile.gettempdir()) / "FBAutomationRealEstate")
 
     for candidate in candidates:
         if _is_writable_dir(candidate / "data"):
             _runtime_root_cache = candidate
             return _runtime_root_cache
 
-    fallback = Path(tempfile.gettempdir()) / "FBAutomation"
+    fallback = Path(tempfile.gettempdir()) / "FBAutomationRealEstate"
     fallback.mkdir(parents=True, exist_ok=True)
     _runtime_root_cache = fallback
     return _runtime_root_cache
