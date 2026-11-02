@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 from selenium.common.exceptions import TimeoutException
 from PIL import Image
 
@@ -13,6 +13,31 @@ from automation import reposting
 
 def photo(name, transform='dst-jpg_s960x960_tt6'):
     return f'https://scontent.example.fbcdn.net/{name}.jpg?stp={transform}&oh=signed'
+
+
+def navigation_driver(url):
+    driver = MagicMock()
+    driver.current_url = url
+    driver.current_window_handle = 'inventory'
+    driver.window_handles = ['inventory']
+    driver.timeouts.page_load = 45
+    driver.get.side_effect = lambda value: setattr(driver, 'current_url', value)
+    def new_window(kind):
+        driver.current_window_handle = 'public'
+        driver.window_handles.append('public')
+    driver.switch_to.new_window.side_effect = new_window
+    driver.switch_to.window.side_effect = lambda handle: setattr(driver, 'current_window_handle', handle)
+    driver.close.side_effect = lambda: driver.window_handles.remove(driver.current_window_handle)
+    return driver
+
+
+def fallback_until(driver, condition, message=''):
+    if 'Selected popup did not expose' in message:
+        raise TimeoutException('No public link in fallback fixture')
+    result = condition(driver)
+    if not result:
+        raise TimeoutException(message)
+    return result
 
 
 class PublicMediaTests(unittest.TestCase):
@@ -125,41 +150,34 @@ class PublicMediaTests(unittest.TestCase):
         edit_videos.assert_not_called()
 
     def test_dialog_edit_link_resolves_missing_card_url_and_restores_tab(self):
-        driver, edit = MagicMock(), MagicMock()
-        driver.current_url = 'https://www.facebook.com/marketplace/you/selling'
-        driver.timeouts.page_load = 45
+        driver = navigation_driver('https://www.facebook.com/marketplace/you/selling')
+        edit = MagicMock()
         edit.get_attribute.return_value = 'https://www.facebook.com/marketplace/edit/?listing_id=123'
         edit.is_displayed.return_value = True
         driver.find_elements.side_effect = lambda by, selector: [] if 'dialog' in selector else [edit]
-        driver.get.side_effect = lambda url: setattr(driver, 'current_url', url)
         sources = {'image_urls': [photo('full')], 'video_urls': [], 'video_errors': []}
-        with patch.object(type(driver), 'current_window_handle', new_callable=PropertyMock, create=True,
-                          side_effect=['inventory', 'public']), \
-             patch.object(reposting, 'WebDriverWait') as wait, \
+        with patch.object(reposting, 'WebDriverWait') as wait, \
              patch('automation.public_listing_media.read_public_listing_media', return_value=sources):
-            wait.return_value.until.side_effect = lambda condition, **kwargs: condition(driver)
+            wait.return_value.until.side_effect = lambda condition, **kwargs: fallback_until(driver, condition, **kwargs)
             self.assertEqual(reposting._public_media_in_new_tab(driver,
                 {'url': 'https://www.facebook.com/marketplace/item/999/'}), sources)
         driver.get.assert_called_once_with('https://www.facebook.com/marketplace/item/123/')
         driver.switch_to.new_window.assert_called_once_with('tab')
         driver.close.assert_called_once()
-        driver.switch_to.window.assert_called_once_with('inventory')
+        self.assertEqual(driver.switch_to.window.call_args.args, ('inventory',))
         self.assertEqual(driver.set_page_load_timeout.call_args_list[-1].args, (45,))
-        self.assertTrue(all(call.args[1] == 20 for call in wait.call_args_list))
+        self.assertEqual([call.args[1] for call in wait.call_args_list], [20, 25, 25])
 
     def test_gallery_timeout_closes_only_public_tab_and_restores_timeout(self):
-        driver = MagicMock()
-        driver.current_url = 'https://www.facebook.com/marketplace/item/123/'
-        driver.timeouts.page_load = 45
-        with patch.object(type(driver), 'current_window_handle', new_callable=PropertyMock, create=True,
-                          side_effect=['inventory', 'public']), \
-             patch.object(reposting, 'WebDriverWait') as wait, \
+        driver = navigation_driver('https://www.facebook.com/marketplace/item/123/')
+        with patch.object(reposting, 'WebDriverWait') as wait, \
              patch('automation.public_listing_media.read_public_listing_media', side_effect=TimeoutException('gallery')):
-            wait.return_value.until.side_effect = lambda condition, **kwargs: condition(driver)
-            with self.assertRaises(TimeoutException):
+            wait.return_value.until.side_effect = lambda condition, **kwargs: fallback_until(driver, condition, **kwargs)
+            with self.assertRaisesRegex(RuntimeError, 'fallback tab: TimeoutException: Message: gallery'):
                 reposting._public_media_in_new_tab(driver, {})
         driver.close.assert_called_once()
-        driver.switch_to.window.assert_called_once_with('inventory')
+        self.assertEqual(driver.window_handles, ['inventory'])
+        self.assertEqual(driver.switch_to.window.call_args.args, ('inventory',))
         self.assertEqual(driver.set_page_load_timeout.call_args_list[-1].args, (45,))
 
     def test_media_timeout_does_not_prevent_detail_extraction(self):

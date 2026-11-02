@@ -16,7 +16,7 @@
   {% endif %}
   <p class="create-upload-note">Your file should include the vehicle type, make, model, description, photos, price, and the other required listing details.</p>
   <div class="form-box create-form-panel">
-    <form method="POST" action="{{ url_for('web.auto_listing_excel') }}" enctype="multipart/form-data">
+    <form data-posting-timing method="POST" action="{{ url_for('web.auto_listing_excel') }}" enctype="multipart/form-data">
       <fieldset {% if auto_listing_running %}disabled{% endif %} style="{% if auto_listing_running %}opacity:0.65;{% endif %}">
       <label for="excel_file" class="file-label">Excel file</label>
       <input id="excel_file" type="file" name="excel_file" accept=".xlsx,.xls" required>

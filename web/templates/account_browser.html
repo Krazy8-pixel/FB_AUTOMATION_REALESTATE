@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Account Browser{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/account_browser.css') }}">{% endblock %}
+{% block content %}
+<main class="account-browser" aria-label="Facebook account browser">
+  <div class="account-browser-surface" id="browser-surface">
+    <div class="account-browser-placeholder" id="browser-placeholder">
+      <span class="account-browser-placeholder-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 9h18M8 14h8M8 17h5"></path></svg></span>
+      <strong>Your Facebook account opens here</strong>
+      <p>{% if accounts %}Choose an account in the header and select Open account.{% else %}Add an account in Settings to get started.{% endif %}</p>
+    </div>
+  </div>
+</main>
+{% endblock %}
+{% block extra_js %}<script src="{{ url_for('static', filename='js/account_browser.js') }}"></script>{% endblock %}

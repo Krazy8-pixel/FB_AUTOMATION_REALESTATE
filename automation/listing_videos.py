@@ -1,4 +1,4 @@
-"""Optional direct video discovery and bounded, original-byte backups."""
+"""Listing video discovery and bounded, original-byte backups when present."""
 import hashlib
 import os
 import time
@@ -57,7 +57,7 @@ def download(driver, account, listing_id, urls, root, stop_event):
                     if not allowed_source(url):
                         raise ValueError('Unsupported video URL')
                     started = time.monotonic()
-                    with session.get(url, stream=True, timeout=(5, 5), allow_redirects=False) as response:
+                    with session.get(url, stream=True, timeout=(15, 30), allow_redirects=False) as response:
                         response.raise_for_status()
                         if response.is_redirect:
                             raise ValueError('Video redirect skipped')
@@ -70,7 +70,7 @@ def download(driver, account, listing_id, urls, root, stop_event):
                         size = 0
                         with temporary.open('wb') as stream:
                             for chunk in response.iter_content(64 * 1024):
-                                if stop_event.is_set() or time.monotonic() - started > 60:
+                                if stop_event.is_set() or time.monotonic() - started > 300:
                                     raise ValueError('Video backup cancelled or timed out')
                                 size += len(chunk)
                                 if size > 150 * 1024 * 1024:

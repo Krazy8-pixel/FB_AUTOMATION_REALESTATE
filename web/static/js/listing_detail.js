@@ -3,6 +3,8 @@
   if (!page) return;
   const form = document.getElementById('repost-form');
   const readView = document.getElementById('listing-read-view');
+  const editForm = document.getElementById('listing-edit-form');
+  const editButton = document.getElementById('edit-listing');
   const start = document.getElementById('start-repost');
   const crossStart = document.getElementById('start-cross-post');
   start.after(crossStart);
@@ -41,6 +43,27 @@
   }
   function exit() { form.hidden = true; readView.hidden = false; start.hidden = false; crossStart.hidden = false; deleteButton.hidden = false; }
   function hideDeleteOptions() { deleteOptions.hidden = true; deleteButton.setAttribute('aria-expanded', 'false'); }
+  function openEditor() {
+    hideDeleteOptions(); form.hidden = true; readView.hidden = true; editForm.hidden = false;
+    editForm.scrollIntoView({block:'start', behavior:'smooth'});
+  }
+  editButton.addEventListener('click', openEditor);
+  document.getElementById('cancel-edit-listing').addEventListener('click', () => {
+    editForm.reset(); editForm.hidden = true; readView.hidden = false; message('');
+  });
+  editForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = editForm.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      const response = await appFetch(page.dataset.saveUrl, {method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({action:'save_details', fields:Object.fromEntries(new FormData(editForm))})});
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.message || 'Could not save listing details.');
+      try { sessionStorage.setItem('app-next-notice', JSON.stringify({text:'Your listing details have been saved.', kind:'success'})); } catch (_) {}
+      window.location.reload();
+    } catch (error) { message(error.message || 'Could not save listing details.', true); button.disabled = false; }
+  });
   deleteButton.addEventListener('click', () => {
     if (deleting) return;
     deleteOptions.hidden = !deleteOptions.hidden;
@@ -66,6 +89,11 @@
     }
   });
   function openPosting(cross) {
+    if (page.dataset.missingColors === 'true') {
+      message('Add and save both exterior and interior colors before posting.', true);
+      openEditor();
+      return;
+    }
     crossPosting = cross;
     document.getElementById('posting-timing-label').textContent = cross ? 'Posting timing' : 'Repost timing';
     crossAccounts.hidden = !cross;
@@ -213,14 +241,15 @@
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (submitting) return;
+    const postingRequestedAt = window.postingTiming.forSubmit(form);
     finishDrag();
     if (!form.reportValidity()) return;
     const postMode = form.elements.post_mode.value;
     if (postMode === 'schedule' && (!Number.isInteger(Number(delay.value)) || Number(delay.value)<1 || Number(delay.value)>Number(delay.max))) {
       message(`Enter a delay from 1 to ${delay.max}.`, true); return;
     }
-    const fields = Object.fromEntries(new FormData(form)); delete fields.post_mode;
-    const payload = {account:page.dataset.account, listing_id:page.dataset.listingId, fields, image_order:[...order.children].map(row=>row.dataset.photo), post_mode:postMode, delay_value:Number(delay.value), delay_unit:unit.value};
+    const fields = Object.fromEntries(new FormData(form)); delete fields.post_mode; delete fields.posting_requested_at_ms;
+    const payload = {posting_requested_at_ms:postingRequestedAt, account:page.dataset.account, listing_id:page.dataset.listingId, fields, image_order:[...order.children].map(row=>row.dataset.photo), post_mode:postMode, delay_value:Number(delay.value), delay_unit:unit.value};
     if (crossPosting) {
       payload.target_accounts = [...crossAccounts.querySelectorAll('[data-cross-account]:checked')].map(box => box.value);
       if (!payload.target_accounts.length || payload.target_accounts.length >= 20) {

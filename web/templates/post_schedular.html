@@ -51,6 +51,7 @@
             <th>Accounts</th>
             <th>Status</th>
             <th>Time &amp; date</th>
+            <th title="Time from when the app starts running the post until it finishes. Scheduled delay is excluded.">Posting time</th>
             <th>Time Remaining</th>
             <th>Action</th>
           </tr>
@@ -59,11 +60,20 @@
           {% for item in scheduled_items %}
           <tr>
             <td>
-              {{ item.title if item.title is defined and item.title else "" }}
+              <div class="vehicle-summary">
+                {% if item.thumbnail_url %}
+                <img class="vehicle-thumb" src="{{ item.thumbnail_url }}" alt="Listing photo" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false">
+                <span class="vehicle-thumb-placeholder" hidden aria-hidden="true">No photo</span>
+                {% else %}
+                <span class="vehicle-thumb-placeholder" aria-hidden="true">No photo</span>
+                {% endif %}
+                <span class="vehicle-title">{{ item.title if item.title is defined and item.title else item.make or "Untitled listing" }}</span>
+              </div>
             </td>
             <td>{% if item.source == 'Cross posting' %}Cross posting<br>{{ item.source_account }} &rarr; {{ item.account }}{% else %}{{ active_account }}{% endif %}</td>
             <td><span class="status-pill status-{{ item.status }}">{{ item.status }}</span>{% if item.error %}<p>{{ item.error }}</p>{% endif %}</td>
             <td class="posting-time"><span class="posting-time-label">{{ item.time_label }}</span><time datetime="{{ item.time_iso }}"><strong class="posting-time-clock">{{ item.time_clock }}</strong><span class="posting-time-date">{{ item.time_date }} · {{ item.time_zone }}</span></time></td>
+            <td class="posting-duration">{% if item.status == 'posted' and item.posting_duration_text is defined and item.posting_duration_text %}<span class="posting-duration-value">{{ item.posting_duration_text }}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
             <td data-remaining="{{ item.remaining_seconds }}" data-status="{{ item.status }}"></td>
             <td>
               {% if item.status in ["pending", "waiting", "posting"] %}
@@ -75,7 +85,7 @@
           </tr>
           {% else %}
           <tr>
-            <td colspan="6" class="empty">No scheduled posts in the queue for this account.</td>
+            <td colspan="7" class="empty">No scheduled posts in the queue for this account.</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -97,6 +107,12 @@
   let scheduleGeneration = 0, refreshAgain = false;
   function escapeSchedule(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[ch]));
+  }
+
+  function renderPostingDuration(item) {
+    return item.status === 'posted' && item.posting_duration_text
+      ? `<span class="posting-duration-value">${escapeSchedule(item.posting_duration_text)}</span>`
+      : '<span class="muted">-</span>';
   }
 
   function formatRemaining(seconds) {
@@ -137,7 +153,7 @@
     statPosted.textContent = data.posted_count;
     if (!data.items.length) {
       statNext.textContent = "-";
-      schedularRows.innerHTML = '<tr><td colspan="6" class="empty">No scheduled posts in the queue for this account.</td></tr>';
+      schedularRows.innerHTML = '<tr><td colspan="7" class="empty">No scheduled posts in the queue for this account.</td></tr>';
     } else {
       statNext.textContent = data.next_run_label || '-';
 
@@ -145,12 +161,16 @@
         const action = ["pending", "waiting", "posting"].includes(item.status)
           ? `<button class="delete-btn delete-job" data-job="${item.job_id}">Cancel</button>`
           : '<span class="muted">-</span>';
+      const thumbnail = item.thumbnail_url
+        ? `<img class="vehicle-thumb" src="${escapeSchedule(item.thumbnail_url)}" alt="Listing photo" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="vehicle-thumb-placeholder" hidden aria-hidden="true">No photo</span>`
+        : '<span class="vehicle-thumb-placeholder" aria-hidden="true">No photo</span>';
       return `
         <tr>
-          <td>${escapeSchedule(item.title || item.make || "-")}</td>
+          <td><div class="vehicle-summary">${thumbnail}<span class="vehicle-title">${escapeSchedule(item.title || item.make || "Untitled listing")}</span></div></td>
           <td>${item.source === 'Cross posting' ? 'Cross posting<br>' + escapeSchedule(item.source_account) + ' &rarr; ' + escapeSchedule(item.account) : escapeSchedule(item.account)}</td>
             <td><span class="status-pill status-${escapeSchedule(item.status)}">${escapeSchedule(item.status)}</span>${item.error ? '<p>' + escapeSchedule(item.error) + '</p>' : ''}</td>
             <td class="posting-time"><span class="posting-time-label">${escapeSchedule(item.time_label)}</span><time datetime="${escapeSchedule(item.time_iso)}"><strong class="posting-time-clock">${escapeSchedule(item.time_clock)}</strong><span class="posting-time-date">${escapeSchedule(item.time_date)} · ${escapeSchedule(item.time_zone)}</span></time></td>
+            <td class="posting-duration">${renderPostingDuration(item)}</td>
             <td data-remaining="${item.remaining_seconds}" data-status="${escapeSchedule(item.status)}"></td>
             <td>${action}</td>
           </tr>

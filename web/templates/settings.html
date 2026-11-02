@@ -11,7 +11,7 @@
     ('Posting & activity', 'Plan your next posts and follow your progress.', [('Group Posting','posting_in_groups_page','Create a post for several groups.','post'),('Posting Results','post_schedular','Review your queue and upcoming posting times.','calendar'),('Activity Log','activity_log_page','Check recent actions and their results.','log'),('Live Terminal','terminal_page','View live application output, progress, and errors.','log')])
   ] %}
     <section class="hub-section" aria-labelledby="section-{{ loop.index }}"><div class="hub-section-head"><h2 id="section-{{ loop.index }}">{{ heading }}</h2><p>{{ subtitle }}</p></div><div class="hub-tool-list">
-      {% for title, endpoint, description, symbol in tools if group_ui_enabled or endpoint not in ['groups_page', 'posting_in_groups_page'] %}<a class="settings-card" href="{{ url_for('web.' ~ endpoint) }}"><span class="settings-card-icon">{{ icon(symbol) }}</span><span class="settings-card-copy"><strong>{{ title }}</strong><span>{{ description }}</span></span><span class="settings-arrow" aria-hidden="true">&rsaquo;</span></a>{% endfor %}
+      {% for title, endpoint, description, symbol in tools if (group_ui_enabled or endpoint not in ['groups_page', 'posting_in_groups_page']) and (desktop_mode or endpoint != 'account_browser_page') %}<a class="settings-card" href="{{ url_for('web.' ~ endpoint) }}"><span class="settings-card-icon">{{ icon(symbol) }}</span><span class="settings-card-copy"><strong>{{ title }}</strong><span>{{ description }}</span></span><span class="settings-arrow" aria-hidden="true">&rsaquo;</span></a>{% endfor %}
     </div></section>
   {% endfor %}
   </div>
@@ -30,6 +30,14 @@
     <p id="update-reset-notice" hidden>A database reset is included in this release. Saved listings will be cleared; accounts are kept.</p>
     <div class="guide-actions"><button type="button" id="update-check">Check for Updates</button><button type="button" id="update-install" hidden>Download &amp; Install</button></div>
   </section>
+  <section class="hub-section desktop-panel" aria-labelledby="github-reports-title">
+    <div class="hub-section-head"><h2 id="github-reports-title">Failure reports to GitHub</h2><p>Each failed posting, repost, delete, import, or refresh can create its own private-repository issue with the operation details and logs.</p></div>
+    <p id="github-reports-status" role="status" aria-live="polite">{% if github_report_status.connected %}Connected as {{ github_report_status.github_user }}. {{ github_report_status.queued_reports }} report(s) waiting to send.{% elif not github_report_status.configured %}GitHub App setup is still needed. The app will show the device login here after its public Client ID is configured.{% else %}Not connected to GitHub. Connect to enable failure reports.{% endif %}</p>
+    <p id="github-device-code" hidden></p>
+    <label for="github-repository">Private report repository <input id="github-repository" type="text" autocomplete="off" spellcheck="false" value="{{ github_report_status.repository }}" placeholder="owner/repository"></label>
+    <label for="github-client-id">GitHub App Client ID <input id="github-client-id" type="text" autocomplete="off" spellcheck="false" placeholder="Enter the public Client ID" value="{{ github_report_status.client_id }}"></label>
+    <div class="guide-actions"><button type="button" id="github-client-id-save">Save Client ID</button><button type="button" id="github-reports-connect" {% if not github_report_status.configured %}disabled{% endif %}>Connect GitHub</button><button type="button" id="github-reports-disconnect" {% if not github_report_status.connected %}hidden{% endif %}>Disconnect</button></div>
+  </section>
   <a class="hub-help" href="{{ url_for('web.info_page') }}"><span class="settings-card-icon">{{ icon('help') }}</span><span><strong>Need a hand?</strong><span>Open Help &amp; Instructions for simple guides to every feature.</span></span><span class="hub-help-action">View guide <span aria-hidden="true">&rarr;</span></span></a>
   <section class="settings-diagnostics" aria-labelledby="diagnostics-heading">
     <div class="diagnostics-copy"><span class="settings-card-icon">{{ icon('log') }}</span><div><h2 id="diagnostics-heading">Diagnostic report</h2><p>Download recent logs to help review listing imports and posting results.</p><span class="diagnostics-caption">Text file &middot; May include account names and listing details</span></div></div>
@@ -46,10 +54,25 @@
   let timer;
   function show(data){message.textContent=data.message;check.disabled=['checking','downloading','verifying','installing'].includes(data.state);install.hidden=!data.available;reset.hidden=!data.resets_listings;install.disabled=check.disabled;progress.hidden=data.state!=='downloading';if(data.download_percent==null){progress.removeAttribute('value');}else{progress.value=data.download_percent;}clearTimeout(timer);timer=setTimeout(poll,check.disabled?1000:10000);}
   async function poll(){try{const response=await appFetch('{{ url_for("web.desktop_update_status") }}');show(await response.json());}catch(error){message.textContent='The app is restarting. Please wait.';}}
-  async function action(url){check.disabled=true;try{const response=await appFetch(url,{method:'POST'});const data=await response.json();if(!response.ok){message.textContent=data.message;check.disabled=false;return;}show(data);}catch(error){message.textContent='Could not contact the app. Try again.';check.disabled=false;}}
+  async function action(url){check.disabled=true;try{const response=await appFetch(url,{method:'POST'});const data=await response.json();if(!response.ok){message.textContent=data.message;window.appNotify(data.message,'failed');check.disabled=false;return;}show(data);if(data.message)window.appNotify(data.message,'info');}catch(error){message.textContent='Could not contact the app. Try again.';window.appNotify(message.textContent,'failed');check.disabled=false;}}
   check.addEventListener('click',()=>action('{{ url_for("web.desktop_update_check") }}'));
   install.addEventListener('click',()=>{if(!reset.hidden&&!window.confirm('This release clears saved listing backups. Continue?'))return;action('{{ url_for("web.desktop_update_install") }}');});
   poll();
+  const githubMessage=document.getElementById('github-reports-status'), githubCode=document.getElementById('github-device-code');
+  const githubConnect=document.getElementById('github-reports-connect'), githubDisconnect=document.getElementById('github-reports-disconnect');
+  const githubClientId=document.getElementById('github-client-id'), githubClientSave=document.getElementById('github-client-id-save');
+  async function githubPoll(){try{const response=await appFetch('{{ url_for("web.github_reports_status") }}'),data=await response.json();
+    githubConnect.disabled=!data.configured;
+    if(document.activeElement!==githubClientId)githubClientId.value=data.client_id||'';
+    if(data.connected){githubMessage.textContent=`Connected as ${data.github_user}. ${data.queued_reports} report(s) waiting to send.${data.last_error?' Last delivery error: '+data.last_error:''}`;githubCode.hidden=true;githubConnect.hidden=true;githubDisconnect.hidden=false;}
+    else if(data.login?.state==='waiting'){githubMessage.textContent=data.login.message||'Waiting for GitHub authorization.';githubCode.hidden=false;githubCode.textContent=`Enter code ${data.login.user_code} at ${data.login.verification_uri}`;githubConnect.hidden=false;githubDisconnect.hidden=true;}
+    else if(data.login?.state==='error'||data.login?.state==='expired'){githubMessage.textContent=data.login.message;githubCode.hidden=true;githubConnect.hidden=false;githubDisconnect.hidden=true;}
+    else {githubMessage.textContent=data.configured?`Not connected to GitHub. ${data.queued_reports} report(s) queued. Connect to send them.${data.last_error?' Last delivery error: '+data.last_error:''}`:'GitHub App setup is still needed. Configure its public Client ID to enable connection.';githubCode.hidden=true;githubConnect.hidden=false;githubDisconnect.hidden=true;}
+  }catch(error){githubMessage.textContent='Could not refresh GitHub report status.';}window.setTimeout(githubPoll,2000);}
+  githubClientSave.addEventListener('click',async()=>{githubClientSave.disabled=true;githubMessage.textContent='Saving GitHub App settings…';try{const response=await appFetch('{{ url_for("web.github_reports_config") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repository:document.getElementById('github-repository').value,client_id:githubClientId.value})}),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'Could not save GitHub settings.');githubMessage.textContent=data.configured?'GitHub settings saved. Connect GitHub to send reports.':'GitHub settings saved.';window.appNotify(githubMessage.textContent,'success');}catch(error){githubMessage.textContent=error.message||'Could not save GitHub settings.';window.appNotify(githubMessage.textContent,'failed');}finally{githubClientSave.disabled=false;githubPoll();}});
+  githubConnect.addEventListener('click',async()=>{githubConnect.disabled=true;githubMessage.textContent='Starting GitHub sign-in…';try{const response=await appFetch('{{ url_for("web.github_reports_connect") }}',{method:'POST'}),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'Could not start GitHub sign-in.');}catch(error){githubMessage.textContent=error.message||'Could not start GitHub sign-in.';}finally{githubConnect.disabled=false;githubPoll();}});
+  githubDisconnect.addEventListener('click',async()=>{githubDisconnect.disabled=true;try{const response=await appFetch('{{ url_for("web.github_reports_disconnect") }}',{method:'POST'}),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'Could not disconnect GitHub.');githubCode.hidden=true;githubPoll();}catch(error){githubMessage.textContent=error.message||'Could not disconnect GitHub.';}finally{githubDisconnect.disabled=false;}});
+  githubPoll();
 })();
 </script>
 {% endblock %}

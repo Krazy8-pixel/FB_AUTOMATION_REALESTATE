@@ -70,6 +70,10 @@ def cancellable(function):
         task = {'id': task_id, 'account': bound.get('account') or bound.get('account_email'),
                 'job_id': bound.get('job_id'), 'action': function.__name__,
                 'started_at': time.time(), 'cancel': threading.Event(), 'drivers': []}
+        if task['account'] and os.getenv('FB_AUTOMATION_DESKTOP') == '1':
+            from automation.account_browser import status as account_browser_status
+            if account_browser_status().get('account') == task['account']:
+                raise RuntimeError('Close this account in Account Browser before starting automation for it.')
         with _lock:
             if os.getenv('FB_AUTOMATION_DESKTOP') == '1' and not _window_open and task['action'] not in BACKGROUND_ACTIONS:
                 raise RuntimeError('Task cancelled: the app window is closed. Start it again from the app.')

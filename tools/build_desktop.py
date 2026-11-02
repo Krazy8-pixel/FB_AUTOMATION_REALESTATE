@@ -50,7 +50,13 @@ def main():
     from PyInstaller.archive.readers import ZlibArchiveReader
     from PyInstaller.utils.hooks import collect_submodules
     bundled = ZlibArchiveReader(str(ROOT / 'build/desktop/PYZ-00.pyz')).toc
-    missing = set(collect_submodules('selenium')) - set(bundled)
+    selenium_modules = set(collect_submodules('selenium'))
+    if not selenium_modules:
+        raise RuntimeError('Selenium was not discoverable in the desktop build environment.')
+    missing = selenium_modules - set(bundled)
+    # This is imported dynamically by webdriver.Chrome, so a build with no
+    # discoverable Selenium package could otherwise pass an empty-set check.
+    missing.update({'selenium.webdriver.chrome.webdriver'} - set(bundled))
     if missing:
         raise RuntimeError('Selenium modules missing from desktop build: ' + ', '.join(sorted(missing)))
     release = ROOT / 'release'

@@ -1,6 +1,10 @@
 {
   "name": "Tayyara Motors",
-  "version": "1.0.29",
+  "version": "1.0.54",
   "repository": "Krazy8-pixel/facebook-marketplace-automation-exe-app",
-  "update_public_key": "G/bxwxIK+XtBHMUnh+1xPHYO9fBMjLu8wwfwT/Zattw="
+  "update_public_key": "G/bxwxIK+XtBHMUnh+1xPHYO9fBMjLu8wwfwT/Zattw=",
+  "github_reports": {
+    "repository": "Krazy8-pixel/Fb_automation",
+    "client_id": ""
+  }
 }

@@ -52,3 +52,4 @@ build/
 release/
 
 packaging/github-auth/
+.github_reports/

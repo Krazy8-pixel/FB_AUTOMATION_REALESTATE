@@ -38,23 +38,21 @@ def export_text():
     """Read bounded log history, including previous launches, without client data files."""
     from pathlib import Path
     from datetime import datetime, timezone
+    from automation.diagnostics import _readable_summary
     with _lock:
         parts = ['Tayyara Motors diagnostic report\n',
-                 f'Exported (UTC): {datetime.now(timezone.utc).isoformat()}\n',
-                 'Contains recent application output, possibly account names and listing details.\n',
-                 'CHECK lines summarize imports. PUBLISH distinguishes clicked from confirmed.\n',
-                 'A completed click does not prove Facebook published the listing.\n',
-                 'Missing events or truncated history do not prove success.\n\n']
+                 f'Exported (UTC): {datetime.now(timezone.utc).isoformat()}\n\n']
+        history = []
         if _disk_handler is not None:
             _disk_handler.flush()
             path = Path(_disk_handler.baseFilename)
             for name in (str(path) + '.2', str(path) + '.1', str(path)):
                 try:
-                    parts.append(Path(name).read_text(encoding='utf-8', errors='replace'))
+                    history.append(Path(name).read_text(encoding='utf-8', errors='replace'))
                 except OSError:
                     pass
         else:
-            parts.append(snapshot()['text'])
+            history.append(snapshot()['text'])
         # Slow-request thread captures use a separate writer so a blocked
         # stdout/logging lock cannot prevent collecting evidence of a freeze.
         try:
@@ -63,9 +61,14 @@ def export_text():
             for suffix in ('.2', '.1', ''):
                 source = Path(str(freeze) + suffix)
                 if source.is_file():
-                    parts.append(source.read_text(encoding='utf-8', errors='replace'))
+                    history.append(source.read_text(encoding='utf-8', errors='replace'))
         except OSError:
             pass
+        detailed = ''.join(history)
+        parts.append(_readable_summary(detailed))
+        parts.extend(['DETAILED ACTIVITY LOG\n',
+                      'The lines below show recorded steps and messages in time order. Search for FAILED, STOPPED, REVIEW, or an account/listing name to investigate.\n\n',
+                      detailed])
         return ''.join(parts)
 
 _lock = RequestLock('terminal_log', reentrant=True)

@@ -28,6 +28,8 @@
   .repost-error { max-width:420px; white-space:normal !important; color:#b91c1c; font-size:13px; }
   .repost-history .repost-table td:first-child { width:28%; min-width:130px; }
   .repost-history .repost-error { width:40%; min-width:240px; line-height:1.5; }
+  .repost-duration { min-width:110px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .repost-duration-value { color:#166534; font-weight:700; }
   .delete-hidden { display:none !important; }
   @media (max-width:700px) { .repost-status-page { padding:20px; } .repost-status-head { flex-direction:column; } }
 </style>
@@ -58,9 +60,9 @@
     <div id="repost-history-empty" class="repost-empty{% if repost_history %} delete-hidden{% endif %}">No completed or failed reposts recorded.</div>
     <div id="repost-history-wrap" class="repost-table-wrap{% if not repost_history %} delete-hidden{% endif %}">
       <table class="repost-table">
-        <thead><tr><th>Listing</th><th>Result</th><th>Timestamp</th><th>Details</th></tr></thead>
+        <thead><tr><th>Listing</th><th>Result</th><th>Timestamp</th><th title="Time from your Post click to successful completion, including scheduled delays and queue time.">Posting time</th><th>Details</th></tr></thead>
         <tbody id="repost-history-rows">
-          {% for item in repost_history %}<tr><td>{{ item.title }}</td><td><span class="repost-state {{ item.status }}">{{ item.status }}</span></td><td>{{ item.timestamp }}</td><td class="repost-error">{{ item.error or '-' }}</td></tr>{% endfor %}
+          {% for item in repost_history %}<tr><td>{{ item.title }}</td><td><span class="repost-state {{ item.status }}">{{ item.status }}</span></td><td>{{ item.timestamp }}</td><td class="repost-duration">{% if item.status == 'reposted' and item.posting_duration_text is defined and item.posting_duration_text %}<span class="repost-duration-value">{{ item.posting_duration_text }}</span>{% else %}<span class="muted">-</span>{% endif %}</td><td class="repost-error">{{ item.error or '-' }}</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>
@@ -86,7 +88,8 @@
     button.disabled = false;
   });
   function remaining(seconds){let value=Math.max(0,Number(seconds)||0);if(!value)return 'Now';const h=Math.floor(value/3600),m=Math.floor((value%3600)/60),s=Math.floor(value%60);return[h?`${h}h`:'',m?`${m}m`:'',`${s}s`].filter(Boolean).join(' ');}
-  function renderHistory(history){if(historyEmpty)historyEmpty.classList.toggle('delete-hidden',!!history.length);if(historyWrap)historyWrap.classList.toggle('delete-hidden',!history.length);if(clearButton)clearButton.disabled=!history.length;if(historyRows)historyRows.innerHTML=history.map(item=>`<tr><td>${escapeHtml(item.title||'Listing')}</td><td><span class="repost-state ${item.status==='reposted'?'reposted':'failed'}">${escapeHtml(item.status||'-')}</span></td><td>${escapeHtml(item.timestamp||'-')}</td><td class="repost-error">${escapeHtml(item.error||'-')}</td></tr>`).join('');}
+  function renderPostingDuration(item){return item.status==='reposted'&&item.posting_duration_text?`<span class="repost-duration-value">${escapeHtml(item.posting_duration_text)}</span>`:'<span class="muted">-</span>';}
+  function renderHistory(history){if(historyEmpty)historyEmpty.classList.toggle('delete-hidden',!!history.length);if(historyWrap)historyWrap.classList.toggle('delete-hidden',!history.length);if(clearButton)clearButton.disabled=!history.length;if(historyRows)historyRows.innerHTML=history.map(item=>`<tr><td>${escapeHtml(item.title||'Listing')}</td><td><span class="repost-state ${item.status==='reposted'?'reposted':'failed'}">${escapeHtml(item.status||'-')}</span></td><td>${escapeHtml(item.timestamp||'-')}</td><td class="repost-duration">${renderPostingDuration(item)}</td><td class="repost-error">${escapeHtml(item.error||'-')}</td></tr>`).join('');}
   async function refresh(){try{const response=await appFetch('{{ url_for("web.reposting_data") }}'),data=await response.json(),items=Array.isArray(data.items)?data.items:[],history=Array.isArray(data.history)?data.history:[];if(count)count.textContent=items.length;document.getElementById('repost-pending-count').textContent=data.pending_count||0;document.getElementById('repost-running-count').textContent=data.running_count||0;if(empty)empty.classList.toggle('delete-hidden',!!items.length);if(tableWrap)tableWrap.classList.toggle('delete-hidden',!items.length);if(rows)rows.innerHTML=items.map(item=>`<tr><td>${escapeHtml(item.title||'Listing')}</td><td>${escapeHtml(item.delay_label||'-')}</td><td>${escapeHtml(item.run_at||'-')}</td><td>${remaining(item.remaining_seconds)}</td><td><span class="repost-state">${escapeHtml(labels[item.status]||item.status||'-')}</span></td><td><button type="button" data-cancel-repost="${escapeHtml(item.job_id)}">Cancel</button></td></tr>`).join('');renderHistory(history);}catch(error){}window.setTimeout(refresh,3000);}refresh();
   if(clearButton)clearButton.addEventListener('click',async()=>{if(!window.confirm('Clear all repost history for the active account?'))return;clearButton.disabled=true;if(historyMessage)historyMessage.textContent='Clearing repost history...';try{const response=await appFetch('/reposting_history/clear',{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'}}),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'Could not clear repost history.');renderHistory([]);if(historyMessage)historyMessage.textContent=data.message;}catch(error){clearButton.disabled=false;if(historyMessage)historyMessage.textContent=error.message||'Could not clear repost history.';}});
 })();

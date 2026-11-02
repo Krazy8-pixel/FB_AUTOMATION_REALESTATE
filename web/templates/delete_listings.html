@@ -190,7 +190,7 @@
   {% endif %}
 </div>
 <section id="manage-cross-dialog" class="manage-cross-dialog" hidden aria-labelledby="manage-post-title">
-  <form id="manage-cross-form" data-ajax="true">
+  <form data-posting-timing id="manage-cross-form" data-ajax="true">
     <h2 id="manage-post-title">Post to other accounts</h2>
     <p id="manage-post-help">Post selected listings from either section.</p>
     <div id="manage-target-accounts">
@@ -265,6 +265,7 @@
   let localStatusMessage = '';
   let facebookDeleteRunning = !!facebookDeleteBtn && facebookDeleteBtn.dataset.running === 'true';
   const selectedListingIds = new Set();
+  const selectionTitles = new Map();
 
   function setSelectionScope(scope) {
     selectionScope = scope;
@@ -323,6 +324,7 @@
     const clickStatus = data.click_refresh_status || {};
     const facebookStatus = data.facebook_delete_status || {};
     const scheduledRepostIds = new Set((data.scheduled_repost_ids || []).map(String));
+    items.forEach(item => selectionTitles.set(String(item.id), [item.year, item.make, item.model].filter(Boolean).join(' ') || 'Untitled listing'));
     if (listingCount) listingCount.textContent = `(${items.length})`;
     if (importBtn) {
       importBtn.disabled = !!status.running || !!clickStatus.running;
@@ -334,7 +336,7 @@
     if (refreshClicksBtn) {
       refreshClicksBtn.disabled = !items.length || !!status.running || !!clickStatus.running || !!facebookStatus.running;
       refreshClicksBtn.innerHTML = clickStatus.running
-        ? '<span class="click-refresh-spinner" aria-hidden="true"></span>Refreshing... ' + Number(clickStatus.confirmed_count || 0) + '/' + Number(clickStatus.total_count || items.length)
+        ? '<span class="click-refresh-spinner" aria-hidden="true"></span>Refreshing... ' + Number(clickStatus.processed_count || clickStatus.confirmed_count || 0) + '/' + Number(clickStatus.total_count || items.length)
         : 'Refresh Clicks';
     }
     facebookDeleteRunning = !!facebookStatus.running;
@@ -389,7 +391,7 @@
     grid.querySelectorAll('[data-facebook-action]').forEach(button => { button.disabled = !postedItems.length || busy; });
     if (feedback) feedback.textContent = facebookStatus.running
       ? `${facebookStatus.message || 'Deleting listings...'} ${Number(facebookStatus.deleted || 0)}/${Number(facebookStatus.total || 0)} confirmed`
-      : localStatusMessage || facebookStatus.error || status.error || '';
+      : localStatusMessage || status.error || '';
     if (facebookDeleteBtn) {
       facebookDeleteBtn.disabled = (!items.length && !facebookDeleteRunning) || !!clickStatus.running || !!facebookStatus.stop_requested;
       if (facebookDeleteRunning) {
@@ -535,9 +537,10 @@
     }
   });
   async function selectedIds() {
-    const ids = [...document.querySelectorAll('.listing-check:checked')].map(box => box.value);
+    const ids = [...selectedListingIds];
     if (!ids.length) {
       localStatusMessage = 'Select at least one listing.';
+      window.appNotify(localStatusMessage, 'failed');
       return null;
     }
     return ids;
@@ -569,15 +572,23 @@
     }
     const ids = await selectedIds();
     if (!ids) return;
-    const response = await appFetch('{{ url_for("web.delete_listings_delete") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids})});
-    const data = await response.json();
-    localStatusMessage = data.message || (data.ok ? 'Delete completed.' : 'Delete request failed.');
-    leaveSelectionMode();
-    if (data.ok) {
-      facebookDeleteRunning = true;
-      button.innerHTML = '<span class="button-operation-spinner" aria-hidden="true"></span>Stop Delete';
+    button.disabled = true;
+    button.innerHTML = '<span class="button-operation-spinner" aria-hidden="true"></span>Starting Delete...';
+    try {
+      const titles = Object.fromEntries(ids.map(id => [id, selectionTitles.get(id) || 'Listing no longer available']));
+      const response = await appFetch('{{ url_for("web.delete_listings_delete") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids, account:activeAccount, selection_titles:titles})});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.message || 'Delete request failed.');
+      leaveSelectionMode();
+      try { sessionStorage.setItem('app-next-notice', JSON.stringify({text:'Your listings are being deleted from Facebook. Follow the results here.', kind:'info'})); } catch (_) {}
+      window.location.href = '{{ url_for("web.delete_results_page") }}';
+    } catch (error) {
+      localStatusMessage = error.message || 'Delete request failed.';
+      button.disabled = false;
+      button.textContent = 'Delete from Facebook';
+      leaveSelectionMode();
+      poll();
     }
-    poll();
   }
   if (facebookDeleteBtn) facebookDeleteBtn.addEventListener('click', () => runFacebookDelete(facebookDeleteBtn));
   if (crossPostBtn) crossPostBtn.addEventListener('click', () => beginListingAction('facebook_cross'));
@@ -607,6 +618,7 @@
   delayUnit.addEventListener('change', () => { delayValue.max = {minutes:59,hours:24,days:365}[delayUnit.value]; });
   crossForm.addEventListener('submit', async event => {
     event.preventDefault();
+    const postingRequestedAt = window.postingTiming.forSubmit(crossForm);
     const targets = [...crossForm.querySelectorAll('[name=cross_account]:checked')].map(input => input.value);
     const errorBox = document.getElementById('manage-cross-error');
     if (postingAction !== 'facebook_repost' && !targets.length) { errorBox.textContent = 'Select at least one target account.'; return; }
@@ -618,6 +630,8 @@
     try {
       const listingIds = ((window.__lastDeleteData || {}).listings || []).filter(item => selectedListingIds.has(String(item.id)) && Boolean(item.facebook_present === false || (item.source_deleted && !item.facebook_reposted)) === (postingAction === 'backup_accounts')).map(item => String(item.id));
       if (!listingIds.length) throw new Error('Select at least one listing.');
+      const missingColors = ((window.__lastDeleteData || {}).listings || []).find(item => listingIds.includes(String(item.id)) && (!String((item.details || {}).exterior_color || '').trim() || !String((item.details || {}).interior_color || '').trim()));
+      if (missingColors) throw new Error(`Open View for ${[missingColors.year, missingColors.make, missingColors.model].filter(Boolean).join(' ') || 'the listing'}, edit and save both colors before posting.`);
       for (const id of listingIds) {
         const listing = ((window.__lastDeleteData || {}).listings || []).find(item => String(item.id) === id);
         if (!listing) throw new Error('A selected listing is no longer available. Refresh and try again.');
@@ -629,7 +643,7 @@
         const response = await appFetch(endpoint, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
           account:activeAccount, listing_id:id, target_accounts:targets, fields:prefs.fields || {}, image_order:order,
           post_mode:'schedule', delay_value:Number(delayValue.value), delay_unit:delayUnit.value, backup_post:postingAction === 'backup_accounts', mass_post:true,
-          schedule_batch:scheduleBatch, schedule_position:queued
+          schedule_batch:scheduleBatch, schedule_position:queued, posting_requested_at_ms:postingRequestedAt
         })});
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.message || 'Could not queue posting.');

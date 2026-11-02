@@ -1,12 +1,18 @@
 from automation.responsiveness import AppBusyError, RequestLock
 from automation.diagnostics import event as diagnostic_event
+from automation.github_reports import begin_log_capture, collect_logs, media_summary, submit_failure
+from automation.posting_timing import request_origin, complete_posting, duration_fields
 from automation.listing_videos import saved_paths as saved_video_paths
 from flask import Blueprint, current_app, render_template, request, redirect, url_for, session, jsonify, send_from_directory, Response
 import copy
+import base64
+import hashlib
+import io
 import sqlite3
 import sys
 from automation.fb_login import MAX_ACCOUNTS
 from automation.cdp_login import cleanup_expired_cdp_logins, cleanup_orphaned_cdp_accounts, close_cdp_browser, delete_cdp_account, get_cdp_account, list_cdp_accounts, start_cdp_login
+from automation import account_browser
 from automation.remote_login import (
     cleanup_finished_remote_login_sessions,
     create_remote_login_session,
@@ -16,9 +22,12 @@ from automation.auto_listing_excel_poster import read_excel_flexible, post_to_fb
 from automation.reposting import _normalize_price, _extract_listing_id, validate_repost_fields, REPOST_REQUIRED_FIELDS
 from automation.delete_listing_import import (
       ListingImportCancelled,
+      NoActiveListings,
       delete_selected_listings_from_facebook,
       import_listings_from_facebook,
       refresh_listing_clicks_from_facebook,
+      listing_click_refresh_total,
+      clean_imported_listing_fields,
       stop_listing_import_driver,
       stop_listing_delete_driver,
       load_listings,
@@ -31,6 +40,7 @@ import re
 import tempfile
 import pandas as pd
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from apscheduler.schedulers.background import BackgroundScheduler
 import json
 import threading
@@ -40,10 +50,11 @@ from urllib.parse import urlparse
 from uuid import uuid4
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
+from PIL import Image, ImageOps
 from automation.runtime_paths import activity_log_path, runtime_log_path, sessions_dir, screenshots_dir, data_dir, project_root
 import time
 from automation.browser_settings import set_run_in_background_enabled
-from automation.listing_store import save_preferences, update_fields as update_listing_fields, remove as remove_listing_backups, mark_import_complete
+from automation.listing_store import save_preferences, save_listing_details, update_fields as update_listing_fields, remove as remove_listing_backups, mark_import_complete, clear_facebook as clear_imported_facebook_listings, is_backup as is_listing_backup
 from automation.session_health import (
     cancel_session_check,
     ensure_default_healthy,
@@ -87,13 +98,14 @@ def _busy_response():
     return Response(html, status=503, mimetype='text/html', headers={'Retry-After': '2'})
 
 
-# Keep group automation available internally while hiding its UI.
-GROUP_UI_ENABLED = False
+# Expose group posting and group management in the interface.
+GROUP_UI_ENABLED = True
 
 
 @web_bp.app_context_processor
 def group_ui_visibility():
-    return {'group_ui_enabled': GROUP_UI_ENABLED}
+    return {'group_ui_enabled': GROUP_UI_ENABLED,
+            'desktop_mode': os.getenv('FB_AUTOMATION_DESKTOP') == '1'}
 
 
 DESKTOP_MODE = os.getenv("FB_AUTOMATION_DESKTOP") == "1"
@@ -132,6 +144,12 @@ RUNTIME_LOG_PATH = runtime_log_path()
 # =========================
 # Helpers
 # =========================
+def _request_posting_origin(data=None):
+    received_at = time.time()
+    payload = request.form if data is None else data
+    return request_origin(payload.get('posting_requested_at_ms'), received_at)
+
+
 def email_to_filename(email):
     return re.sub(r"[\\/:*?\"<>|]", "_", email) + ".pkl"
 
@@ -290,6 +308,7 @@ def _account_page_context(accounts=None):
         "account_health": health,
         "session_check": get_session_check_snapshot(),
         "cdp_accounts": list_cdp_accounts(),
+        "desktop_mode": DESKTOP_MODE,
     }
 
  
@@ -337,6 +356,109 @@ def _runtime_log(message):
 def screenshot_file(filename):
     folder = screenshots_dir()
     return send_from_directory(folder, filename, as_attachment=False)
+
+
+def _posting_thumbnail_dir():
+    return Path(data_dir("posting_thumbnails")).resolve()
+
+
+def _posting_image_candidates(post_data=None, image_paths=None):
+    post_data = post_data if isinstance(post_data, dict) else {}
+    values = [post_data.get(f"image_path{index}") for index in range(1, 21)]
+    image_urls = post_data.get("image_urls") or []
+    if isinstance(image_urls, (list, tuple)):
+        values.extend(image_urls)
+    elif isinstance(image_urls, str):
+        values.append(image_urls)
+    if isinstance(image_paths, (list, tuple)):
+        values.extend(image_paths)
+    elif isinstance(image_paths, str):
+        values.append(image_paths)
+    return [str(value or "").strip() for value in values if str(value or "").strip()]
+
+
+def _save_posting_thumbnail(job_id, post_data=None, image_paths=None):
+    """Save a small app-owned thumbnail for a posting result row."""
+    for source in _posting_image_candidates(post_data, image_paths):
+        parsed = urlparse(source)
+        if parsed.scheme in {"http", "https"} and parsed.hostname and not parsed.username and not parsed.password:
+            return {"thumbnail_remote_url": source}
+        try:
+            if source.startswith("data:image/") and "," in source:
+                image_bytes = base64.b64decode(source.split(",", 1)[1], validate=True)
+                image = Image.open(io.BytesIO(image_bytes))
+            elif os.path.isfile(source):
+                image = Image.open(source)
+            else:
+                continue
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail((480, 360), Image.Resampling.LANCZOS)
+            if image.mode != "RGB":
+                if "A" in image.getbands():
+                    rgba = image.convert("RGBA")
+                    background = Image.new("RGB", rgba.size, "white")
+                    background.paste(rgba, mask=rgba.getchannel("A"))
+                    image = background
+                else:
+                    image = image.convert("RGB")
+            thumbnail_dir = _posting_thumbnail_dir()
+            filename = hashlib.sha256(str(job_id).encode("utf-8")).hexdigest() + ".jpg"
+            target = thumbnail_dir / filename
+            image.save(target, format="JPEG", quality=82, optimize=True)
+            image.close()
+            return {"thumbnail_path": str(target)}
+        except Exception:
+            continue
+    return {}
+
+
+def _remove_posting_thumbnail(meta):
+    path_value = (meta or {}).get("thumbnail_path")
+    if not path_value:
+        return
+    try:
+        root = _posting_thumbnail_dir()
+        candidate = Path(path_value).resolve()
+        if candidate.parent == root and candidate.suffix.lower() == ".jpg":
+            candidate.unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
+
+
+def _posting_thumbnail_url(job_id, meta, account):
+    owners = {meta.get("account"), meta.get("source_account")}
+    if account not in owners or account in set(meta.get("results_cleared_for") or []):
+        return ""
+    if meta.get("thumbnail_remote_url"):
+        source = str(meta["thumbnail_remote_url"])
+        parsed = urlparse(source)
+        if parsed.scheme in {"http", "https"} and parsed.hostname and not parsed.username and not parsed.password:
+            return source
+    if meta.get("thumbnail_path"):
+        return url_for("web.posting_result_thumbnail", job_id=job_id)
+    return ""
+
+
+@web_bp.route("/post_schedular/thumbnail/<job_id>", methods=["GET"])
+def posting_result_thumbnail(job_id):
+    account = get_active_account()
+    with scheduled_posts_lock:
+        meta = dict(scheduled_posts.get(job_id) or {})
+    if not account or account not in {meta.get("account"), meta.get("source_account")}:
+        return "", 404
+    if account in set(meta.get("results_cleared_for") or []):
+        return "", 404
+    path_value = meta.get("thumbnail_path")
+    if not path_value:
+        return "", 404
+    try:
+        root = _posting_thumbnail_dir()
+        candidate = Path(path_value).resolve()
+        if candidate.parent != root or candidate.suffix.lower() != ".jpg" or not candidate.is_file():
+            return "", 404
+        return send_from_directory(str(root), candidate.name, mimetype="image/jpeg", conditional=True)
+    except (OSError, ValueError):
+        return "", 404
 
 
 def _normalize_header(value):
@@ -506,6 +628,7 @@ def _register_repost_job(job_id, account, listing, run_at, delay_value, delay_un
             "created_at": datetime.now(),
             "started_at": None,
             "finished_at": None,
+            "posting_requested_at": listing.get('_posting_requested_at'),
         }
 
 def _collect_repost_schedule(active_account):
@@ -612,7 +735,7 @@ def _save_repost_history(items):
     os.replace(temp_path, path)
 
 
-def _record_repost_history(account, listing, status, error=""):
+def _record_repost_history(account, listing, status, error="", timing_meta=None):
     listing = listing if isinstance(listing, dict) else {}
     title = " ".join(
         str(listing.get(field) or "").strip()
@@ -627,6 +750,7 @@ def _record_repost_history(account, listing, status, error=""):
         "status": "reposted" if status == "reposted" else "failed",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "error": str(error or "").strip(),
+        **duration_fields(timing_meta or {}, status='reposted' if status == 'reposted' else 'failed'),
     }
     with repost_history_lock:
         items = _load_repost_history()
@@ -638,14 +762,25 @@ def _collect_repost_history(account):
     if not account:
         return []
     with repost_history_lock:
-        return [
-            item for item in _load_repost_history()
-            if item.get("account") == account
-        ]
+        items = []
+        for original in _load_repost_history():
+            if original.get('account') != account:
+                continue
+            item = dict(original)
+            item.pop('posting_duration_seconds', None)
+            item.pop('posting_duration_text', None)
+            item.update(duration_fields(original))
+            items.append(item)
+        return items
 
 
 @cancellable
 def _run_saved_listing_repost(listing, account, job_id=None):
+    report_log_cursor = begin_log_capture()
+    report_data = dict(listing.get('details') or {})
+    report_data.update({key: value for key, value in listing.items() if key not in {'details', 'downloaded_images', 'downloaded_videos'}})
+    report_data['photos'] = [photo.get('name') for photo in listing.get('downloaded_images') or []]
+    report_data['videos'] = [video.get('name') for video in listing.get('downloaded_videos') or []]
     if job_id:
         with repost_jobs_lock:
             meta = repost_jobs.get(job_id)
@@ -767,22 +902,34 @@ def _run_saved_listing_repost(listing, account, job_id=None):
                     if job_id in repost_jobs:
                         repost_jobs[job_id]["status"] = "done"
                         repost_jobs[job_id]["finished_at"] = datetime.now()
+                        complete_posting(repost_jobs[job_id], True)
+                    timing_meta = dict(repost_jobs.get(job_id) or {})
+            else:
+                timing_meta = {}
             _runtime_log(
                 f"[Reposting] Completed job={job_id or '-'} account={account} listing={listing.get('id') if isinstance(listing, dict) else '-'}"
             )
-            _record_repost_history(account, listing, "reposted")
+            _record_repost_history(account, listing, "reposted", timing_meta=timing_meta)
         except Exception as e:
             if job_id:
                 with repost_jobs_lock:
                     if job_id in repost_jobs:
                         repost_jobs[job_id]["status"] = "failed"
                         repost_jobs[job_id]["finished_at"] = datetime.now()
+                        complete_posting(repost_jobs[job_id], False)
             _runtime_log(
                 f"[Reposting] Failed job={job_id or '-'} account={account} listing={listing.get('id') if isinstance(listing, dict) else '-'} | {e}"
             )
             diagnostic_event("REPOST", "FAILED", account=account, listing_id=listing.get("id"), error=str(e))
             _record_repost_history(account, listing, "failed", error=e)
             update_listing_fields(account, str(listing.get('id') or ''), {'repost_status': 'failed', 'repost_error': str(e)})
+            submit_failure('Repost', account, listing.get('title') or ' '.join(str(listing.get(field) or '') for field in ('year','make','model')).strip(),
+                           e, report_data, collect_logs(report_log_cursor),
+                           {'listing_id': listing.get('id'), 'job_id': job_id},
+                           {'photo_count': len(listing.get('downloaded_images') or []),
+                            'video_count': len(listing.get('downloaded_videos') or []),
+                            'photos': [photo.get('name','') for photo in listing.get('downloaded_images') or []],
+                            'videos': [video.get('name','') for video in listing.get('downloaded_videos') or []]})
 
 
 activity_log = _load_activity_log()
@@ -851,6 +998,7 @@ def _get_delete_job_snapshot(account):
 
 
 def _run_delete_job(account, limit, status_filter):
+    report_log_cursor = begin_log_capture()
     try:
         # Reuse per-account automation lock to avoid parallel browser actions
         # for the same account across posting/reposting/delete flows.
@@ -876,6 +1024,9 @@ def _run_delete_job(account, limit, status_filter):
                 reference=f"Status {status_filter}",
                 details=f"Limit {limit}"
             )
+            submit_failure('Facebook listing cleanup', account, f'Status {status_filter}',
+                           'Facebook listing cleanup returned failure.',
+                           {'limit': limit, 'status_filter': status_filter}, collect_logs(report_log_cursor))
     except Exception as e:
         tb_text = traceback.format_exc()
         _log_event(
@@ -886,17 +1037,25 @@ def _run_delete_job(account, limit, status_filter):
             details=f"Limit {limit}; Error {e}",
             tb_text=tb_text
         )
+        submit_failure('Facebook listing cleanup', account, f'Status {status_filter}', e,
+                       {'limit': limit, 'status_filter': status_filter}, collect_logs(report_log_cursor),
+                       {'traceback': tb_text})
     finally:
         _mark_delete_job_done(account)
 
 
 @cancellable
 def _post_single_listing(post_data, account, job_id=None):
+    report_log_cursor = begin_log_capture()
+    diagnostic_event('SCHEDULED_POST', 'START', account=account, job_id=job_id,
+                     title=(post_data or {}).get('title'))
     account_post_lock = _get_post_lock(account)
     if job_id:
         with scheduled_posts_lock:
             meta = scheduled_posts.get(job_id)
             if not meta or meta.get("status") != "pending":
+                diagnostic_event('SCHEDULED_POST', 'SKIPPED', account=account, job_id=job_id,
+                                 reason='Job was no longer pending')
                 return
     try:
         with account_post_lock:
@@ -929,6 +1088,7 @@ def _post_single_listing(post_data, account, job_id=None):
                 if job_id in scheduled_posts:
                     scheduled_posts[job_id]["status"] = "posted" if result else "failed"
                     scheduled_posts[job_id]["posted_at"] = datetime.now()
+                    complete_posting(scheduled_posts[job_id], bool(result))
         status = "success" if result else "failed"
         title = (post_data or {}).get("title") or "Untitled"
         _log_event(
@@ -939,8 +1099,15 @@ def _post_single_listing(post_data, account, job_id=None):
             details=f"Job {job_id}" if job_id else ""
         )
         _runtime_log(f"[AutoListing] End job={job_id or '-'} status={status}")
+        diagnostic_event('SCHEDULED_POST', 'POSTED' if result else 'FAILED', account=account,
+                         job_id=job_id, title=title,
+                         error='' if result else 'Publish step did not return success')
+        if not result:
+            submit_failure('Marketplace post', account, title, 'Publish step did not return success',
+                           post_data, collect_logs(report_log_cursor), {'job_id': job_id, 'post_mode': post_mode},
+                           media_summary(post_data))
         return bool(result)
-    except Exception:
+    except Exception as exc:
         tb_text = traceback.format_exc()
         traceback.print_exc()
         _runtime_log(f"[AutoListing] Exception job={job_id or '-'} account={account}: {tb_text}")
@@ -949,6 +1116,7 @@ def _post_single_listing(post_data, account, job_id=None):
                 if job_id in scheduled_posts:
                     scheduled_posts[job_id]["status"] = "failed"
                     scheduled_posts[job_id]["posted_at"] = datetime.now()
+                    complete_posting(scheduled_posts[job_id], False)
         title = (post_data or {}).get("title") or "Untitled"
         _log_event(
             event_type="post_listing",
@@ -958,6 +1126,10 @@ def _post_single_listing(post_data, account, job_id=None):
             details=f"Job {job_id}" if job_id else "",
             tb_text=tb_text
         )
+        diagnostic_event('SCHEDULED_POST', 'FAILED', account=account, job_id=job_id,
+                         title=title, error_type=type(exc).__name__, error=str(exc))
+        submit_failure('Marketplace post', account, title, exc, post_data, collect_logs(report_log_cursor),
+                       {'job_id': job_id, 'traceback': tb_text}, media_summary(post_data))
         return False
 
 
@@ -965,6 +1137,7 @@ def _register_scheduled_post(job_id, account, post_data, run_at, platform="faceb
     post_payload = post_data if isinstance(post_data, dict) else {}
     title = post_payload.get("title") or "Untitled"
     make = post_payload.get("make") or ""
+    thumbnail_fields = _save_posting_thumbnail(job_id, post_payload)
     with scheduled_posts_lock:
         scheduled_posts[job_id] = {
             "job_id": job_id,
@@ -976,8 +1149,11 @@ def _register_scheduled_post(job_id, account, post_data, run_at, platform="faceb
             "status": "pending",
             "created_at": datetime.now(),
             "started_at": None,
-            "posted_at": None
+            "posted_at": None,
+            **thumbnail_fields,
         }
+        if post_payload.get('_posting_requested_at') is not None:
+            scheduled_posts[job_id]['posting_requested_at'] = post_payload['_posting_requested_at']
 
     if DESKTOP_MODE:
         from automation.desktop_state import checkpoint
@@ -1016,6 +1192,11 @@ def _collect_account_schedule(active_account):
                 job.next_run_time or now,
                 platform="facebook",
             )
+        elif not known_meta.get("thumbnail_path") and not known_meta.get("thumbnail_remote_url"):
+            thumbnail_fields = _save_posting_thumbnail(job.id, post_data)
+            if thumbnail_fields:
+                with scheduled_posts_lock:
+                    scheduled_posts.setdefault(job.id, {}).update(thumbnail_fields)
 
         with scheduled_posts_lock:
             job_meta = dict(scheduled_posts.get(job.id, {}))
@@ -1079,7 +1260,7 @@ def _collect_account_schedule(active_account):
             "title": meta.get("title", "Untitled"),
             "make": meta.get("make", ""),
             "platform": "facebook",
-            "source": "Manual / Excel",
+            "source": meta.get('source', "Manual / Excel"),
             "status": meta_status,
             "run_at": run_at,
             "error": meta.get('error', ''),
@@ -1100,6 +1281,16 @@ def _collect_account_schedule(active_account):
     metadata = dict(scheduled_snapshot)
     for item in items:
         meta = metadata.get(item['job_id'], {})
+        if not meta.get("thumbnail_path") and not meta.get("thumbnail_remote_url"):
+            snapshot = meta.get("listing_snapshot") or {}
+            photo_paths = [photo.get("path") for photo in (snapshot.get("downloaded_images") or [])
+                           if isinstance(photo, dict) and photo.get("path")]
+            thumbnail_fields = _save_posting_thumbnail(
+                item['job_id'], meta.get("post_data"), image_paths=photo_paths)
+            if thumbnail_fields:
+                meta.update(thumbnail_fields)
+                with scheduled_posts_lock:
+                    scheduled_posts.setdefault(item['job_id'], {}).update(thumbnail_fields)
         status = item['status']
         event_key, label = {'posted': ('posted_at', 'Posted'), 'failed': ('posted_at', 'Failed'),
                             'posting': ('started_at', 'Started')}.get(status, ('run_at', 'Scheduled'))
@@ -1110,6 +1301,8 @@ def _collect_account_schedule(active_account):
         item.update(time_label=label, time_clock=local.strftime('%I:%M:%S %p').lstrip('0'),
                     time_date=local.strftime('%d %b %Y'), time_zone=local.tzname() or 'Local time',
                     time_iso=local.isoformat(timespec='seconds'))
+        item.update(duration_fields(meta, status=status))
+        item['thumbnail_url'] = _posting_thumbnail_url(item['job_id'], meta, active_account)
         # A far-future schedule should not push a freshly completed result down.
         activity_at = meta.get('posted_at') or meta.get('started_at') or meta.get('created_at') or item['run_at']
         item['_activity_timestamp'] = activity_at.timestamp()
@@ -1607,6 +1800,7 @@ def groups_delete():
 
 @web_bp.route("/posting_in_groups", methods=["GET", "POST"])
 def posting_in_groups_page():
+    posting_requested_at = _request_posting_origin() if request.method == 'POST' else None
     if request.method == 'GET' and not GROUP_UI_ENABLED:
         return redirect(url_for('web.settings_page'))
     accounts = get_all_accounts()
@@ -1706,9 +1900,19 @@ def posting_in_groups_page():
                 active_page="posting_in_groups",
             )
 
+        group_job_id = 'groups_' + uuid4().hex
+        thumbnail_fields = _save_posting_thumbnail(group_job_id, image_paths=saved_image_paths)
+        _register_scheduled_post(group_job_id, active_account,
+                                 {'title': f'Group posting to {len(group_links)} group(s)',
+                                  '_posting_requested_at': posting_requested_at}, datetime.now())
+        with scheduled_posts_lock:
+            scheduled_posts[group_job_id].update(source='Group posting', status='waiting', **thumbnail_fields)
+
         def _run_group_posting():
             try:
                 with _get_post_lock(active_account):
+                    with scheduled_posts_lock:
+                        scheduled_posts[group_job_id].update(status='posting', started_at=datetime.now())
                     result = post_anonymous_group_posts(
                         active_account,
                         group_links,
@@ -1717,8 +1921,19 @@ def posting_in_groups_page():
                         delay_seconds=delay_seconds,
                         progress_callback=lambda msg: _runtime_log(msg),
                     )
+                with scheduled_posts_lock:
+                    meta = scheduled_posts[group_job_id]
+                    success = bool(result.get('ok'))
+                    meta.update(status='posted' if success else 'failed', posted_at=datetime.now(),
+                                error='' if int(result.get('posted') or 0) == int(result.get('total') or 0)
+                                else str(result.get('message') or 'Some group posts failed.'))
+                    complete_posting(meta, success)
                 _runtime_log(f"[GroupPosting] {result.get('message')}")
             except Exception as exc:
+                with scheduled_posts_lock:
+                    meta = scheduled_posts[group_job_id]
+                    meta.update(status='failed', posted_at=datetime.now(), error=str(exc))
+                    complete_posting(meta, False)
                 _runtime_log(f"[GroupPosting] Failed: {exc}")
 
         threading.Thread(target=_run_group_posting, daemon=True).start()
@@ -1842,6 +2057,7 @@ def reposting_history_clear():
 def settings_page():
     from automation.desktop_preferences import load
     from automation.app_updates import config
+    from automation.github_reports import status as github_report_status
     active_account = get_active_account()
     return render_template(
         "settings.html",
@@ -1852,7 +2068,38 @@ def settings_page():
         desktop_preferences=load(),
         app_version=config()["version"],
         auto_listing_running=any(_is_auto_listing_running_for_account(account) for account in get_all_accounts()),
+        github_report_status=github_report_status(),
     )
+
+
+@web_bp.route('/settings/github_reports/status')
+def github_reports_status():
+    from automation.github_reports import status
+    return jsonify(status())
+
+
+@web_bp.route('/settings/github_reports/connect', methods=['POST'])
+def github_reports_connect():
+    from automation.github_reports import connect
+    payload, code = connect()
+    return jsonify(payload), code
+
+
+@web_bp.route('/settings/github_reports/config', methods=['POST'])
+def github_reports_config():
+    from automation.github_reports import save_settings
+    data = request.get_json(silent=True) or {}
+    try:
+        state = save_settings(data.get('repository'), data.get('client_id'))
+    except ValueError as exc:
+        return jsonify(ok=False, message=str(exc)), 400
+    return jsonify(ok=True, **state)
+
+
+@web_bp.route('/settings/github_reports/disconnect', methods=['POST'])
+def github_reports_disconnect():
+    from automation.github_reports import disconnect
+    return jsonify(ok=True, **disconnect())
 
 
 @web_bp.route('/settings/terminal')
@@ -1923,6 +2170,54 @@ def info_page():
 # -------------------------
 # Account management
 # -------------------------
+
+@web_bp.route('/account/browser')
+def account_browser_page():
+    if os.environ.get('FB_AUTOMATION_DESKTOP') != '1':
+        return 'Account Browser is available in the Windows desktop app only.', 404
+    return render_template('account_browser.html', accounts=get_all_accounts(),
+                           active_account=get_active_account(), active_page='account_browser',
+                           browser_state=account_browser.status())
+
+
+@web_bp.route('/account/browser/status')
+def account_browser_status():
+    return jsonify(account_browser.status())
+
+
+@web_bp.route('/account/browser/open', methods=['POST'])
+def account_browser_open():
+    account = str((request.get_json(silent=True) or {}).get('account') or '').strip()
+    if account not in get_all_accounts():
+        return jsonify(ok=False, message='Saved account not found.'), 404
+    try:
+        return jsonify(ok=True, **account_browser.open_account(account))
+    except (ValueError, RuntimeError) as exc:
+        return jsonify(ok=False, message=str(exc)), 409
+
+
+@web_bp.route('/account/browser/stop', methods=['POST'])
+def account_browser_stop():
+    try:
+        return jsonify(ok=True, **account_browser.stop())
+    except RuntimeError as exc:
+        return jsonify(ok=False, message=str(exc)), 409
+
+
+@web_bp.route('/account/browser/layout', methods=['POST'])
+def account_browser_layout():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(ok=True, **account_browser.layout(payload.get('x'), payload.get('y'),
+                                                       payload.get('width'), payload.get('height'),
+                                                       payload.get('viewport_width'), payload.get('viewport_height')))
+    except (ValueError, RuntimeError) as exc:
+        return jsonify(ok=False, message=str(exc)), 409
+
+
+@web_bp.route('/account/browser/hide', methods=['POST'])
+def account_browser_hide():
+    return jsonify(ok=True, **account_browser.hide())
 
 @web_bp.route("/account", methods=["GET", "POST"])
 def account_page():
@@ -2098,6 +2393,12 @@ def delete_account():
     account_email = request.form.get("account")
     if not account_email:
         return "No account specified", 400
+
+    if account_browser.status().get('account') == account_email:
+        try:
+            account_browser.stop()
+        except RuntimeError as exc:
+            return str(exc), 409
 
     session_file = os.path.join(SESSION_DIR, email_to_filename(account_email))
 
@@ -2293,6 +2594,7 @@ def auto_listing_excel():
 
 @web_bp.route("/auto_listing_excel", methods=["POST"])
 def auto_listing_excel_post():
+    posting_requested_at = _request_posting_origin()
     accounts = get_all_accounts()
     active_account = get_active_account()
     auto_listing_running = _is_auto_listing_running_for_account(active_account)
@@ -2394,10 +2696,15 @@ def auto_listing_excel_post():
         if not post_data_list:
             raise Exception("Excel file is empty or invalid")
 
+        for index, post_data in enumerate(post_data_list, start=2):
+            if any(not str(post_data.get(key) or '').strip() for key in ('exterior_color', 'interior_color')):
+                raise ValueError(f'Excel row {index}: exterior and interior colors are required for posting.')
+
         total_posts = len(post_data_list)
         batch_time = datetime.now()
 
         for index, post_data in enumerate(post_data_list, start=1):
+            post_data['_posting_requested_at'] = posting_requested_at
             run_at = batch_time + timedelta(seconds=delay_seconds * index)
             safe_account = re.sub(r"[^a-zA-Z0-9_]+", "_", active_account or "account")
             job_id = f"excel_{safe_account}_{int(batch_time.timestamp())}_{index}_{uuid4().hex[:8]}"
@@ -2468,6 +2775,7 @@ def auto_listing_manual():
 
 @web_bp.route("/auto_listing_manual", methods=["POST"])
 def auto_listing_manual_post():
+    posting_requested_at = _request_posting_origin()
     accounts = get_all_accounts()
     active_account = get_active_account()
     groups_payload = load_groups(active_account) if active_account else {"groups": []}
@@ -2565,6 +2873,9 @@ def auto_listing_manual_post():
         return _render_manual("Price is required.", "failed")
 
     post_data = _build_manual_post_data(request.form)
+    if not save_template and post_action != 'group' and any(not str(post_data.get(key) or '').strip() for key in ('exterior_color', 'interior_color')):
+        return _render_manual('Select both exterior and interior colors before posting.', 'failed')
+    post_data['_posting_requested_at'] = posting_requested_at
     mandatory = ['vehicle_type', 'year', 'make', 'model', 'mileage', 'price']
     if post_data['vehicle_type'].casefold() == 'car':
         mandatory.append('body_style')
@@ -2745,6 +3056,8 @@ def post_schedular_data():
             "run_at": item["run_at"].strftime("%Y-%m-%d %H:%M:%S"),
             "remaining_seconds": item["remaining_seconds"],
             **{key: item[key] for key in ('time_label', 'time_clock', 'time_date', 'time_zone', 'time_iso')},
+            **{key: item[key] for key in ('posting_duration_seconds', 'posting_duration_text') if key in item},
+            'thumbnail_url': item.get('thumbnail_url', ''),
         })
 
     return jsonify({
@@ -2755,6 +3068,24 @@ def post_schedular_data():
         "next_run_label": schedule_data["next_run_label"],
         "items": items_payload,
     })
+
+
+@web_bp.route('/delete_results', methods=['GET'])
+def delete_results_page():
+    account = get_active_account()
+    with facebook_delete_jobs_lock:
+        job = copy.deepcopy(facebook_delete_jobs.get(account) or {}) if account else {}
+    items = sorted(job.get('items') or [], key=lambda item: item.get('position', 0))
+    return render_template('delete_results.html', accounts=get_all_accounts(), active_account=account,
+                           active_page='delete_results', delete_job=job, delete_items=items)
+
+
+@web_bp.route('/delete_results/data', methods=['GET'])
+def delete_results_data():
+    account = get_active_account()
+    with facebook_delete_jobs_lock:
+        job = copy.deepcopy(facebook_delete_jobs.get(account) or {}) if account else {}
+    return jsonify(ok=True, account=account, job=job)
 
 @web_bp.route('/post_schedular/clear_results', methods=['POST'])
 def clear_posting_results():
@@ -2777,7 +3108,8 @@ def clear_posting_results():
             cleared += 1
             hidden.add(account)
             if owners <= hidden:
-                scheduled_posts.pop(job_id)
+                removed = scheduled_posts.pop(job_id)
+                _remove_posting_thumbnail(removed)
             else:
                 # A cross-post is visible to two accounts. Clearing the source
                 # must not remove the target account's result (or vice versa).
@@ -2821,6 +3153,7 @@ def post_schedular_delete():
         if job_id in scheduled_posts:
             scheduled_posts[job_id]["status"] = "deleted"
             scheduled_posts[job_id]["deleted_at"] = datetime.now()
+    _remove_posting_thumbnail(job_meta)
     if job_meta.get('source') != 'Cross posting':
         try:
             scheduler.remove_job(job_id)
@@ -2877,6 +3210,7 @@ def _render_delete_listings_page(message=None, message_type=None, *, backups_pag
     active_account = get_active_account()
     stored = (load_listings(active_account) if active_account else None) or {"listings": [], "updated_at": None}
     listings = _ordered_manage_listings([item for item in (stored.get("listings") or []) if isinstance(item, dict)])
+    listings = [clean_imported_listing_fields(item) for item in listings]
     listings = [item for item in listings if bool(item.get('facebook_present') is False or (item.get('source_deleted') and not item.get('facebook_reposted'))) == backups_page]
     for listing in listings:
         listing['display_status'] = _repost_listing_status(active_account, listing)
@@ -2927,16 +3261,18 @@ def _start_listing_import_job(account, automatic=False):
     if _active_repost_listing_ids(account):
         return False, "Wait for scheduled reposting to finish."
     existing_total = len(load_listings(account).get("listings") or [])
+    report_log_cursor = begin_log_capture()
     with listing_import_jobs_lock:
         current = listing_import_jobs.get(account) or {}
         if automatic and current.get('stop_requested'):
             return False, 'Automatic import paused after Stop Import. Start a manual import to resume.'
-        if current.get("running"):
-            return True, "Import listings started."
+        if current.get("running") or current.get("stopping"):
+            return False, "An import for this account is already running or still cleaning up. Wait for it to finish."
         stop_event = threading.Event()
         listing_import_cancel_events[account] = stop_event
         listing_import_jobs[account] = {
             "running": True,
+            "stopping": False,
             "started_at": time.time(),
             "finished_at": None,
             "new_count": 0,
@@ -2947,21 +3283,35 @@ def _start_listing_import_job(account, automatic=False):
         }
 
     def _progress(event):
+        if event.get('failure'):
+            submit_failure('Listing import', account, event.get('title') or event.get('listing_id') or 'Listing',
+                           event.get('error') or 'Listing import needs review.', event.get('data') or {},
+                           collect_logs(report_log_cursor),
+                           {'listing_id': event.get('listing_id'), 'import_message': event.get('message')},
+                           {'photo_count': event.get('photo_count', 0), 'video_count': event.get('video_count', 0),
+                            'photos': event.get('photos') or [], 'videos': event.get('videos') or []})
         with listing_import_jobs_lock:
             job = listing_import_jobs.get(account) or {}
             if job.get('stop_requested'):
                 return
-            job["new_count"] = int(event.get("new_count") or 0)
-            job["total_count"] = int(event.get("total_count") or 0)
+            if 'new_count' in event:
+                job["new_count"] = int(event.get("new_count") or 0)
+            if 'total_count' in event:
+                job["total_count"] = int(event.get("total_count") or 0)
             job["message"] = event.get("message") or job.get("message")
             listing_import_jobs[account] = job
 
     def _runner():
+        previous_listings = None
         try:
-            # Imports merge into the backup collection; absent sources stay saved.
             with _listing_import_account_lock(account, stop_event):
                 if stop_event.is_set():
                     raise ListingImportCancelled()
+                # A manual import is a fresh Facebook snapshot. Preserve a copy
+                # so a failed or cancelled import can restore the prior view.
+                previous_listings = load_listings(account).get("listings") or []
+                cleared_count = clear_imported_facebook_listings(account)
+                _runtime_log(f"[DeleteListings] Fresh import cleared {cleared_count} saved Facebook listing(s) account={account}; shared backups kept.")
                 import_listings_from_facebook(
                     account,
                     stop_event=stop_event,
@@ -2986,30 +3336,62 @@ def _start_listing_import_job(account, automatic=False):
                     "message": "Automatic listing refresh complete." if automatic else "Listing import complete.",
                 })
                 listing_import_jobs[account] = job
+        except NoActiveListings:
+            message = f'There are currently 0 active listings on account {account}.'
+            mark_import_complete(account)
+            with listing_import_jobs_lock:
+                job = listing_import_jobs.get(account) or {}
+                job.update({'message': message, 'error': message,
+                            'total_count': len(load_listings(account).get('listings') or [])})
+                listing_import_jobs[account] = job
         except ListingImportCancelled:
+            if previous_listings is not None:
+                try:
+                    save_listings(account, previous_listings)
+                    _runtime_log(f"[DeleteListings] Restored prior listing snapshot after cancelled import account={account}.")
+                except Exception as restore_exc:
+                    _runtime_log(f"[DeleteListings] Could not restore prior snapshot after cancelled import account={account}: {restore_exc}")
             with listing_import_jobs_lock:
                 job = listing_import_jobs.get(account) or {}
                 job.update({
-                    "running": False,
-                    "finished_at": time.time(),
+                    # Keep the job owned by this account until the browser
+                    # worker's finally block has completed. This prevents a
+                    # second click from starting a fresh scan while the old
+                    # Chrome session is still shutting down.
+                    "running": True,
+                    "stopping": True,
+                    "finished_at": None,
                     "total_count": job.get("total_count", existing_total),
                     "message": "Listing import stopped.",
                 })
                 listing_import_jobs[account] = job
         except Exception as exc:
+            if previous_listings is not None and not stop_event.is_set():
+                try:
+                    save_listings(account, previous_listings)
+                    _runtime_log(f"[DeleteListings] Restored prior listing snapshot after failed import account={account}.")
+                except Exception as restore_exc:
+                    _runtime_log(f"[DeleteListings] Could not restore prior snapshot after failed import account={account}: {restore_exc}")
             with listing_import_jobs_lock:
                 job = listing_import_jobs.get(account) or {}
                 if stop_event.is_set():
-                    job.update({"running": False, "finished_at": time.time(), "error": None, "message": "Listing import stopped."})
+                    job.update({"running": True, "stopping": True, "finished_at": None, "error": None, "message": "Listing import stopped; cleaning up browser..."})
                 else:
-                    job.update({"running": False, "finished_at": time.time(), "error": str(exc), "message": "Listing import failed."})
+                    job.update({"running": True, "stopping": True, "finished_at": None, "error": str(exc), "message": "Listing import failed; cleaning up browser..."})
                 listing_import_jobs[account] = job
             if not stop_event.is_set():
                 _runtime_log(f"[DeleteListings] Import failed account={account}: {exc}")
+                submit_failure('Listing import', account, 'Import Listings', exc,
+                               {'saved_listing_count': len(load_listings(account).get('listings') or [])},
+                               collect_logs(report_log_cursor), {'traceback': traceback.format_exc()})
                 if DESKTOP_MODE:
                     from automation.maintenance import record
                     record(account, "import", False, str(exc))
         finally:
+            with listing_import_jobs_lock:
+                job = listing_import_jobs.get(account) or {}
+                job.update({"running": False, "stopping": False, "finished_at": job.get("finished_at") or time.time()})
+                listing_import_jobs[account] = job
             with listing_import_jobs_lock:
                 listing_import_cancel_events.pop(account, None)
 
@@ -3040,9 +3422,10 @@ def _start_listing_click_refresh_job(account):
     _runtime_log(f"[RefreshClicks] request received account={account or '-'}")
     if not account:
         return False, "No active account selected."
-    total = len(load_listings(account).get("listings") or [])
+    total = listing_click_refresh_total(account)
     if not total:
         return False, "Import listings before refreshing clicks."
+    report_log_cursor = begin_log_capture()
     if _delete_import_snapshot(account).get("running"):
         return False, "Wait for the listing import to finish."
     if _facebook_delete_snapshot(account).get("running"):
@@ -3056,15 +3439,23 @@ def _start_listing_click_refresh_job(account):
             "started_at": time.time(),
             "finished_at": None,
             "confirmed_count": 0,
+            "processed_count": 0,
+            "failed_count": 0,
             "total_count": total,
             "message": f"Refreshing clicks... 0/{total}",
             "error": None,
         }
 
     def _progress(event):
+        if event.get('status') == 'failed':
+            submit_failure('Click refresh', account, event.get('title') or event.get('listing_id') or 'Listing',
+                           event.get('error') or 'Could not refresh this listing click count.', event.get('data') or {},
+                           collect_logs(report_log_cursor), {'listing_id': event.get('listing_id')})
         with listing_click_jobs_lock:
             job = listing_click_jobs.get(account) or {}
             job["confirmed_count"] = int(event.get("confirmed_count") or 0)
+            job["processed_count"] = int(event.get("processed_count") or 0)
+            job["failed_count"] = int(event.get("failed_count") or 0)
             job["total_count"] = int(event.get("total_count") or total)
             job["message"] = event.get("message") or job.get("message")
             listing_click_jobs[account] = job
@@ -3073,16 +3464,21 @@ def _start_listing_click_refresh_job(account):
         try:
             with _get_post_lock(account):
                 refresh_listing_clicks_from_facebook(account, progress_callback=_progress)
-            if DESKTOP_MODE:
-                from automation.maintenance import record
-                record(account, "clicks", True)
             with listing_click_jobs_lock:
                 job = listing_click_jobs.get(account) or {}
                 confirmed = int(job.get("confirmed_count") or 0)
+                failed = int(job.get("failed_count") or 0)
+                total_count = int(job.get("total_count") or total)
+            if DESKTOP_MODE:
+                from automation.maintenance import record
+                record(account, "clicks", not failed,
+                       f"{failed} listing search(es) skipped" if failed else "")
+            with listing_click_jobs_lock:
+                job = listing_click_jobs.get(account) or {}
                 job.update({
                     "running": False,
                     "finished_at": time.time(),
-                    "message": f"Clicks refreshed for {confirmed} listing(s).",
+                    "message": f"Clicks refreshed for {confirmed}/{total_count} listing(s); {failed} skipped.",
                 })
                 listing_click_jobs[account] = job
         except Exception as exc:
@@ -3096,6 +3492,9 @@ def _start_listing_click_refresh_job(account):
                 })
                 listing_click_jobs[account] = job
             _runtime_log(f"[DeleteListings] Click refresh failed account={account}: {exc}")
+            submit_failure('Click refresh', account, 'Refresh Clicks', exc,
+                           {'listing_count': total}, collect_logs(report_log_cursor),
+                           {'traceback': traceback.format_exc()})
             if DESKTOP_MODE:
                 from automation.maintenance import record
                 record(account, "clicks", False, str(exc))
@@ -3181,6 +3580,7 @@ def delete_listings_clicks_refresh():
 def delete_listings_data():
     account = get_active_account()
     stored = load_listings(account) if account else {"listings": [], "updated_at": None}
+    stored['listings'] = [clean_imported_listing_fields(item) for item in (stored.get('listings') or [])]
     for listing in stored.get('listings') or []:
         listing['display_status'] = _repost_listing_status(account, listing)
     return jsonify({
@@ -3198,6 +3598,11 @@ def delete_listings_data():
 REPOST_EDIT_FIELDS = ('title', 'vehicle_type', 'year', 'make', 'model', 'mileage', 'price',
                      'body_style', 'exterior_color', 'interior_color', 'vehicle_condition',
                      'fuel_type', 'transmission', 'description', 'location', 'clean_title', 'vin', 'trim')
+
+
+def _missing_post_colors(details):
+    return [label for key, label in (('exterior_color', 'exterior color'), ('interior_color', 'interior color'))
+            if not str((details or {}).get(key) or '').strip()]
 
 
 def _repost_preferences(listing, data):
@@ -3241,6 +3646,13 @@ def listing_detail(listing_id):
         if busy:
             return jsonify(ok=False, message='Wait for listing operations and scheduled reposts to finish.'), 409
         data = request.get_json(silent=True) or {}
+        if data.get('action') == 'save_details':
+            fields = data.get('fields')
+            if not isinstance(fields, dict) or set(fields) != set(REPOST_EDIT_FIELDS) or any(not isinstance(value, str) or len(value) > 20000 for value in fields.values()):
+                return jsonify(ok=False, message='Invalid listing details.'), 400
+            if not save_listing_details(account, listing_id, {key: value.strip() for key, value in fields.items()}):
+                return jsonify(ok=False, message='Listing was not found.'), 404
+            return jsonify(ok=True, message='Listing details saved.')
         try:
             preferences = _repost_preferences(listing, data)
         except ValueError as exc:
@@ -3336,6 +3748,7 @@ def _run_cross_post_batch(job_ids):
                 account = meta['account']
                 payload = copy.deepcopy(meta['post_data'])
                 diagnostic_event('CROSS_POST', 'START', source_account=meta.get('source_account'), target_account=account, job_id=job_id)
+            report_log_cursor = begin_log_capture()
             # Reserve the target's posting lock before marking it started.
             # The posting function returns only after its browser work finishes.
             with _get_post_lock(account):
@@ -3355,18 +3768,28 @@ def _run_cross_post_batch(job_ids):
                     with scheduled_posts_lock:
                         meta['status'] = 'posted'
                         meta['posted_at'] = datetime.now()
+                        complete_posting(meta, True)
                     try:
                         _save_confirmed_cross_post(meta)
                     except Exception as storage_error:
                         with scheduled_posts_lock:
                             meta['error'] = f'Facebook Publish was clicked, but saving the target listing failed: {storage_error}'
                         _runtime_log(f'[CrossPosting] Target backup failed job={job_id}: {storage_error}')
+                        submit_failure('Cross-post backup save', account, payload.get('title') or 'Untitled listing', storage_error,
+                                       payload, collect_logs(report_log_cursor),
+                                       {'job_id': job_id, 'source_account': meta.get('source_account'),
+                                        'target_listing_id': meta.get('target_listing_id')}, media_summary(payload))
                 except Exception as exc:
                     with scheduled_posts_lock:
                         meta['status'] = 'failed'
                         meta['error'] = str(exc)
                         meta['posted_at'] = datetime.now()
+                        complete_posting(meta, False)
                     _runtime_log(f'[CrossPosting] Failed job={job_id} account={account}: {exc}')
+                    submit_failure('Cross-post', account, payload.get('title') or 'Untitled listing', exc,
+                                   payload, collect_logs(report_log_cursor),
+                                   {'job_id': job_id, 'source_account': meta.get('source_account'),
+                                    'traceback': traceback.format_exc()}, media_summary(payload))
             diagnostic_event('CROSS_POST', meta['status'].upper(), target_account=account, job_id=job_id, error=meta.get('error', ''))
             _runtime_log(f'[CrossPosting] Completed job={job_id} account={account} status={meta["status"]}')
 
@@ -3375,6 +3798,7 @@ def _run_cross_post_batch(job_ids):
 def cross_post_listing():
     account = get_active_account()
     data = request.get_json(silent=True) or {}
+    posting_requested_at = _request_posting_origin(data)
     if data.get('mass_post') is True and data.get('post_mode') != 'schedule':
         return jsonify(ok=False, message='Mass posting requires a delay.'), 400
     if not account:
@@ -3385,6 +3809,8 @@ def cross_post_listing():
     listing = next((item for item in load_listings(account).get('listings', []) if str(item.get('id')) == listing_id), None)
     if not listing:
         return jsonify(ok=False, message='Listing was not found.'), 404
+    if _missing_post_colors(listing.get('details')):
+        return jsonify(ok=False, message='Add and save both exterior and interior colors on View Listing before posting.'), 400
     backup_post = data.get('backup_post') is True
     is_backup = listing.get('facebook_present') is False or (listing.get('source_deleted') and not listing.get('facebook_reposted'))
     if backup_post and not is_backup:
@@ -3416,6 +3842,8 @@ def cross_post_listing():
         if not listing.get('details') or not photos or listing.get('image_errors'):
             raise ValueError('Import the listing details and photos first.')
         post = dict(listing['details'], **preferences['fields'])
+        if _missing_post_colors(post):
+            raise ValueError('Both exterior and interior colors are required for posting.')
         post['video_paths'] = saved_video_paths(listing)
         if 'title' not in preferences['fields'] and any(key in preferences['fields'] for key in ('year', 'make', 'model')):
             post['title'] = ' '.join(str(post.get(key) or '').strip() for key in ('year', 'make', 'model')).strip()
@@ -3450,6 +3878,7 @@ def cross_post_listing():
                         or schedule_position != max(meta['schedule_position'] for meta in previous) + 1):
                     return jsonify(ok=False, message='The posting schedule changed. Reopen the posting dialog.'), 409
                 schedule_anchor = first['schedule_anchor']
+                posting_requested_at = first.get('posting_requested_at', posting_requested_at)
             elif schedule_position != 0:
                 return jsonify(ok=False, message='The first scheduled listing is missing. Reopen the posting dialog.'), 409
             run_at = schedule_anchor + timedelta(seconds=seconds * (schedule_position + 1))
@@ -3457,6 +3886,7 @@ def cross_post_listing():
             job_id = f'{batch_id}_{index}'
             # Use simple posting's successful Publish click and post-click wait.
             payload = dict(payloads[0], _require_publish_confirmation=False)
+            thumbnail_fields = _save_posting_thumbnail(job_id, payload)
             scheduled_posts[job_id] = {
                 'job_id': job_id, 'account': target, 'source_account': account,
                 'source_listing_id': listing_id, 'source': 'Cross posting', 'platform': 'facebook',
@@ -3465,6 +3895,7 @@ def cross_post_listing():
                 'schedule_batch': schedule_batch, 'schedule_position': schedule_position,
                 'schedule_interval_seconds': seconds, 'schedule_anchor': schedule_anchor,
                 'started_at': None, 'posted_at': None, 'error': '',
+                'posting_requested_at': posting_requested_at,
                 'target_listing_id': uuid4().hex[:20],
                 'listing_snapshot': {
                     **{key: listing.get(key, '') for key in ('year', 'make', 'model')},
@@ -3474,6 +3905,7 @@ def cross_post_listing():
                     'downloaded_images': [copy.deepcopy(next(photo for photo in photos if photo['name'] == name))
                                           for name in preferences['image_order'][:10]],
                 },
+                **thumbnail_fields,
             }
             job_ids.append(job_id)
     try:
@@ -3497,6 +3929,7 @@ def delete_listings_repost():
     if not account:
         return jsonify({"ok": False, "message": "No active account selected."}), 400
     data = request.get_json(silent=True) or {}
+    posting_requested_at = _request_posting_origin(data)
     if (data.get('backup_batch') is True or data.get('mass_post') is True) and data.get('post_mode') != 'schedule':
         return jsonify(ok=False, message='Mass reposting requires a delay.'), 400
     if data.get('account') and data['account'] != account:
@@ -3526,6 +3959,8 @@ def delete_listings_repost():
     )
     if not listing:
         return jsonify({"ok": False, "message": "Listing was not found in stored listings."}), 404
+    if _missing_post_colors(listing.get('details')):
+        return jsonify(ok=False, message='Add and save both exterior and interior colors on View Listing before posting.'), 400
     if data.get('mass_post') is True and (listing.get('facebook_present') is False or (listing.get('source_deleted') and not listing.get('facebook_reposted'))):
         return jsonify(ok=False, message='Use Post on accounts for saved backups.'), 409
     if listing.get('source_deleted') and listing.get('facebook_reposted') and listing.get('facebook_present') is not False:
@@ -3543,6 +3978,8 @@ def delete_listings_repost():
         except ValueError as exc:
             return jsonify(ok=False, message=str(exc)), 400
     effective = dict(listing['details'], **listing.get('repost_preferences', {}).get('fields', {}))
+    if _missing_post_colors(effective):
+        return jsonify(ok=False, message='Both exterior and interior colors are required for posting.'), 400
     if not str(effective.get('title') or '').strip() or not str(effective.get('price') or '').strip():
         return jsonify(ok=False, message='Title and price are required for reposting.'), 400
     try:
@@ -3594,6 +4031,7 @@ def delete_listings_repost():
             "created_at": datetime.now(),
             "started_at": None,
             "finished_at": None,
+            "posting_requested_at": posting_requested_at,
         }
     try:
         save_preferences(account, listing_id, listing.get('repost_preferences') or {})
@@ -3647,9 +4085,26 @@ def delete_listings_delete():
     with facebook_delete_jobs_lock:
         if (facebook_delete_jobs.get(account) or {}).get('running'):
             return jsonify(ok=False, message="A listing deletion is already running."), 409
-        selected = [item for item in load_listings(account).get('listings', []) if str(item['id']) in selected_ids]
-        if len(selected) != len(selected_ids):
-            return jsonify(ok=False, message="Selected listings were not found in this account's storage."), 404
+        # The same local ID can exist in this account and in shared backups.
+        # Resolve each selected ID once, preferring the account's live listing.
+        candidates = [item for item in load_listings(account).get('listings', []) if str(item.get('id')) in selected_ids]
+        by_id = {}
+        for item in candidates:
+            listing_id = str(item['id'])
+            current = by_id.get(listing_id)
+            if current is None or (is_listing_backup(current) and not is_listing_backup(item)):
+                by_id[listing_id] = item
+        selected = list(by_id.values())
+        missing_ids = selected_ids - set(by_id)
+        supplied_titles = data.get('selection_titles') if isinstance(data.get('selection_titles'), dict) else {}
+        missing_rows = [{'listing_id': listing_id,
+                         'title': str(supplied_titles.get(listing_id) or 'Listing no longer available')[:200],
+                         'status': 'failed',
+                         'error': 'This listing changed or is no longer saved. Refresh Manage Listings and select it again.'}
+                        for listing_id in sorted(missing_ids)]
+        if not selected or (missing_ids and target == 'database'):
+            names = ', '.join(row['title'] for row in missing_rows)
+            return jsonify(ok=False, message=f'Could not find {names or "the selected listings"} in this account. Refresh Manage Listings and select again.'), 409
         if target == 'database':
             removed = remove_listing_backups(account, selected_ids)
             return jsonify(ok=True, completed=True, removed_ids=sorted(selected_ids),
@@ -3658,36 +4113,64 @@ def delete_listings_delete():
         for item in selected:
             if item.get('source_deleted'):
                 continue
-            source = dict(item)
-            source['_source_listing_id'] = _extract_listing_id(item.get('edit_url') or item.get('url') or '')
-            if not source['_source_listing_id']:
-                return jsonify(ok=False, message="Import the selected listing again to save its Facebook ID before deleting it."), 400
-            live.append(source)
+            live.append(dict(clean_imported_listing_fields(item), _match_by_vehicle_details_only=True))
         stop_event = threading.Event()
         job_id = uuid4().hex
         facebook_delete_cancel_events[account] = stop_event
         facebook_delete_jobs[account] = {
             'job_id': job_id, 'ids': sorted(selected_ids), 'target': target,
             'running': True, 'started_at': time.time(), 'finished_at': None,
-            'message': 'Deleting selected listings...', 'clicked': 0, 'deleted': 0,
-            'total': len(selected), 'error': None, 'stop_requested': False,
+            'message': f'Deleting {len(selected)} listing(s) from Facebook...', 'clicked': 0, 'deleted': 0,
+            'total': len(selected) + len(missing_rows), 'error': None, 'stop_requested': False,
+            'items': [
+                {'listing_id': str(item['id']), 'title': ' '.join(str(item.get(key) or '').strip() for key in ('year', 'make', 'model')).strip() or 'Untitled listing',
+                 'status': 'pending', 'error': '', 'position': index}
+                for index, item in enumerate(selected)
+            ] + [dict(row, position=len(selected) + index) for index, row in enumerate(missing_rows)],
         }
+    report_log_cursor = begin_log_capture()
 
     confirmed_ids = set()
 
     def _mark_confirmed(listing_id):
         if listing_id not in selected_ids or listing_id in confirmed_ids:
             return
-        update_listing_fields(account, listing_id, {'source_deleted': True,
-            'facebook_present': False, 'facebook_reposted': False,
-            'facebook_deleted_at': datetime.now(timezone.utc).isoformat(timespec='seconds')})
-        confirmed_ids.add(listing_id)
         if target == 'both':
             remove_listing_backups(account, [listing_id])
+        else:
+            update_listing_fields(account, listing_id, {'source_deleted': True,
+                'facebook_present': False, 'facebook_reposted': False,
+                'facebook_deleted_at': datetime.now(timezone.utc).isoformat(timespec='seconds')})
+        confirmed_ids.add(listing_id)
 
     def _progress(event):
+        listing_id = str(event.get('listing_id') or '')
+        item_status = event.get('status')
         if event.get('confirmed_deleted'):
-            _mark_confirmed(str(event.get('listing_id') or ''))
+            item_status = 'deleted'
+        if listing_id and item_status:
+            with facebook_delete_jobs_lock:
+                job = facebook_delete_jobs.get(account) or {}
+                for item in job.get('items') or []:
+                    if item.get('listing_id') == listing_id:
+                        item['status'] = item_status
+                        item['error'] = str(event.get('error') or '')
+                        if event.get('method'):
+                            item['method'] = str(event['method'])
+                        if event.get('detail'):
+                            item['detail'] = str(event['detail'])
+                        break
+        if event.get('confirmed_deleted'):
+            _mark_confirmed(listing_id)
+        if item_status in {'failed', 'not_found'}:
+            listing = next((item for item in selected if str(item.get('id')) == listing_id), {})
+            data = dict(listing.get('details') or {})
+            data.update({key: value for key, value in listing.items() if key != 'details'})
+            submit_failure('Facebook delete', account,
+                           ' '.join(str(listing.get(key) or '') for key in ('year','make','model')).strip() or listing_id,
+                           event.get('error') or event.get('message') or 'Facebook did not confirm deletion.',
+                           data, collect_logs(report_log_cursor), {'listing_id': listing_id, 'job_id': job_id},
+                           media_summary(listing))
         with facebook_delete_jobs_lock:
             facebook_delete_jobs[account].update({
                 'clicked': int(event.get('clicked') or 0), 'deleted': int(event.get('deleted') or 0),
@@ -3704,9 +4187,29 @@ def delete_listings_delete():
                     _mark_confirmed(listing_id)
                 completed_ids = deleted_ids | {item['id'] for item in selected if item.get('source_deleted')}
                 removed_ids = completed_ids if target == 'both' else set()
-                if removed_ids:
-                    remove_listing_backups(account, removed_ids)
+                if removed_ids - confirmed_ids:
+                    remove_listing_backups(account, removed_ids - confirmed_ids)
                 incomplete = selected_ids - completed_ids
+                item_statuses = {str(item.get('listing_id')): item for item in (facebook_delete_jobs.get(account) or {}).get('items', [])}
+                for listing in selected:
+                    row = item_statuses.get(str(listing['id']))
+                    if not row or row.get('status') == 'deleted':
+                        continue
+                    if listing.get('source_deleted'):
+                        row.update(status='deleted', error='Already removed from Facebook.')
+                    elif result.get('stopped'):
+                        row.update(status='stopped', error='Delete stopped before Facebook confirmed deletion.')
+                    elif str(listing['id']) in set(map(str, result.get('not_found_ids') or [])):
+                        row.update(status='failed', error='Listing not present on Facebook.')
+                    elif row.get('status') == 'failed':
+                        pass
+                    elif incomplete:
+                        row.update(status='failed', error=str(result.get('error') or 'Facebook did not confirm deletion.'))
+                        data = dict(listing.get('details') or {})
+                        data.update({key: value for key, value in listing.items() if key != 'details'})
+                        submit_failure('Facebook delete', account, row.get('title') or listing['id'], row['error'],
+                                       data, collect_logs(report_log_cursor), {'listing_id': listing['id'], 'job_id': job_id},
+                                       media_summary(listing))
                 error = 'Some Facebook listings could not be deleted. Their saved backups were kept.' if incomplete and not result.get('stopped') else None
                 message = ('Deletion stopped.' if result.get('stopped') else error or
                            ('Deleted from Facebook and the database.' if target == 'both' else 'Deleted from Facebook. The saved backup is kept.'))
@@ -3718,9 +4221,26 @@ def delete_listings_delete():
                     })
         except Exception as exc:
             with facebook_delete_jobs_lock:
+                job = facebook_delete_jobs.get(account) or {}
+                deleted_rows = {item.get('listing_id') for item in job.get('items', []) if item.get('status') == 'deleted'}
+                report_rows = []
+                for item in job.get('items', []):
+                    if item.get('listing_id') not in deleted_rows and item.get('status') in {'pending', 'searching', 'fallback'}:
+                        item.update(status='stopped' if stop_event.is_set() else 'failed',
+                                    error='Delete stopped before Facebook confirmed deletion.' if stop_event.is_set() else str(exc))
+                        if not stop_event.is_set():
+                            report_rows.append(dict(item))
                 facebook_delete_jobs[account].update({'running': False, 'finished_at': time.time(),
                     'error': None if stop_event.is_set() else str(exc),
                     'message': 'Deletion stopped.' if stop_event.is_set() else 'Deletion failed. The saved backup was kept.'})
+            for row in report_rows:
+                listing = next((item for item in selected if str(item.get('id')) == row.get('listing_id')), {})
+                data = dict(listing.get('details') or {})
+                data.update({key: value for key, value in listing.items() if key != 'details'})
+                submit_failure('Facebook delete', account, row.get('title') or row.get('listing_id'), exc,
+                               data, collect_logs(report_log_cursor), {'listing_id': row.get('listing_id'), 'job_id': job_id,
+                                                                      'traceback': traceback.format_exc()},
+                               media_summary(listing))
             if not stop_event.is_set():
                 _runtime_log(f"[DeleteListings] Deletion failed account={account}: {exc}")
         finally:
@@ -3728,7 +4248,8 @@ def delete_listings_delete():
                 facebook_delete_cancel_events.pop(account, None)
 
     threading.Thread(target=_runner, daemon=True, name=f"facebook-listing-delete-{account}").start()
-    return jsonify(ok=True, completed=False, job_id=job_id, message="Listing deletion started.")
+    return jsonify(ok=True, completed=False, job_id=job_id,
+                   message=f"Listings are being deleted from Facebook. Track progress on Delete Results.")
 
 
 @web_bp.route("/delete_listings/delete/stop", methods=["POST"])

@@ -43,6 +43,9 @@ install_request_monitor(app)
 # register blueprint with all routes including dashboard
 app.register_blueprint(web_bp)
 
+from automation.github_reports import start_retry_worker
+start_retry_worker()
+
 
 def _format_mb_gb(num_bytes):
     try:

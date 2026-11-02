@@ -1,4 +1,5 @@
 from automation.task_control import cancellable
+from automation.diagnostics import traced
 import os
 import time
 import base64
@@ -29,6 +30,7 @@ from urllib.parse import unquote
 from automation.browser_settings import apply_background_mode_option
 from automation.chromedriver import build_chrome_driver
 from automation.runtime_paths import sessions_dir
+from automation.cdp_login import load_current_cdp_cookies
  
 def _apply_browser_safety_patches(driver):
     """
@@ -50,6 +52,7 @@ def _apply_browser_safety_patches(driver):
     except Exception as e:
         print(f"[DeleteListings] Browser safety patch warning: {e}")
 
+@traced('DELETE_BY_STATUS')
 @cancellable
 def delete_listing(account, limit, status):
 
@@ -57,9 +60,11 @@ def delete_listing(account, limit, status):
 
     SESSION_DIR = sessions_dir()
 
-    session_file = os.path.join(SESSION_DIR, account + ".pkl")
-    with open(session_file, "rb") as f:
-        cookies = pickle.load(f)
+    cookies = load_current_cdp_cookies(account)
+    if cookies is None:
+        session_file = os.path.join(SESSION_DIR, account + ".pkl")
+        with open(session_file, "rb") as f:
+            cookies = pickle.load(f)
 
     logs = []
     def log(msg):

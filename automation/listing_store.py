@@ -1,6 +1,7 @@
 """Account-scoped Facebook snapshots and a shared collection of saved backups."""
 import json
 import sqlite3
+from uuid import uuid4
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from automation.runtime_paths import data_dir
@@ -116,6 +117,32 @@ def save_preferences(account, listing_id, preferences):
         return cursor.rowcount == 1
 
 
+def save_listing_details(account, listing_id, fields):
+    """Save edited details and discard stale per-post overrides for them."""
+    with connection() as db:
+        owner = _owner(db, account, listing_id)
+        row = db.execute('SELECT data,preferences FROM listings WHERE account=? AND id=?',
+                         (owner, str(listing_id))).fetchone()
+        if not row:
+            return False
+        item = json.loads(row[0])
+        details = item.setdefault('details', {})
+        details.update(fields)
+        states = details.setdefault('field_states', {})
+        for key, value in fields.items():
+            states[key] = 'edited' if value else 'empty'
+            if key in ('year', 'make', 'model', 'price'):
+                item[key] = value
+        preferences = json.loads(row[1] or '{}')
+        overrides = preferences.get('fields') or {}
+        for key in fields:
+            overrides.pop(key, None)
+        preferences['fields'] = overrides
+        db.execute('UPDATE listings SET data=?,preferences=? WHERE account=? AND id=?',
+                   (json.dumps(item, ensure_ascii=False), json.dumps(preferences, ensure_ascii=False), owner, str(listing_id)))
+        return True
+
+
 def update_fields(account, listing_id, changes, *, move_to_top=False):
     """Update one record without replacing another worker's account snapshot."""
     with connection() as db:
@@ -132,9 +159,12 @@ def update_fields(account, listing_id, changes, *, move_to_top=False):
         if move_to_top or target != owner:
             first = db.execute('SELECT MIN(position) FROM listings WHERE account=?', (target,)).fetchone()[0]
             position = first - 1 if first is not None else 0
+        if target != owner and db.execute('SELECT 1 FROM listings WHERE account=? AND id=?', (target, listing_id)).fetchone():
+            # Preserve an unrelated shared backup with the same local ID.
+            item['id'] = uuid4().hex
         db.execute('DELETE FROM listings WHERE account=? AND id=?', (owner, listing_id))
-        db.execute('INSERT OR REPLACE INTO listings VALUES (?,?,?,?,?)',
-                   (target, listing_id, position, json.dumps(item, ensure_ascii=False), row[1]))
+        db.execute('INSERT INTO listings VALUES (?,?,?,?,?)',
+                   (target, str(item['id']), position, json.dumps(item, ensure_ascii=False), row[1]))
         return True
 
 

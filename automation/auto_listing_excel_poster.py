@@ -30,9 +30,12 @@ import re
 from urllib.parse import unquote, urlsplit, urlunsplit
 from automation.cdp_login import close_posting_tab, open_posting_tab
 from automation.runtime_paths import runtime_log_path, screenshots_dir
+from automation.posting_inputs import fill_posting_input
 
 
 RUNTIME_LOG_PATH = runtime_log_path()
+_FIELD_METHOD_TIMERS = {}
+_FIELD_METHOD_TIMERS_LOCK = __import__('threading').Lock()
 
 
 def print(*args, **kwargs):
@@ -45,9 +48,36 @@ def print(*args, **kwargs):
             f.write(f"[{ts}] [Poster] {message}\n")
     except Exception:
         pass
+
+
+def _log_field_method(field, method, status, *, value=None, error=None, detail=None):
+    """Describe attempted strategies without changing the posting outcome."""
+    try:
+        timer_key = (__import__('threading').get_ident(), str(field), str(method))
+        now = time.monotonic()
+        elapsed = None
+        with _FIELD_METHOD_TIMERS_LOCK:
+            if str(status).upper() == 'START':
+                _FIELD_METHOD_TIMERS[timer_key] = now
+            else:
+                started = _FIELD_METHOD_TIMERS.pop(timer_key, None)
+                if started is not None:
+                    elapsed = max(0.0, now - started)
+        parts = [f'[AutoListing][FIELD METHOD] {field}', f'method={method}', f'status={status}']
+        if elapsed is not None:
+            parts.append(f'elapsed={elapsed:.3f}s')
+        if value is not None:
+            parts.append(f'value={str(value)[:180]!r}')
+        if detail:
+            parts.append(str(detail).replace('\n', ' ')[:600])
+        if error is not None:
+            parts.append(f'error={type(error).__name__}: {error!r}')
+        print(' | '.join(parts), flush=True)
+    except Exception:
+        pass
  
  
-# ðŸ“˜ Helper Functions
+# Ã°Å¸â€œËœ Helper Functions
 def _normalize_header(value):
     s = str(value or "").strip().lower()
     s = re.sub(r"[^a-z0-9]+", " ", s)
@@ -298,12 +328,14 @@ def _visible_vehicle_type_choices(driver):
     """) or []
 
 
-def _open_vehicle_type_menu(driver, timeout=25):
+def _open_vehicle_type_menu(driver, timeout=90):
     """Avoid toggling an open menu; retry clicks lost during form re-renders."""
     last_error = None
     for method in ('javascript', 'native', 'actions', 'keyboard'):
         if _visible_vehicle_type_choices(driver):
+            _log_field_method('Vehicle type', 'reuse already open menu', 'SUCCESS')
             return
+        _log_field_method('Vehicle type', f'open menu using {method}', 'START')
         try:
             combo = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(
                 (By.XPATH, _combobox_label_xpath('Vehicle type'))))
@@ -312,9 +344,13 @@ def _open_vehicle_type_menu(driver, timeout=25):
             # resetting it so a second click doesn't close a working menu.
             if combo.get_attribute('aria-expanded') == 'true':
                 try:
+                    _log_field_method('Vehicle type', 'wait for expanded menu options', 'START')
                     WebDriverWait(driver, timeout).until(lambda d: _visible_vehicle_type_choices(d))
+                    _log_field_method('Vehicle type', 'wait for expanded menu options', 'SUCCESS')
                     return
-                except Exception:
+                except Exception as exc:
+                    _log_field_method('Vehicle type', 'wait for expanded menu options', 'FAILED', error=exc,
+                                      detail='Resetting the empty menu with Escape before retrying.')
                     combo.send_keys(Keys.ESCAPE)
                     combo = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(
                         (By.XPATH, _combobox_label_xpath('Vehicle type'))))
@@ -327,9 +363,11 @@ def _open_vehicle_type_menu(driver, timeout=25):
             else:
                 driver.execute_script('arguments[0].click();', combo)
             WebDriverWait(driver, timeout).until(lambda d: _visible_vehicle_type_choices(d))
+            _log_field_method('Vehicle type', f'open menu using {method}', 'SUCCESS')
             return
         except Exception as exc:
             last_error = exc
+            _log_field_method('Vehicle type', f'open menu using {method}', 'FAILED', error=exc)
             print(f'[AutoListing] Vehicle type menu did not open with {method}; retrying.')
     raise RuntimeError('Vehicle type menu did not show any selectable choices after four opening attempts') from last_error
 
@@ -389,20 +427,26 @@ def _marketplace_combo_value(driver, label):
     """, combo, label))
 
 
-def _open_marketplace_combo(driver, label, timeout=25):
+def _open_marketplace_combo(driver, label, timeout=90):
     last_error = None
     # CDP Chrome may be behind another window; DOM clicks still reach React.
     for method in ('javascript', 'native', 'actions', 'keyboard'):
         if _marketplace_combo_choices(driver, label):
+            _log_field_method(label, 'reuse already open menu', 'SUCCESS')
             return
+        _log_field_method(label, f'open menu using {method}', 'START')
         try:
             combo = WebDriverWait(driver, timeout).until(lambda d: _marketplace_combo(d, label))
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", combo)
             if combo.get_attribute('aria-expanded') == 'true':
                 try:
+                    _log_field_method(label, 'wait for expanded menu options', 'START')
                     WebDriverWait(driver, timeout).until(lambda d: _marketplace_combo_choices(d, label))
+                    _log_field_method(label, 'wait for expanded menu options', 'SUCCESS')
                     return
-                except Exception:
+                except Exception as exc:
+                    _log_field_method(label, 'wait for expanded menu options', 'FAILED', error=exc,
+                                      detail='Resetting the empty menu with Escape before retrying.')
                     combo.send_keys(Keys.ESCAPE)
                     combo = WebDriverWait(driver, timeout).until(lambda d: _marketplace_combo(d, label))
             if method == 'javascript':
@@ -414,14 +458,16 @@ def _open_marketplace_combo(driver, label, timeout=25):
             else:
                 combo.send_keys(Keys.SPACE)
             WebDriverWait(driver, timeout).until(lambda d: _marketplace_combo_choices(d, label))
+            _log_field_method(label, f'open menu using {method}', 'SUCCESS')
             return
         except Exception as exc:
             last_error = exc
+            _log_field_method(label, f'open menu using {method}', 'FAILED', error=exc)
             print(f'[AutoListing] {label} menu did not open with {method}; retrying.')
     raise RuntimeError(f'{label} menu did not show selectable choices after four opening attempts') from last_error
 
 
-def _select_marketplace_combo(driver, label, desired, fallback=None, timeout=25, exact_only=False):
+def _select_marketplace_combo(driver, label, desired, fallback=None, timeout=90, exact_only=False):
     """Wait for the menu, try the source value and then verify the fallback."""
     if label.casefold() == 'vehicle type':
         fallback = None
@@ -437,18 +483,26 @@ def _select_marketplace_combo(driver, label, desired, fallback=None, timeout=25,
     last_error = None
     available = []
     for candidate in candidates:
+        _log_field_method(label, 'requested option' if candidate == candidates[0] else 'fallback option',
+                          'START', value=candidate)
         selected = _marketplace_combo_value(driver, label)
         if selected.casefold() == candidate.casefold():
+            _log_field_method(label, 'existing selection matches', 'SUCCESS', value=selected)
             return selected
         for method in ('javascript', 'native', 'actions', 'keyboard'):
+            _log_field_method(label, f'select option using {method}', 'START', value=candidate)
             try:
                 _open_marketplace_combo(driver, label, wait_seconds)
                 choices = _marketplace_combo_choices(driver, label)
                 available = [text for _, text in choices]
                 matches = [(el, text) for el, text in choices if text.casefold() == candidate.casefold()]
                 if not matches and not exact_only:
+                    _log_field_method(label, 'prefix option lookup', 'START', value=candidate,
+                                      detail='No exact option matched.')
                     matches = [(el, text) for el, text in choices if text.casefold().startswith(candidate.casefold())]
                 if not matches:
+                    _log_field_method(label, 'exact/prefix option lookup', 'FAILED', value=candidate,
+                                      detail='Requested option not offered; trying next configured fallback if present.')
                     # Keep the existing menu open while moving to Other.
                     break
                 option, text = matches[0]
@@ -465,16 +519,19 @@ def _select_marketplace_combo(driver, label, desired, fallback=None, timeout=25,
                     option.send_keys(Keys.ENTER)
                 WebDriverWait(driver, wait_seconds).until(
                     lambda d: _marketplace_combo_value(d, label).casefold() == text.casefold())
+                _log_field_method(label, f'select option using {method}', 'SUCCESS', value=text,
+                                  detail='Selection was read back and retained.')
                 print(f'[AutoListing] {label} retained after {method} selection: {text}')
                 return text
             except Exception as exc:
                 last_error = exc
+                _log_field_method(label, f'select option using {method}', 'FAILED', value=candidate, error=exc)
                 print(f'[AutoListing] {label} selection did not retain {candidate!r} with {method}; retrying.')
     raise RuntimeError(f'No matching {label} option retained for {desired!r} or fallback {fallback!r}. '
                        f'Visible choices: {", ".join(available) or "none"}') from last_error
 
 
-def _fill_optional_color(driver, label, value, timeout=25, strict=False):
+def _fill_optional_color(driver, label, value, timeout=90, strict=False):
     """Use one shared time budget for finding, opening and selecting a color."""
     deadline = time.monotonic() + timeout
     combo = None
@@ -485,15 +542,22 @@ def _fill_optional_color(driver, label, value, timeout=25, strict=False):
         return seconds
     desired = _closest_facebook_color(value)
     if not _norm_text(value):
+        _log_field_method(label, 'optional color', 'SKIPPED', detail='No value supplied.')
         return None
+    _log_field_method(label, 'map supplied color to Facebook option', 'SUCCESS', value=desired,
+                      detail=f'Supplied value: {value!r}')
+    _log_field_method(label, 'JavaScript color menu and option click', 'START', value=desired)
     try:
         combo = WebDriverWait(driver, remaining()).until(lambda d: _marketplace_combo(d, label))
         if _marketplace_combo_value(driver, label).casefold() == desired.casefold():
+            _log_field_method(label, 'existing selection matches', 'SUCCESS', value=desired)
             return desired
         driver.execute_script("arguments[0].scrollIntoView({block:'center'}); arguments[0].click();", combo)
         choices = WebDriverWait(driver, remaining()).until(lambda d: _marketplace_combo_choices(d, label))
         match = next(((el, text) for el, text in choices if text.casefold() == desired.casefold()), None)
         if match is None and not strict:
+            _log_field_method(label, 'Gray fallback option', 'START', value='Gray',
+                              detail=f'Requested option {desired!r} not offered.')
             match = next(((el, text) for el, text in choices if text.casefold() == 'gray'), None)
         if match is None:
             raise ValueError('No matching color option available')
@@ -506,14 +570,17 @@ def _fill_optional_color(driver, label, value, timeout=25, strict=False):
             (span || option).click();
         """, option, selected)
         WebDriverWait(driver, remaining()).until(lambda d: _marketplace_combo_value(d, label).casefold() == selected.casefold())
+        _log_field_method(label, 'JavaScript color menu and option click', 'SUCCESS', value=selected,
+                          detail='Selection was read back and retained.')
         print(f'[AutoListing] {label}: {selected}', flush=True)
         return selected
     except Exception as exc:
+        _log_field_method(label, 'JavaScript color menu and option click', 'FAILED', value=desired, error=exc)
         if combo is not None:
             try:
                 combo.send_keys(Keys.ESCAPE)
-            except Exception:
-                pass
+            except Exception as close_error:
+                _log_field_method(label, 'close unsuccessful color menu with Escape', 'FAILED', error=close_error)
         print(f'[AutoListing][FIELD SKIPPED] {label}: {exc}', flush=True)
         if strict:
             raise RuntimeError(f'Saved {label} could not be retained: {value}') from exc
@@ -523,16 +590,26 @@ def _fill_optional_color(driver, label, value, timeout=25, strict=False):
 def _fill_saved_text_field(driver, label, value):
     value = _norm_text(value)
     if not value:
+        _log_field_method(label, 'saved text field', 'SKIPPED', detail='No value supplied.')
         return
+    _log_field_method(label, 'find visible saved text input', 'START', value=value)
     controls = driver.find_elements(By.XPATH, _input_for_label_xpath(label))
     control = next((item for item in controls if item.is_displayed()), None)
     if control is None:
-        _select_marketplace_combo(driver, label, value, timeout=25, exact_only=True)
+        _log_field_method(label, 'text input', 'SKIPPED', detail='No visible input; trying exact dropdown fallback.')
+        _select_marketplace_combo(driver, label, value, timeout=90, exact_only=True)
         return
-    control.clear()
-    control.send_keys(value)
-    if _norm_text(control.get_attribute('value')) != value:
-        raise RuntimeError(f'Saved {label} could not be retained.')
+    try:
+        _log_field_method(label, 'Selenium clear and send_keys', 'START', value=value)
+        control.clear()
+        control.send_keys(value)
+        if _norm_text(control.get_attribute('value')) != value:
+            raise RuntimeError(f'Saved {label} could not be retained.')
+        _log_field_method(label, 'Selenium clear and send_keys', 'SUCCESS', value=value,
+                          detail='Input value was read back and retained.')
+    except Exception as exc:
+        _log_field_method(label, 'Selenium clear and send_keys', 'FAILED', value=value, error=exc)
+        raise
 
 
 def _input_for_label_xpath(label_text):
@@ -549,22 +626,29 @@ def _fill_optional_trim(driver, model_input, model_value, trim_value):
     from automation.task_control import check_cancelled
     trim_value = _norm_text(trim_value)
     if not trim_value:
+        _log_field_method('Trim', 'optional trim', 'SKIPPED', detail='No value supplied.')
         return model_value
     combo = None
     try:
         check_cancelled()
         combo = _marketplace_combo(driver, 'Trim')
         if combo:
+            _log_field_method('Trim', 'JavaScript dropdown selection', 'START', value=trim_value)
             if _marketplace_combo_value(driver, 'Trim').casefold() != trim_value.casefold():
                 driver.execute_script('arguments[0].click();', combo)
-                choices = WebDriverWait(driver, 25).until(lambda current: _marketplace_combo_choices(current, 'Trim'))
+                choices = WebDriverWait(driver, 90).until(lambda current: _marketplace_combo_choices(current, 'Trim'))
                 option = next((element for element, text in choices if text.casefold() == trim_value.casefold()), None)
                 if option is None:
                     raise ValueError('Saved trim is not offered')
                 driver.execute_script('arguments[0].click();', option)
-                WebDriverWait(driver, 25).until(
+                WebDriverWait(driver, 90).until(
                     lambda current: _marketplace_combo_value(current, 'Trim').casefold() == trim_value.casefold())
+            else:
+                _log_field_method('Trim', 'existing selection matches', 'SUCCESS', value=trim_value)
+            _log_field_method('Trim', 'JavaScript dropdown selection', 'SUCCESS', value=trim_value)
         else:
+            _log_field_method('Trim', 'Selenium text input fallback', 'START', value=trim_value,
+                              detail='No visible Trim dropdown.')
             control = next((element for element in driver.find_elements(By.XPATH, _input_for_label_xpath('Trim'))
                             if element.is_displayed() and element.is_enabled()), None)
             if control is None:
@@ -573,16 +657,19 @@ def _fill_optional_trim(driver, model_input, model_value, trim_value):
             control.send_keys(trim_value)
             if _norm_text(control.get_attribute('value')) != trim_value:
                 raise ValueError('Trim value was not retained')
+            _log_field_method('Trim', 'Selenium text input fallback', 'SUCCESS', value=trim_value)
         print(f'[AutoListing] Optional Trim filled: {trim_value}')
         return model_value
     except Exception as exc:
         check_cancelled()
+        _log_field_method('Trim', 'optional trim selection/refill', 'FAILED', value=trim_value, error=exc)
         if combo is not None and combo:
             try:
                 combo.send_keys(Keys.ESCAPE)
             except Exception:
                 check_cancelled()
         print(f'[AutoListing] Optional Trim unavailable; skipped, keeping Model unchanged: {exc}')
+        _log_field_method('Trim', 'optional trim', 'SKIPPED', detail='Keeping Model unchanged after the failed optional attempt.')
     return model_value
 
 
@@ -996,7 +1083,7 @@ def _select_groups_for_listing(driver, group_names):
         return []
 
     try:
-        header = WebDriverWait(driver, 20).until(
+        header = WebDriverWait(driver, 90).until(
             EC.presence_of_element_located(
                 (
                     By.XPATH,
@@ -1007,7 +1094,7 @@ def _select_groups_for_listing(driver, group_names):
             )
         )
     except Exception as e:
-        print(f"⚠️ Group list header not found: {e}")
+        print(f"âš ï¸ Group list header not found: {e}")
         return []
 
     try:
@@ -1019,7 +1106,7 @@ def _select_groups_for_listing(driver, group_names):
         container = driver
 
     try:
-        WebDriverWait(driver, 20).until(
+        WebDriverWait(driver, 90).until(
             lambda d: len(container.find_elements(By.XPATH, ".//div[@role='checkbox']")) > 0
         )
     except Exception:
@@ -1083,7 +1170,7 @@ def _select_groups_for_listing(driver, group_names):
  
  
 # ======================================================
-# ðŸ§  Main Function: Facebook Marketplace Auto Poster
+# Ã°Å¸Â§Â  Main Function: Facebook Marketplace Auto Poster
 # ======================================================
 
 def _marketplace_publish_confirmed(driver):
@@ -1114,18 +1201,25 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         for key, label in EDIT_FIELDS.items():
             if label.casefold() == str(field_name).casefold() and key != 'clean_title':
                 entered_fields[key] = value if value not in (None, '') else data.get(key)
-        if str(field_name or "").strip().casefold() == "publish":
-            print('[AutoListing] Waiting 7 seconds after Publish...', flush=True)
-            cancellable_sleep(7)
 
     def debug_field_failure(field_name, error):
-        print(f"[AutoListing][FIELD FAILED] {field_name}: {error}", flush=True)
+        print(f"[AutoListing][FIELD FAILED] {field_name}: {error} "
+              f"| error_type={type(error).__name__}; error_repr={error!r}", flush=True)
 
     if not isinstance(data, dict):
-        print("❌ Invalid post data: expected dict.")
+        print("âŒ Invalid post data: expected dict.")
         return False
     request_payload = data
     data = _normalize_marketplace_vehicle_settings(data)
+    _log_field_method('Posting', 'normalize supplied app values', 'SUCCESS',
+                      detail=f'account={account!r}; vehicle type={data.get("vehicle_type")!r}')
+    for normalized_key, normalized_label in (('vehicle_type', 'Vehicle type'),
+                                              ('fuel_type', 'Fuel type'),
+                                              ('transmission', 'Transmission')):
+        if _norm_text(request_payload.get(normalized_key)) != _norm_text(data.get(normalized_key)):
+            _log_field_method(normalized_label, 'normalize supplied value to Facebook option', 'SUCCESS',
+                              value=data.get(normalized_key),
+                              detail=f'Supplied value: {request_payload.get(normalized_key)!r}')
     strict_fields = bool(data.get('_require_exact_fields'))
 
     if not post_mode:
@@ -1154,7 +1248,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
     if missing_required:
         for field_name in missing_required:
             debug_field_failure(field_name.title(), "required value is missing from the Excel row")
-        print(f"❌ Missing required post value(s): {', '.join(missing_required)}")
+        print(f"âŒ Missing required post value(s): {', '.join(missing_required)}")
         return False
 
     try:
@@ -1163,7 +1257,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         mileage_num = 0
     if mileage_num <= 300:
         debug_field_failure("Mileage", "value must be greater than 300")
-        print("❌ Mileage must be greater than 300.")
+        print("âŒ Mileage must be greater than 300.")
         return False
 
     precheck_images = []
@@ -1173,7 +1267,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             precheck_images.append(img_value)
     if not precheck_images:
         debug_field_failure("Images", "at least one image is required")
-        print("❌ At least one image is required.")
+        print("âŒ At least one image is required.")
         return False
 
     logs = []
@@ -1184,10 +1278,12 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
 
     # Posting uses a dedicated tab in the account's persistent CDP Chrome.
     # The account lock prevents two posting jobs from driving the same profile.
+    _log_field_method('Posting', 'open dedicated account posting tab', 'START', detail=f'account={account!r}')
     driver, posting_handle, original_handles, posting_lock = open_posting_tab(account)
+    _log_field_method('Posting', 'open dedicated account posting tab', 'SUCCESS', detail=f'account={account!r}')
     try:
-        driver.set_page_load_timeout(180)
-        wait = WebDriverWait(driver, 25)
+        driver.set_page_load_timeout(240)
+        wait = WebDriverWait(driver, 90)
         actions = ActionChains(driver)
     except BaseException:
         # A disconnected browser here used to bypass the later cleanup block
@@ -1202,6 +1298,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
     create_form_ready = False
     try:
         for attempt in range(1, 3):
+            _log_field_method('Create page', 'navigate to vehicle form', 'START', detail=f'attempt={attempt}/2')
             driver.get(create_vehicle_url)
             try:
                 WebDriverWait(driver, 90).until(
@@ -1211,8 +1308,12 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                     )
                 )
                 create_form_ready = True
+                _log_field_method('Create page', 'wait for vehicle URL and upload control', 'SUCCESS',
+                                  detail=f'attempt={attempt}/2')
                 break
-            except Exception:
+            except Exception as exc:
+                _log_field_method('Create page', 'wait for vehicle URL and upload control', 'FAILED',
+                                  error=exc, detail=f'attempt={attempt}/2; URL={driver.current_url}')
                 print(
                     f"[AutoListing] Vehicle form not ready after 90s "
                     f"(attempt {attempt}/2), URL: {driver.current_url}"
@@ -1236,7 +1337,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                     image_sources.append(src)
 
         if not image_sources:
-            log("❌ No image paths found in row.")
+            log("âŒ No image paths found in row.")
 
         save_folder = screenshots_dir()
         resolved_upload_paths = []
@@ -1257,33 +1358,45 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             target_path = os.path.join(save_folder, f"upload_{unique_tag}_{idx}.jpg")
 
             if source.startswith("data:image"):
+                _log_field_method('Images', 'decode base64 image to temporary file', 'START', detail=f'image={idx}')
                 try:
                     b64 = source.split(",", 1)[1] if "," in source else source
                     with open(target_path, "wb") as f:
                         f.write(base64.b64decode(b64))
                     local_path = target_path
+                    _log_field_method('Images', 'decode base64 image to temporary file', 'SUCCESS', detail=f'image={idx}')
                 except Exception as e:
-                    log(f"⚠️ Base64 image {idx} failed: {e}")
+                    _log_field_method('Images', 'decode base64 image to temporary file', 'FAILED', error=e, detail=f'image={idx}')
+                    log(f"âš ï¸ Base64 image {idx} failed: {e}")
                     continue
             elif source.startswith("http://") or source.startswith("https://"):
+                _log_field_method('Images', 'download image URL', 'START', detail=f'image={idx}')
                 try:
-                    response = requests.get(source, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+                    response = requests.get(source, headers={"User-Agent": "Mozilla/5.0"}, timeout=90)
                     if response.status_code == 200:
                         with open(target_path, "wb") as f:
                             f.write(response.content)
                         local_path = target_path
+                        _log_field_method('Images', 'download image URL', 'SUCCESS', detail=f'image={idx}')
                     else:
-                        log(f"⚠️ Image URL {idx} returned status {response.status_code}")
+                        _log_field_method('Images', 'download image URL', 'FAILED',
+                                          detail=f'image={idx}; HTTP status={response.status_code}')
+                        log(f"âš ï¸ Image URL {idx} returned status {response.status_code}")
                         continue
                 except Exception as e:
-                    log(f"⚠️ Image URL {idx} failed: {e}")
+                    _log_field_method('Images', 'download image URL', 'FAILED', error=e, detail=f'image={idx}')
+                    log(f"âš ï¸ Image URL {idx} failed: {e}")
                     continue
             else:
+                _log_field_method('Images', 'resolve existing local image', 'START', detail=f'image={idx}')
                 p = Path(source)
                 if p.exists() and p.is_file():
                     local_path = str(p.resolve())
+                    _log_field_method('Images', 'resolve existing local image', 'SUCCESS', detail=f'image={idx}')
                 else:
-                    log(f"⚠️ Local image {idx} not found: {source}")
+                    _log_field_method('Images', 'resolve existing local image', 'FAILED',
+                                      detail=f'image={idx}; local file is missing.')
+                    log(f"âš ï¸ Local image {idx} not found: {source}")
                     continue
 
             if local_path and Path(local_path).exists():
@@ -1301,40 +1414,46 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             unique_upload_paths.append(path)
 
         if unique_upload_paths:
+            _log_field_method('Images', 'single Selenium multi-file upload', 'START',
+                              detail=f'files={len(unique_upload_paths)}; wait for upload input up to 90s')
             try:
-                file_input = WebDriverWait(driver, 60).until(
+                file_input = WebDriverWait(driver, 90).until(
                     EC.presence_of_element_located((By.XPATH, "//input[@type='file' and not(@disabled)]"))
                 )
                 try:
+                    _log_field_method('Images', 'reveal hidden upload input with JavaScript', 'START')
                     driver.execute_script(
                         "arguments[0].style.display='block';"
                         "arguments[0].style.visibility='visible';"
                         "arguments[0].removeAttribute('hidden');",
                         file_input,
                     )
-                except Exception:
-                    pass
+                    _log_field_method('Images', 'reveal hidden upload input with JavaScript', 'SUCCESS')
+                except Exception as exc:
+                    _log_field_method('Images', 'reveal hidden upload input with JavaScript', 'FAILED', error=exc,
+                                      detail='Continuing with the original upload control.')
 
                 before_count = _uploaded_preview_count()
                 # Multi-file inputs accept newline-delimited absolute paths.
                 file_input.send_keys("\n".join(unique_upload_paths))
-                try:
-                    WebDriverWait(driver, 30).until(
-                        lambda d: _uploaded_preview_count() >= before_count + len(unique_upload_paths)
-                    )
-                except Exception:
-                    pass
+                _log_field_method('Images', 'single Selenium multi-file upload', 'SUCCESS',
+                                  detail=f'Submitted {len(unique_upload_paths)} file path(s).')
+                # Let Facebook process previews while the remaining fields are filled.
                 successful_uploads = len(unique_upload_paths)
+                _log_field_method('Images', 'defer preview readiness review', 'SUCCESS',
+                                  detail=f'submitted={successful_uploads}; previews checked before Next')
                 debug_field_success(
                     "Images", f"{successful_uploads}/{len(unique_upload_paths)} uploaded"
                 )
             except Exception as e:
+                _log_field_method('Images', 'single Selenium multi-file upload', 'FAILED', error=e)
                 debug_field_failure("Images", e)
 
         # Best-effort duplicate cleanup in preview:
         # if same preview image appears multiple times, remove extra copies.
         try:
             if successful_uploads > 0:
+                _log_field_method('Images', 'JavaScript duplicate preview cleanup', 'START')
                 duplicate_removed = driver.execute_script(
                     """
                     const buttons = Array.from(document.querySelectorAll('[aria-label="Remove photo"]'));
@@ -1362,14 +1481,20 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 if duplicate_removed:
                     print(f"Removed duplicate preview image(s): {duplicate_removed}")
                     cancellable_sleep(1)
-        except Exception:
-            pass
+                _log_field_method('Images', 'JavaScript duplicate preview cleanup', 'SUCCESS',
+                                  detail=f'duplicate previews removed={duplicate_removed or 0}')
+        except Exception as exc:
+            _log_field_method('Images', 'JavaScript duplicate preview cleanup', 'FAILED', error=exc)
 
     except Exception as e:
       debug_field_failure("Images", e)
     # Optional videos never block the required listing fields or publishing.
     from automation.video_upload import upload_optional_videos
+    _log_field_method('Videos', 'optional video uploader', 'START',
+                      detail=f'requested={len(data.get("video_paths") or [])}')
     video_submissions = upload_optional_videos(driver, data.get("video_paths", []), log=log)
+    _log_field_method('Videos', 'optional video uploader', 'SUCCESS',
+                      detail=f'submitted={video_submissions}; requested={len(data.get("video_paths") or [])}')
     diagnostic_event('POST_MEDIA', 'SUMMARY', account=account,
                      photos_uploaded=successful_uploads,
                      videos_requested=len(data.get('video_paths') or []), videos_submitted=video_submissions)
@@ -1383,13 +1508,15 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             raise Exception("Mandatory images could not be uploaded.")
 
         active_field = "Vehicle type"
+        _log_field_method('Vehicle type', 'locate initial clickable dropdown', 'START')
         try:
-            vehicle_type_combo = WebDriverWait(driver, 25).until(
+            vehicle_type_combo = WebDriverWait(driver, 90).until(
                 EC.element_to_be_clickable(
                     (By.XPATH, _combobox_label_xpath("Vehicle type"))
                 )
             )
         except Exception as exc:
+            _log_field_method('Vehicle type', 'locate initial clickable dropdown', 'FAILED', error=exc)
             print(
                 f"[AutoListing][FIELD FAILED] Vehicle type: initial combobox HTML "
                 f"was not found or was not clickable: {exc}",
@@ -1397,6 +1524,7 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             )
             raise
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", vehicle_type_combo)
+        _log_field_method('Vehicle type', 'locate initial clickable dropdown', 'SUCCESS')
 
         def _xpath_literal(value):
             if "'" not in value:
@@ -1478,10 +1606,11 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             except Exception as diagnostic_error:
                 print(f"[AutoListing][VEHICLE TYPE DEBUG] Cannot inspect dropdown: {diagnostic_error!r}", flush=True)
 
-        def _click_and_verify_vehicle_type(option, option_text, timeout=25):
+        def _click_and_verify_vehicle_type(option, option_text, timeout=90):
             wanted = _norm_text(option_text).casefold()
             last_error = ""
             for method in ("javascript", "native", "actions", "keyboard"):
+                _log_field_method('Vehicle type', f'select option using {method}', 'START', value=option_text)
                 try:
                     # Facebook frequently replaces the option node after the
                     # first pointer event, so locate a fresh matching node for
@@ -1520,19 +1649,23 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                     WebDriverWait(driver, timeout).until(
                         lambda d: _is_vehicle_type_selected(option_text)
                     )
+                    _log_field_method('Vehicle type', f'select option using {method}', 'SUCCESS', value=option_text,
+                                      detail='Selection was read back and retained.')
                     print(f"[AutoListing] Vehicle type retained after {method} selection: {option_text}", flush=True)
                     return True
                 except Exception as exc:
                     last_error = str(exc)
+                    _log_field_method('Vehicle type', f'select option using {method}', 'FAILED', value=option_text, error=exc)
                     print(f"[AutoListing] Vehicle type {method} selection failed for {option_text!r}: {exc}", flush=True)
                     _log_vehicle_type_failure(f"Click/verification failed: method={method}, requested option={option_text!r}", exc)
             print(f"[AutoListing][FIELD FAILED] Vehicle type: option {option_text!r} was located but not retained; last_error={last_error}", flush=True)
             return False
 
-        def _select_vehicle_type(option_text, timeout=25):
+        def _select_vehicle_type(option_text, timeout=90):
             option_text = option_text.strip()
             if not option_text:
                 return False
+            _log_field_method('Vehicle type', 'exact dropdown option lookup', 'START', value=option_text)
             try:
                 WebDriverWait(driver, timeout).until(
                     lambda d: bool(_visible_vehicle_type_options())
@@ -1540,50 +1673,69 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 wanted = option_text.casefold()
                 for option, text in _visible_vehicle_type_options():
                     if text.casefold() == wanted:
+                        _log_field_method('Vehicle type', 'exact dropdown option lookup', 'SUCCESS', value=text)
                         return _click_and_verify_vehicle_type(option, text)
+                _log_field_method('Vehicle type', 'exact dropdown option lookup', 'FAILED', value=option_text,
+                                  detail='No exact option; configured Car prefix fallback may run next.')
                 _log_vehicle_type_failure(f"No exact dropdown option matches {option_text!r}; checking supported prefix next.")
                 return False
             except Exception as exc:
+                _log_field_method('Vehicle type', 'exact dropdown option lookup', 'FAILED', value=option_text, error=exc)
                 print(f"[AutoListing][FIELD FAILED] Vehicle type: exact option lookup failed for {option_text!r}: {exc}", flush=True)
                 _log_vehicle_type_failure(f"Exact lookup failed for {option_text!r}", exc)
                 return False
 
-        def _select_vehicle_type_starts_with(prefix, timeout=25):
+        def _select_vehicle_type_starts_with(prefix, timeout=90):
             """Select first vehicle type option that starts with the given prefix (case-insensitive)."""
             prefix_lower = prefix.strip().lower()
+            _log_field_method('Vehicle type', 'prefix dropdown option lookup', 'START', value=prefix)
             try:
                 WebDriverWait(driver, timeout).until(
                     lambda d: bool(_visible_vehicle_type_options())
                 )
                 for option, text in _visible_vehicle_type_options():
                     if text.casefold().startswith(prefix_lower):
+                        _log_field_method('Vehicle type', 'prefix dropdown option lookup', 'SUCCESS', value=text)
                         return text if _click_and_verify_vehicle_type(option, text) else ""
+                _log_field_method('Vehicle type', 'prefix dropdown option lookup', 'FAILED', value=prefix,
+                                  detail='No matching prefix was offered.')
                 _log_vehicle_type_failure(f"No visible dropdown option starts with {prefix!r}.")
                 return ""
             except Exception as exc:
+                _log_field_method('Vehicle type', 'prefix dropdown option lookup', 'FAILED', value=prefix, error=exc)
                 print(f"[AutoListing][FIELD FAILED] Vehicle type: prefix option lookup failed for {prefix!r}: {exc}", flush=True)
                 _log_vehicle_type_failure(f"Prefix lookup failed for {prefix!r}", exc)
                 return ""
 
-        def _select_case_insensitive_combo(label, desired, fallback=None, timeout=25, exact_only=False):
+        def _select_case_insensitive_combo(label, desired, fallback=None, timeout=90, exact_only=False):
             return _select_marketplace_combo(driver, label, desired, fallback, timeout, exact_only)
 
         active_field = "Vehicle type"
         excel_vehicle_type = _norm_text(data.get("vehicle_type"))
         selected_vehicle_type = None
         excel_starts_with_car = excel_vehicle_type.lower().startswith("car") if excel_vehicle_type else False
+        preferred_car_prefix_tried = False
 
-        # Step 1: Try exact match from Excel data
+        # Step 1: Reuse the current choice or try the proven generic-Car match.
         if excel_vehicle_type:
             if _is_vehicle_type_selected(excel_vehicle_type):
+                _log_field_method('Vehicle type', 'existing selection matches', 'SUCCESS', value=excel_vehicle_type)
                 selected_vehicle_type = excel_vehicle_type
             else:
                 _open_vehicle_type_combo()
-                if _select_vehicle_type(excel_vehicle_type):
+                # Marketplace labels a generic Car request as Car/Truck. Use
+                # the observed working prefix match first for this normalized
+                # value, keeping exact lookup as the fallback.
+                if excel_vehicle_type.casefold() == 'car':
+                    preferred_car_prefix_tried = True
+                    matched = _select_vehicle_type_starts_with('car')
+                    if matched:
+                        selected_vehicle_type = matched
+                if not selected_vehicle_type and _select_vehicle_type(excel_vehicle_type):
                     selected_vehicle_type = excel_vehicle_type
 
-        # Step 2: If exact match not found and Excel type starts with "car", try to find option starting with "car"
-        if not selected_vehicle_type and excel_starts_with_car:
+        # Step 2: Keep the existing prefix route as fallback for other Car labels.
+        if not selected_vehicle_type and excel_starts_with_car and not preferred_car_prefix_tried:
             _open_vehicle_type_combo()
             matched_car_type = _select_vehicle_type_starts_with("car")
             if matched_car_type:
@@ -1612,120 +1764,162 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         if not year_value:
             raise Exception("Mandatory year is missing.")
         if year_value:
-            year_combo = WebDriverWait(driver, 25).until(
+            _log_field_method('Year', 'Selenium dropdown typing and Enter', 'START', value=year_value)
+            year_combo = WebDriverWait(driver, 90).until(
                 EC.element_to_be_clickable(
                     (By.XPATH, _combobox_label_xpath("Year"))
                 )
             )
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", year_combo)
             try:
+                _log_field_method('Year', 'native dropdown click', 'START')
                 year_combo.click()
-            except Exception:
+                _log_field_method('Year', 'native dropdown click', 'SUCCESS')
+            except Exception as exc:
+                _log_field_method('Year', 'native dropdown click', 'FAILED', error=exc)
+                _log_field_method('Year', 'JavaScript dropdown click fallback', 'START')
                 driver.execute_script("arguments[0].click();", year_combo)
+                _log_field_method('Year', 'JavaScript dropdown click fallback', 'SUCCESS')
             cancellable_sleep(0.3)
             year_combo.send_keys(year_value)
             year_combo.send_keys(Keys.ENTER)
+            _log_field_method('Year', 'Selenium dropdown typing and Enter', 'SUCCESS', value=year_value)
             debug_field_success("Year", year_value)
         cancellable_sleep(1)
 
         active_field = "Make"
         make_value = _norm_text(data.get("make"))
         if make_value:
+            # Keep one total timer around the Make field as well as the
+            # timers on its individual selector/fallback methods below.
+            _log_field_method('Make', 'complete field selection', 'START', value=make_value)
             make_selected = False
             try:
-                # Existing approach: direct Make input interaction.
-                make_input = WebDriverWait(driver, 25).until(
-                    EC.presence_of_element_located(
-                        (By.XPATH, _input_for_label_xpath("Make"))
+                _log_field_method('Make', 'dropdown layout selection', 'START', value=make_value)
+                # Prefer the observed Make combobox layout; it avoids a
+                # 90-second wait for a text input on pages without one.
+                make_combo = WebDriverWait(driver, 90).until(
+                    EC.element_to_be_clickable(
+                    (By.XPATH, _combobox_label_xpath("Make"))
                     )
                 )
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", make_input)
-                make_input.click()
-                make_input.clear()
-                make_input.send_keys(make_value)
-                debug_field_success("Make", make_value)
-                make_selected = True
-            except Exception:
-                pass
-
-            if not make_selected:
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", make_combo)
                 try:
-                    # Fallback for Make-as-combobox layout: target only Make.
-                    make_combo = WebDriverWait(driver, 25).until(
-                        EC.element_to_be_clickable(
-                        (By.XPATH, _combobox_label_xpath("Make"))
-                        )
-                    )
-                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", make_combo)
-                    try:
-                        make_combo.click()
-                    except Exception:
-                        driver.execute_script("arguments[0].click();", make_combo)
-                    cancellable_sleep(0.3)
-                    try:
-                        driver.execute_script("arguments[0].focus();", make_combo)
-                    except Exception:
-                        pass
+                    _log_field_method('Make', 'native dropdown click', 'START')
+                    make_combo.click()
+                    _log_field_method('Make', 'native dropdown click', 'SUCCESS')
+                except Exception as exc:
+                    _log_field_method('Make', 'native dropdown click', 'FAILED', error=exc)
+                    _log_field_method('Make', 'JavaScript dropdown click fallback', 'START')
+                    driver.execute_script("arguments[0].click();", make_combo)
+                    _log_field_method('Make', 'JavaScript dropdown click fallback', 'SUCCESS')
+                cancellable_sleep(0.3)
+                try:
+                    driver.execute_script("arguments[0].focus();", make_combo)
+                except Exception as exc:
+                    _log_field_method('Make', 'JavaScript dropdown focus', 'FAILED', error=exc)
 
-                    make_selected_xpath = (
-                        f"{_combobox_label_xpath('Make')}"
+                make_selected_xpath = (
+                    f"{_combobox_label_xpath('Make')}"
+                    "//span[translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')="
+                    f"{_xpath_literal(make_value.lower())}]"
+                )
+
+                typed = False
+                try:
+                    has_make_focus = driver.execute_script(
+                        "return document.activeElement === arguments[0];", make_combo
+                    )
+                except Exception as exc:
+                    _log_field_method('Make', 'inspect dropdown keyboard focus', 'FAILED', error=exc)
+                    has_make_focus = False
+
+                if has_make_focus:
+                    try:
+                        _log_field_method('Make', 'ActionChains typing and Enter', 'START', value=make_value)
+                        actions.move_to_element(make_combo).click().send_keys(make_value).send_keys(Keys.ENTER).perform()
+                        typed = True
+                        cancellable_sleep(0.8)
+                    except Exception as exc:
+                        _log_field_method('Make', 'ActionChains typing and Enter', 'FAILED', value=make_value, error=exc)
+                        typed = False
+                else:
+                    _log_field_method('Make', 'ActionChains typing and Enter', 'SKIPPED',
+                                      detail='Make dropdown did not receive keyboard focus.')
+
+                if typed and driver.find_elements(By.XPATH, make_selected_xpath):
+                    _log_field_method('Make', 'ActionChains typing and Enter', 'SUCCESS', value=make_value,
+                                      detail='Selected Make text was found after typing.')
+                    debug_field_success("Make (combobox typed fallback)", make_value)
+                    make_selected = True
+                else:
+                    if typed:
+                        _log_field_method('Make', 'ActionChains typing and Enter', 'FAILED', value=make_value,
+                                          detail='Typing completed but selected Make text was not found.')
+                    _log_field_method('Make', 'exact option click fallback', 'START', value=make_value)
+                    make_option_xpath = (
                         "//span[translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')="
                         f"{_xpath_literal(make_value.lower())}]"
                     )
-
-                    typed = False
+                    make_option = WebDriverWait(driver, 90).until(
+                        EC.element_to_be_clickable((By.XPATH, make_option_xpath))
+                    )
                     try:
-                        has_make_focus = driver.execute_script(
-                            "return document.activeElement === arguments[0];", make_combo
-                        )
-                    except Exception:
-                        has_make_focus = False
+                        _log_field_method('Make', 'native option click', 'START')
+                        make_option.click()
+                        _log_field_method('Make', 'native option click', 'SUCCESS')
+                    except Exception as exc:
+                        _log_field_method('Make', 'native option click', 'FAILED', error=exc)
+                        _log_field_method('Make', 'JavaScript option click fallback', 'START')
+                        driver.execute_script("arguments[0].click();", make_option)
+                        _log_field_method('Make', 'JavaScript option click fallback', 'SUCCESS')
+                    _log_field_method('Make', 'exact option click fallback', 'SUCCESS', value=make_value)
+                    debug_field_success("Make (combobox option fallback)", make_value)
+                    make_selected = True
+                cancellable_sleep(1)
+                _log_field_method('Make', 'dropdown layout selection', 'SUCCESS', value=make_value)
+            except Exception as exc:
+                _log_field_method('Make', 'dropdown layout selection', 'FAILED', value=make_value, error=exc)
+                debug_field_failure("Make dropdown", f"value={make_value!r}; error={exc}")
 
-                    if has_make_focus:
-                        try:
-                            actions.move_to_element(make_combo).click().send_keys(make_value).send_keys(Keys.ENTER).perform()
-                            typed = True
-                            cancellable_sleep(0.8)
-                        except Exception:
-                            typed = False
-
-                    if typed and driver.find_elements(By.XPATH, make_selected_xpath):
-                        debug_field_success("Make (combobox typed fallback)", make_value)
-                        make_selected = True
-                    else:
-                        make_option_xpath = (
-                            "//span[translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')="
-                            f"{_xpath_literal(make_value.lower())}]"
-                        )
-                        make_option = WebDriverWait(driver, 25).until(
-                            EC.element_to_be_clickable((By.XPATH, make_option_xpath))
-                        )
-                        try:
-                            make_option.click()
-                        except Exception:
-                            driver.execute_script("arguments[0].click();", make_option)
-                        debug_field_success("Make (combobox option fallback)", make_value)
-                        make_selected = True
-                    cancellable_sleep(1)
-                except Exception as exc:
-                    debug_field_failure("Make fallback", f"value={make_value!r}; error={exc}")
             if not make_selected:
+                try:
+                    _log_field_method('Make', 'direct Selenium text input fallback', 'START', value=make_value)
+                    make_input = WebDriverWait(driver, 90).until(
+                        EC.presence_of_element_located((By.XPATH, _input_for_label_xpath("Make")))
+                    )
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", make_input)
+                    make_input.click()
+                    make_input.clear()
+                    make_input.send_keys(make_value)
+                    debug_field_success("Make", make_value)
+                    _log_field_method('Make', 'direct Selenium text input fallback', 'SUCCESS', value=make_value)
+                    make_selected = True
+                except Exception as exc:
+                    _log_field_method('Make', 'direct Selenium text input fallback', 'FAILED', value=make_value,
+                                      error=exc, detail='Dropdown selection and direct input fallback both failed.')
+            if not make_selected:
+                _log_field_method('Make', 'complete field selection', 'FAILED', value=make_value,
+                                  detail='All available Make selection methods failed.')
                 raise Exception(f"Mandatory make could not be filled: {make_value}")
+            _log_field_method('Make', 'complete field selection', 'SUCCESS', value=make_value,
+                              detail='Includes dropdown open, option selection, and any fallback used.')
         else:
+            _log_field_method('Make', 'complete field selection', 'FAILED', detail='Mandatory Make value is empty.')
             raise Exception("Mandatory make is missing.")
 
         active_field = "Model"
         model_value = _norm_text(data.get("model"))
         if model_value:
-            model_input = WebDriverWait(driver, 25).until(
+            if not fill_posting_input(driver, 'model', 'Model', model_value,
+                                      (By.XPATH, _input_for_label_xpath('Model')),
+                                      log=_log_field_method, timeout=90):
+                raise RuntimeError('Model could not retain the requested value after replacement.')
+            model_input = WebDriverWait(driver, 90).until(
                 EC.presence_of_element_located(
                     (By.XPATH, _input_for_label_xpath("Model"))
                 )
             )
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", model_input)
-            model_input.click()
-            model_input.clear()
-            model_input.send_keys(model_value)
             debug_field_success("Model", model_value)
         else:
             raise Exception("Mandatory model is missing.")
@@ -1740,15 +1934,10 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             if mileage_num <= 300:
                 raise Exception("Mileage must be greater than 300.")
 
-            mileage_input = WebDriverWait(driver, 25).until(
-                EC.presence_of_element_located(
-                    (By.XPATH, _input_for_any_label_xpath("Mileage", "Odometer"))
-                )
-            )
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", mileage_input)
-            mileage_input.click()
-            mileage_input.clear()
-            mileage_input.send_keys(mileage_to_use)
+            if not fill_posting_input(driver, 'mileage', 'Mileage', mileage_to_use,
+                                      (By.XPATH, _input_for_any_label_xpath('Mileage', 'Odometer')),
+                                      log=_log_field_method, timeout=90):
+                raise RuntimeError('Mileage could not retain the requested number after replacement.')
             debug_field_success("Mileage", mileage_to_use)
         else:
             raise Exception("Mandatory mileage is missing.")
@@ -1757,15 +1946,10 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         price_value = _norm_text(data.get("price"))
         if not price_value:
             raise Exception("Mandatory price is missing.")
-        price_input = WebDriverWait(driver, 25).until(
-            EC.presence_of_element_located(
-                (By.XPATH, _input_for_label_xpath("Price"))
-            )
-        )
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", price_input)
-        price_input.click()
-        price_input.clear()
-        price_input.send_keys(price_value)
+        if not fill_posting_input(driver, 'price', 'Price', price_value,
+                                  (By.XPATH, _input_for_label_xpath('Price')),
+                                  log=_log_field_method, timeout=90):
+            raise RuntimeError('Price could not retain the requested numeric amount after replacement.')
         debug_field_success("Price", price_value)
 
         active_field = "Body style"
@@ -1774,16 +1958,18 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             if not body_style_value:
                 raise Exception("Mandatory body style is missing.")
             body_style_selected = _select_case_insensitive_combo(
-                "Body style", body_style_value, fallback=None if strict_fields else "Other", timeout=25
+                "Body style", body_style_value, fallback=None if strict_fields else "Other", timeout=90
             )
             debug_field_success("Body style", body_style_selected)
         else:
+            _log_field_method('Body style', 'vehicle-type applicability check', 'SKIPPED',
+                              detail='Body style is not applicable to Other vehicle type.')
             print("[AutoListing][FIELD SKIPPED] Body style: vehicle type is Other.", flush=True)
 
         for color_label, color_key in (("Exterior colour", "exterior_color"),
                                        ("Interior colour", "interior_color")):
             active_field = color_label
-            selected_color = _fill_optional_color(driver, color_label, data.get(color_key), timeout=25, strict=strict_fields)
+            selected_color = _fill_optional_color(driver, color_label, data.get(color_key), timeout=90, strict=strict_fields)
             if selected_color:
                 entered_fields[color_key] = selected_color
 
@@ -1793,7 +1979,8 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         try:
             active_field = "Clean title"
             if not strict_fields or _norm_text(data.get('clean_title')):
-                clean_title_checkbox = WebDriverWait(driver, 25).until(
+                _log_field_method('Clean title', 'read and synchronize checkbox', 'START')
+                clean_title_checkbox = WebDriverWait(driver, 90).until(
                     EC.presence_of_element_located(
                         (By.XPATH, "//input[@type='checkbox' and @aria-label='This vehicle has a clean title.']")
                     )
@@ -1803,25 +1990,66 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
                 clean_title_requested = _norm_text(data.get('clean_title', 'Yes')).casefold() not in {'no', 'false', '0'}
                 if is_checked != clean_title_requested:
                     try:
+                        _log_field_method('Clean title', 'native checkbox click', 'START', value=clean_title_requested)
                         clean_title_checkbox.click()
-                    except Exception:
+                        _log_field_method('Clean title', 'native checkbox click', 'SUCCESS', value=clean_title_requested)
+                    except Exception as exc:
+                        _log_field_method('Clean title', 'native checkbox click', 'FAILED', error=exc)
+                        _log_field_method('Clean title', 'JavaScript checkbox click fallback', 'START', value=clean_title_requested)
                         driver.execute_script("arguments[0].click();", clean_title_checkbox)
+                        _log_field_method('Clean title', 'JavaScript checkbox click fallback', 'SUCCESS', value=clean_title_requested)
+                else:
+                    _log_field_method('Clean title', 'existing checkbox state matches', 'SUCCESS', value=clean_title_requested)
+                _log_field_method('Clean title', 'read and synchronize checkbox', 'SUCCESS', value=clean_title_requested)
                 debug_field_success("Clean title", "checked" if clean_title_requested else "unchecked")
+            else:
+                _log_field_method('Clean title', 'saved field', 'SKIPPED', detail='No clean-title value was supplied for exact-field posting.')
         except Exception as exc:
+            _log_field_method('Clean title', 'read and synchronize checkbox', 'FAILED', error=exc)
             debug_field_failure("Clean title", exc)
             if strict_fields and str(data.get('clean_title') or '').strip():
                 raise
 
         try:
             active_field = "Vehicle condition"
-            if _norm_text(data.get('vehicle_condition')):
+            supplied_condition = _norm_text(data.get('vehicle_condition'))
+            if supplied_condition:
                 condition_selected = _select_case_insensitive_combo(
-                    "Vehicle condition", data['vehicle_condition'], fallback=None if strict_fields else "Very good", timeout=25
+                    "Vehicle condition", supplied_condition,
+                    fallback=None if strict_fields else "Very good", timeout=90
                 )
+                data['vehicle_condition'] = condition_selected
                 debug_field_success("Vehicle condition", condition_selected)
             else:
-                print('[AutoListing][FIELD SKIPPED] Vehicle condition: no value supplied.', flush=True)
+                _log_field_method('Vehicle condition', 'auto-select available condition', 'START',
+                                  detail='No condition supplied; prefer Very good, otherwise choose a Facebook option.')
+                _open_marketplace_combo(driver, 'Vehicle condition', timeout=90)
+                condition_choices = _marketplace_combo_choices(driver, 'Vehicle condition')
+                available_conditions = [text for _, text in condition_choices]
+                if not available_conditions:
+                    raise RuntimeError('Facebook showed no selectable vehicle-condition options.')
+                preferred_conditions = (
+                    'Very good', 'Excellent', 'Good', 'Used - like new', 'Like new',
+                    'Fair', 'Used - good', 'Used - fair', 'New',
+                )
+                condition_selected = next(
+                    (option for preferred in preferred_conditions
+                     for option in available_conditions
+                     if option.casefold() == preferred.casefold()),
+                    available_conditions[0],
+                )
+                _log_field_method('Vehicle condition', 'choose available default', 'SUCCESS',
+                                  value=condition_selected,
+                                  detail=f'available={available_conditions!r}')
+                condition_selected = _select_case_insensitive_combo(
+                    'Vehicle condition', condition_selected, timeout=90
+                )
+                data['vehicle_condition'] = condition_selected
+                _log_field_method('Vehicle condition', 'auto-select available condition', 'SUCCESS',
+                                  value=condition_selected)
+                debug_field_success('Vehicle condition', condition_selected)
         except Exception as exc:
+            _log_field_method('Vehicle condition', 'dropdown selection strategies', 'FAILED', error=exc)
             debug_field_failure("Vehicle condition (optional)", exc)
             if strict_fields and _norm_text(data.get('vehicle_condition')):
                 raise
@@ -1830,10 +2058,11 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         try:
             active_field = "Fuel type"
             fuel_selected = _select_case_insensitive_combo(
-                "Fuel type", fuel_type_value, fallback=None if strict_fields else "Other", timeout=25
+                "Fuel type", fuel_type_value, fallback=None if strict_fields else "Other", timeout=90
             )
             debug_field_success("Fuel type", fuel_selected)
         except Exception as exc:
+            _log_field_method('Fuel type', 'dropdown selection strategies', 'FAILED', error=exc)
             debug_field_failure("Fuel type (optional)", exc)
             if strict_fields:
                 raise
@@ -1842,213 +2071,198 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
         try:
             active_field = "Transmission"
             transmission_selected = _select_case_insensitive_combo(
-                "Transmission", transmission_value, fallback=None if strict_fields else "Automatic transmission", timeout=25
+                "Transmission", transmission_value, fallback=None if strict_fields else "Automatic transmission", timeout=90
             )
             debug_field_success("Transmission", transmission_selected)
         except Exception as exc:
+            _log_field_method('Transmission', 'dropdown selection strategies', 'FAILED', error=exc)
             debug_field_failure("Transmission (optional)", exc)
             if strict_fields:
                 raise
 
+        from automation.posting_description import fill_description
+        description_value = _norm_text(data.get("description"))
+
+        def _try_set_description():
+            return fill_description(driver, description_value, log=_log_field_method, timeout=90)
+
         try:
             active_field = "Description"
-            driver.execute_script("window.scrollTo(0, 0);")
-            cancellable_sleep(1.5)
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            cancellable_sleep(1.5)
-        except Exception:
-            pass
-
-        try:
-            # Never invent listing copy. Use only the description supplied by
-            # the selected source; an empty source description stays empty.
-            description_value = _norm_text(data.get("description"))
             if description_value:
-                def _try_set_description():
-                    desc_xpath = (
-                        # Provided HTML: <span>Description</span> ... <textarea ...>
-                        "//span[translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='description']"
-                        "/ancestor::div[1]//textarea[1]"
-                        " | //textarea[contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'description')]"
-                        " | //span[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'description')]"
-                        "/following::textarea[1]"
-                        " | //span[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'description')]"
-                        "/following::*[@role='textbox'][1]"
-                        " | (//textarea)[last()]"
-                    )
-                    try:
-                        description_input = WebDriverWait(driver, 25).until(
-                            EC.presence_of_element_located((By.XPATH, desc_xpath))
-                        )
-                    except Exception:
-                        description_input = None
-
-                    if not description_input:
-                        return False
-
-                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", description_input)
-                    try:
-                        WebDriverWait(driver, 25).until(EC.element_to_be_clickable(description_input))
-                    except Exception:
-                        pass
-
-                    try:
-                        description_input.click()
-                    except Exception:
-                        try:
-                            driver.execute_script("arguments[0].click();", description_input)
-                        except Exception:
-                            pass
-
-                    # Prefer JS set + input event (more reliable on FB React)
-                    try:
-                        driver.execute_script(
-                            """
-                            const el = arguments[0];
-                            const val = arguments[1];
-                            const tag = (el.tagName || '').toLowerCase();
-                            if (tag === 'textarea' || tag === 'input') {
-                              el.value = val;
-                            } else {
-                              el.textContent = val;
-                            }
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                            """,
-                            description_input,
-                            description_value,
-                        )
-                        cancellable_sleep(0.2)
-                    except Exception:
-                        pass
-
-                    # Fallback typing
-                    try:
-                        current_val = (description_input.get_attribute("value") or "").strip()
-                    except Exception:
-                        current_val = ""
-                    if not current_val or len(current_val) < 10:
-                        try:
-                            description_input.send_keys(Keys.CONTROL, "a")
-                            description_input.send_keys(Keys.BACKSPACE)
-                        except Exception:
-                            pass
-                        description_input.send_keys(description_value)
-
-                    return True
-
-                ok = _try_set_description()
-                if not ok:
-                    debug_field_failure("Description", "field not found; skipped")
-                    if strict_fields:
-                        raise RuntimeError('Saved description could not be filled.')
-                else:
+                if _try_set_description():
                     debug_field_success("Description")
+                else:
+                    # Review uses the same live editor and retries a mismatch;
+                    # some account layouts only show Description after Next.
+                    debug_field_failure("Description", "Initial methods did not retain the supplied text; the field will be checked and retried during review.")
             else:
-                print("[AutoListing][FIELD SKIPPED] Description: no value supplied.", flush=True)
+                _log_field_method("Description", "source value", "SKIPPED", detail="no description supplied by the app")
         except Exception as exc:
-            debug_field_failure("Description", exc)
-            if strict_fields:
-                raise
+            debug_field_failure("Description", f"{type(exc).__name__}: {exc!r}")
+            _log_field_method("Description", "initial fill", "FAILED", error=exc)
+            from automation.task_control import check_cancelled
+            check_cancelled()
 
-        from automation.posting_recovery import wait_for_action, restore_empty_fields
+        from automation.posting_recovery import click_action, restore_empty_fields
 
-        def repair_cleared_fields():
-            def fill(key, label, value):
+        def refill_field(key, label, value):
+            method = 'review refill'
+            _log_field_method(label, method, 'START', detail=(f'{len(str(value))} characters' if key == 'description' else f'requested={value!r}'))
+            try:
                 if key == 'vehicle_type':
                     _open_vehicle_type_combo()
-                    if not _select_vehicle_type(str(value), timeout=25):
-                        raise RuntimeError('Cleared vehicle type could not be restored.')
+                    if not _select_vehicle_type(str(value), timeout=90):
+                        raise RuntimeError('Requested vehicle type could not be restored.')
                 elif key == 'description':
                     if not _try_set_description():
-                        raise RuntimeError('Cleared description could not be restored.')
+                        raise RuntimeError('Description did not retain the supplied text after all editing methods; see method logs above.')
                 elif key in {'year', 'body_style', 'vehicle_condition', 'fuel_type', 'transmission'}:
-                    _select_case_insensitive_combo(label, str(value), timeout=25)
+                    _select_case_insensitive_combo(label, str(value), timeout=90)
                 elif key in {'exterior_color', 'interior_color'}:
-                    _fill_optional_color(driver, label, value, timeout=25, strict=True)
-                elif key == 'make' and _marketplace_combo(driver, label):
-                    _select_case_insensitive_combo(label, str(value), timeout=25)
+                    _fill_optional_color(driver, label, value, timeout=90, strict=True)
                 elif key == 'clean_title':
-                    return  # A checkbox is not a cleared text/dropdown field.
+                    checkbox = WebDriverWait(driver, 90).until(EC.presence_of_element_located(
+                        (By.XPATH, "//input[@type='checkbox' and @aria-label='This vehicle has a clean title.']")))
+                    wanted = _norm_text(value).casefold() not in {'no', 'false', '0'}
+                    actual = ((checkbox.get_attribute('aria-checked') or '').lower() == 'true'
+                              or checkbox.is_selected())
+                    if actual != wanted:
+                        _log_field_method(label, 'native checkbox click', 'START')
+                        try:
+                            checkbox.click()
+                            _log_field_method(label, 'native checkbox click', 'SUCCESS')
+                        except Exception as exc:
+                            _log_field_method(label, 'native checkbox click', 'FAILED', error=exc)
+                            _log_field_method(label, 'javascript checkbox click fallback', 'START')
+                            driver.execute_script("arguments[0].click();", checkbox)
+                            _log_field_method(label, 'javascript checkbox click fallback', 'SUCCESS')
+                elif key in {'make', 'vin', 'location'} and _marketplace_combo(driver, label):
+                    _select_case_insensitive_combo(label, str(value), timeout=90)
                 else:
                     aliases = ('Mileage', 'Odometer') if key == 'mileage' else (label,)
-                    control = WebDriverWait(driver, 25).until(EC.element_to_be_clickable(
-                        (By.XPATH, _input_for_any_label_xpath(*aliases))))
-                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", control)
-                    control.click()
-                    control.clear()
-                    control.send_keys(str(value))
-                    control.send_keys(Keys.TAB)
-            return restore_empty_fields(driver, entered_fields, fill)
+                    if not fill_posting_input(driver, key, label, value,
+                                              (By.XPATH, _input_for_any_label_xpath(*aliases)),
+                                              log=_log_field_method, timeout=90):
+                        raise RuntimeError(f'{label} did not retain the requested value after replacement methods.')
+            except Exception as exc:
+                _log_field_method(label, method, 'FAILED', error=exc)
+                raise
+            _log_field_method(label, method, 'SUCCESS', detail='write finished; checking the live form next')
 
-        cancellable_sleep(1)
-        try:
-            # Next step (click if present)
+        def repair_cleared_fields():
+            return restore_empty_fields(driver, entered_fields, refill_field)
+
+        # Verify the rendered form against the exact values this posting flow
+        # was asked to use. Colors are intentionally optional. Verification is
+        # repeated after Next because Facebook can clear Description on submit.
+        from automation.reposting import EDIT_FIELDS, EXTRA_VEHICLE_FIELDS, read_edit_form_snapshot
+        # Trim keeps its existing optional selector policy: unsupported saved
+        # trim choices must not block posting or change the Model.
+        review_labels = dict(EDIT_FIELDS, vin=EXTRA_VEHICLE_FIELDS['vin'])
+        review_labels.pop('location', None)
+        review_values = {key: _norm_text(data.get(key)) for key in review_labels}
+        review_values.update({
+            'vehicle_type': _norm_text(data.get('vehicle_type')),
+            'year': _norm_text(data.get('year')),
+            'make': _norm_text(data.get('make')),
+            'model': _norm_text(data.get('model')),
+            'mileage': _norm_text(data.get('mileage')),
+            'price': _norm_text(data.get('price')),
+            'body_style': _norm_text(data.get('body_style')),
+            'fuel_type': fuel_type_value,
+            'transmission': transmission_value,
+        })
+        review_values['clean_title'] = ('No' if _norm_text(data.get('clean_title')).casefold()
+                                        in {'no', 'false', '0'} else 'Yes')
+        if data['vehicle_type'] != 'Car':
+            review_values['body_style'] = ''
+
+        from automation.posting_review import review_posting_fields
+        verified_fields = set()
+        review_failure = {'message': ''}
+
+        def _review_posting_fields(stage, visible_only=False, defer_description=False):
+            timing_method = f'check supplied fields: {stage}'
+            _log_field_method('Form review', timing_method, 'START')
             try:
-                next_btn = wait_for_action(driver, 'Next', repair_cleared_fields, alternative='Publish')
-                if next_btn is not None:
-                    try:
-                        next_btn.click()
-                    except Exception:
-                        driver.execute_script("arguments[0].click();", next_btn)
-                    print("Clicked Next")
-                    cancellable_sleep(2)
-            except Exception:
-                print("Next button not found; proceeding to Publish.")
+                result = review_posting_fields(
+                    driver, review_values, refill_field, stage=stage, labels=review_labels,
+                    verified_fields=verified_fields, visible_only=visible_only,
+                    defer_description=defer_description, log=_log_field_method,
+                    event=diagnostic_event, account=account, timeout=90,
+                )
+            except Exception as exc:
+                _log_field_method('Form review', timing_method, 'FAILED', error=exc)
+                raise
+            review_failure['message'] = result.message
+            _log_field_method('Form review', timing_method, 'SUCCESS' if result.ok else 'FAILED',
+                              detail=f'checked {len(review_values)} supplied fields')
+            return result.ok
 
-            # Description sometimes appears on the next step for some accounts/layouts.
+        def require_review(stage, **options):
+            if not _review_posting_fields(stage, **options):
+                raise RuntimeError(review_failure['message'] or f'{stage}: form review failed.')
+            return True
+
+        # The photo-preview selector varies between accounts. Do not block a
+        # post on that unreliable signal; supplied form fields are still reviewed.
+        require_review('before Next', defer_description=True)
+
+        active_field = 'Next'
+        next_clicked = click_action(
+            driver, 'Next', repair_cleared_fields,
+            verify=lambda: require_review('immediately before Next', defer_description=True),
+            alternative='Publish', log=_log_field_method,
+        )
+        if next_clicked:
+            print('Clicked Next')
+            cancellable_sleep(0.5)
+
+        active_field = 'Form review after Next'
+        require_review('after Next', visible_only=True)
+        if description_value:
+            desc_state = read_edit_form_snapshot(driver).get('description', {})
+            if desc_state.get('state') != 'unavailable':
+                debug_field_success('Description (after Next)', f'{len(description_value)} characters verified')
+
+        if post_mode == 'group':
             try:
-                if description_value:
-                    try:
-                        ok2 = _try_set_description()
-                    except Exception:
-                        ok2 = False
-                    if ok2:
-                        debug_field_success("Description (after Next)")
-            except Exception:
-                pass
-
-            if post_mode == "group":
+                _log_field_method('Groups', 'wait for group section', 'START', detail='timeout=90s')
                 try:
-                    # Wait up to 10s for group section; if not present, skip.
-                    try:
-                        WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located(
-                                (
-                                    By.XPATH,
-                                    "//span[contains(translate(normalize-space(.),"
-                                    " 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'),"
-                                    " 'list in your groups')]",
-                                )
-                            )
-                        )
-                    except Exception:
-                        print("Group section not found within 10s; skipping group selection.")
-                    else:
-                        selected_groups = _select_groups_for_listing(driver, group_names)
-                        if selected_groups:
-                            print(f"Selected groups: {len(selected_groups)}/{len(group_names) or len(selected_groups)}")
-                        else:
-                            print("⚠️ No matching groups selected; continuing to publish.")
-                except Exception as e:
-                    print(f"⚠️ Group selection step failed: {e}")
-        except Exception as e:
-            print(f"Skipping Next/groups due to error: {e}")
+                    WebDriverWait(driver, 90).until(EC.presence_of_element_located((By.XPATH,
+                        "//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'list in your groups')]")))
+                except Exception as exc:
+                    _log_field_method('Groups', 'wait for group section', 'SKIPPED', error=exc)
+                else:
+                    _log_field_method('Groups', 'select requested groups', 'START', detail=f'{len(group_names)} requested')
+                    selected_groups = _select_groups_for_listing(driver, group_names)
+                    _log_field_method('Groups', 'select requested groups', 'SUCCESS' if selected_groups else 'SKIPPED',
+                                      detail=f'{len(selected_groups or [])} selected')
+            except Exception as exc:
+                _log_field_method('Groups', 'group selection', 'FAILED', error=exc)
 
+        publish_clicked = False
         try:
             active_field = "Publish"
-            publish_btn = wait_for_action(driver, 'Publish', repair_cleared_fields)
-            try:
-                  
-                publish_btn.click()
-            except Exception:
-                driver.execute_script("arguments[0].click();", publish_btn)
+            publish_clicked = click_action(
+                driver, 'Publish', repair_cleared_fields,
+                verify=lambda: require_review('immediately before Publish', visible_only=True),
+                log=_log_field_method,
+            )
+            if not publish_clicked:
+                raise RuntimeError('Publish did not receive a successful click.')
             print("Clicked Publish")
             diagnostic_event("PUBLISH", "CLICKED", account=account, title=data.get("title"))
+            print('[AutoListing] Waiting 7 seconds after Publish...', flush=True)
+            _log_field_method('Publish', 'seven-second post-click wait', 'START')
+            cancellable_sleep(7)
+            _log_field_method('Publish', 'seven-second post-click wait', 'SUCCESS')
             if data.get('_require_publish_confirmation'):
+                _log_field_method('Publish', 'UI confirmation requested by this flow', 'START', detail='timeout=90s')
                 try:
-                    WebDriverWait(driver, 45).until(_marketplace_publish_confirmed)
+                    WebDriverWait(driver, 90).until(_marketplace_publish_confirmed)
                     diagnostic_event("PUBLISH", "CONFIRMED_BY_UI", account=account, title=data.get("title"))
+                    _log_field_method("Publish", "UI confirmation requested by this flow", "SUCCESS")
                     if data.get('_manual_record_id'):
                         # Reuse the confirmed page; URL capture is optional and
                         # does not add a second publication check or navigation.
@@ -2079,13 +2293,16 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
             indicator = True
             debug_field_success("Publish", "listing marked as posted")
         except Exception as exc:
-            debug_field_failure("Publish", exc)
+            debug_field_failure("Publish", f"{type(exc).__name__}: {exc!r}")
+            _log_field_method("Publish", "follow-up after click" if publish_clicked else "publish action", "FAILED", error=exc)
+            diagnostic_event("PUBLISH", "FAILED" if publish_clicked else "CLICK_FAILED", account=account, title=data.get("title"),
+                             clicked=publish_clicked, error_type=type(exc).__name__, error=str(exc) or repr(exc))
             indicator = False
 
         cancellable_sleep(1)
     except Exception as e:
         debug_field_failure(active_field, e)
-        print(f"❌ Vehicle details step failed: {e}", flush=True)
+        print(f"âŒ Vehicle details step failed: {e}", flush=True)
         if active_field == "Vehicle type":
             import traceback
             print(f"[AutoListing][VEHICLE TYPE DEBUG] Final exception: {type(e).__name__}: {e!r}", flush=True)
@@ -2103,6 +2320,3 @@ def post_to_fb_marketplace(data, account, post_mode="simple", group_names=None):
     if posting_error is not None:
         raise posting_error
     return indicator
-
-
-

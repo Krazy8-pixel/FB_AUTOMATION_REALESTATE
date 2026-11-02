@@ -75,6 +75,11 @@ def main():
         window.restore()
 
     def quit_app(icon=None, item=None, updating=False):
+        from automation.account_browser import stop as stop_account_browser
+        try:
+            stop_account_browser(force=True)
+        except Exception:
+            pass
         if not updating:
             stop_foreground_work(routes)
         shutting_down.set()
@@ -85,6 +90,11 @@ def main():
 
     def closing():
         if not shutting_down.is_set():
+            from automation.account_browser import stop as stop_account_browser
+            try:
+                stop_account_browser(force=True)
+            except Exception:
+                pass
             stop_foreground_work(routes)
             window.hide()
             return False
@@ -119,6 +129,11 @@ def main():
     try:
         webview.start(gui='edgechromium', private_mode=False, storage_path=str(data_dir('webview')), icon=str(resource_root() / 'assets/app.ico'))
     finally:
+        from automation.account_browser import stop as stop_account_browser
+        try:
+            stop_account_browser(force=True)
+        except Exception:
+            pass
         shutting_down.set()
         checkpoint()
         routes.scheduler.shutdown(wait=False)

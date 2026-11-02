@@ -262,6 +262,7 @@
 
     function setStatusMessage(message) {
       if (statusText) statusText.textContent = message || "";
+      if (message && window.appNotify) window.appNotify(message, /fail|could not|error/i.test(message) ? 'failed' : 'success');
     }
 
     function updateSelectionUI() {

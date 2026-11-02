@@ -1,5 +1,6 @@
 {% macro color_options(value='', placeholder='Select color') -%}
 {% set colors = ['Black', 'Blue', 'Brown', 'Gold', 'Green', 'Gray', 'Pink', 'Purple', 'Red', 'Silver', 'Orange', 'White', 'Yellow', 'Charcoal', 'Off white', 'Tan', 'Beige', 'Burgundy', 'Turquoise'] %}
 <option value="">{{ placeholder }}</option>
+{% if value and (value|lower) not in (colors|map('lower')|list) %}<option value="{{ value }}" selected>{{ value }}</option>{% endif %}
 {% for color in colors %}<option value="{{ color }}" {% if (value or '')|lower == color|lower %}selected{% endif %}>{{ color }}</option>{% endfor %}
 {%- endmacro %}

@@ -14,9 +14,10 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit, parse_qs
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import InvalidSessionIdException, NoSuchWindowException
+from selenium.common.exceptions import InvalidSessionIdException, NoSuchWindowException, TimeoutException
 from urllib3.exceptions import ReadTimeoutError, MaxRetryError
 
 from automation.reposting import _open_prelogged_facebook
@@ -31,6 +32,8 @@ import requests
 
 SELLING_URL = "https://www.facebook.com/marketplace/you/selling"
 AVAILABLE_SELLING_URL = SELLING_URL + '?state=LIVE&status[0]=IN_STOCK'
+AVAILABLE_FILTER_TIMEOUT = 120
+AVAILABLE_URL_TIMEOUT = 120
 IMPORT_DIR = data_dir("delete_listings")
 _active_import_drivers_lock = threading.Lock()
 _active_import_drivers = {}
@@ -82,6 +85,39 @@ def stop_listing_delete_driver(account):
 
 class ListingImportCancelled(RuntimeError):
     pass
+
+
+class NoActiveListings(BaseException):
+    """Facebook explicitly reported that the account has no active listings."""
+
+
+def _active_listing_count(driver):
+    """Read the profile count only when its complete label is unambiguous."""
+    lower = "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'"
+    locators = (
+        f"//span[contains(translate(normalize-space(.),{lower}),'active listing')]",
+        f"//*[@aria-label and contains(translate(@aria-label,{lower}),'active listing')]",
+        f"//*[self::div or self::p][not(*) and contains(translate(normalize-space(.),{lower}),'active listing')]",
+    )
+    for xpath in locators:
+        try:
+            for element in driver.find_elements(By.XPATH, xpath):
+                if not element.is_displayed():
+                    continue
+                label = element.text or element.get_attribute('aria-label') or ''
+                match = re.fullmatch(r'\s*([0-9][0-9,]*)\s+active\s+listings?\s*', label, re.I)
+                if match:
+                    return int(match.group(1).replace(',', ''))
+        except Exception:
+            continue
+    return None
+
+
+def _check_active_listing_count(driver):
+    count = _active_listing_count(driver)
+    if count == 0:
+        raise NoActiveListings()
+    return count
 
 
 class _ImportStopSignal(BaseException):
@@ -258,10 +294,44 @@ def _candidate_listing_status(candidate):
     text = str(candidate.get('text') or '')
     badges = [explicit] + [line.strip().casefold() for line in text.splitlines()]
     for status in ('sold', 'pending', 'active', 'available'):
-        if any(re.match(r'^' + status + r'(?:$|\s*[·•|–—-]\s*|\s+on\s+)', badge)
+        if any(re.match(r'^' + status + r'(?:$|\s*[Â·â€¢|â€“â€”-]\s*|\s+on\s+)', badge)
                for badge in badges):
             return status
     return ''
+
+
+def _clean_card_title(value):
+    """Keep the vehicle name and drop trim, price, and Marketplace card metadata."""
+    title = " ".join(str(value or '').split())
+    if not title:
+        return ''
+    # Marketplace often concatenates the title, trim, price, status, and click
+    # summary into one accessible label. The bullet is its title/trim boundary.
+    title = re.split(r'\s+[\u00b7\u2022|]\s+', title, maxsplit=1)[0]
+    title = re.split(
+        r',\s*(?=(?:MAD|USD|CAD|PKR|GBP|EUR|\$|Active\b|Sold\b|Pending\b|'
+        r'Available\b|Listed\s+on\b|\d[\d,.]*\s+clicks?\b))',
+        title, maxsplit=1, flags=re.IGNORECASE,
+    )[0]
+    return title.strip(' ,')
+
+
+def clean_imported_listing_fields(record):
+    """Repair vehicle labels and dates polluted by concatenated card text."""
+    record = dict(record or {})
+    model = _clean_card_title(record.get('model'))
+    year = str(record.get('year') or '').strip()
+    make = str(record.get('make') or '').strip()
+    prefix = ' '.join(part for part in (year, make) if part)
+    if prefix and model.casefold().startswith(prefix.casefold() + ' '):
+        model = model[len(prefix):].strip()
+    record['model'] = model
+    listed = str(record.get('listed_date') or '').strip()
+    if listed:
+        listed = re.split(r',\s*(?=(?:listed\s+on\s+marketplace|\d[\d,.]*\s+clicks?\b|active\b|sold\b|pending\b))',
+                          listed, maxsplit=1, flags=re.IGNORECASE)[0]
+        record['listed_date'] = listed.strip(' ,')
+    return record
 
 
 def _listing_from_candidate(candidate):
@@ -276,6 +346,7 @@ def _listing_from_candidate(candidate):
         (line for line in lines if re.match(r"^(19\d{2}|20\d{2})\s+", line)),
         " ".join(lines),
     )
+    title_line = _clean_card_title(title_line)
     match = re.search(r"\b(19\d{2}|20\d{2})\s+([^\n|]+)", title_line)
     if match:
         year = match.group(1)
@@ -291,8 +362,8 @@ def _listing_from_candidate(candidate):
         year, make, model = "", "", title or combined
     if not (year or make or model or href):
         return None
-    price_match = re.search(r"(?:[A-Z]{2})?\$\s*[\d,]+(?:\.\d{1,2})?", combined)
-    listed_match = re.search(r"\bListed\s+on\s+([^\n\r|]+)", combined, re.IGNORECASE)
+    price_match = re.search(r"(?:(?:MAD|USD|CAD|PKR|GBP|EUR)\s*\$?\s*|\$\s*)([\d,]+(?:\.\d{1,2})?)", combined, re.IGNORECASE)
+    listed_match = re.search(r"\bListed\s+on\s+([^\n\r|Â·,]+)", combined, re.IGNORECASE)
     clicks = _parse_click_count(candidate.get("click_text"), combined)
     images = [
         str(url).strip()
@@ -307,7 +378,7 @@ def _listing_from_candidate(candidate):
         "year": year,
         "make": make,
         "model": model,
-        "price": price_match.group(0).strip() if price_match else "",
+        "price": (re.search(r"(?:MAD|USD|CAD|PKR|GBP|EUR)", price_match.group(0), re.IGNORECASE).group(0).upper() + " " if re.search(r"(?:MAD|USD|CAD|PKR|GBP|EUR)", price_match.group(0), re.IGNORECASE) else "$" if "$" in price_match.group(0) else "") + price_match.group(1).strip() if price_match else "",
         "listed_date": listed_match.group(1).strip() if listed_match else "",
         "clicks": clicks if clicks is not None else 0,
         "clicks_confirmed": clicks is not None,
@@ -354,7 +425,7 @@ def _matching_record_key(records_by_key, record):
     return key
 
 
-def _extract_visible_listing_candidates(driver, include_image_lookup=True):
+def _extract_visible_listing_candidates(driver, include_image_lookup=True, deduplicate=False):
     """Collect listing links/cards without relying on Facebook CSS classes."""
     candidates = []
 
@@ -516,6 +587,26 @@ def _extract_visible_listing_candidates(driver, include_image_lookup=True):
         except Exception:
             continue
 
+    # The same card can be returned by the full-row, anchor, and fallback
+    # queries. Collapse those DOM duplicates before processing scan results.
+    if deduplicate:
+        deduplicated = []
+        seen = set()
+        for candidate in candidates:
+            href = str(candidate.get('href') or '').strip()
+            listing_id = _extract_listing_id(href)
+            if listing_id:
+                identity = ('facebook_id', listing_id)
+            else:
+                title = re.sub(r'\s+', ' ', str(candidate.get('title') or '').strip().casefold())
+                text = re.sub(r'\s+', ' ', str(candidate.get('text') or '').strip().casefold())
+                identity = ('text', title or text[:240])
+            if not identity[1] or identity in seen:
+                continue
+            seen.add(identity)
+            deduplicated.append(candidate)
+        candidates = deduplicated
+
     if not include_image_lookup:
         return candidates
 
@@ -577,7 +668,7 @@ def _click_manage_listings(driver, settle_seconds=5, timeout=20, candidate_reade
             except Exception:
                 driver.execute_script("arguments[0].click();", element)
             print("[DeleteListings] Manage listings clicked", flush=True)
-            _wait_for_inventory(driver, timeout=timeout if candidate_reader else 30, candidate_reader=candidate_reader)
+            _wait_for_inventory(driver, timeout=timeout, candidate_reader=candidate_reader)
             return True
         except Exception:
             continue
@@ -586,8 +677,22 @@ def _click_manage_listings(driver, settle_seconds=5, timeout=20, candidate_reade
 
 
 @cancellable
-def _set_available_filter(driver):
+def _set_available_filter(driver, check_active_count=False):
     """Use semantic labels; Facebook varies between 'and' and '&'."""
+    try:
+        WebDriverWait(driver, AVAILABLE_FILTER_TIMEOUT, poll_frequency=0.5).until(
+            EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
+        )
+    except Exception as exc:
+        print(f'[Import] Selling page HTML did not become ready for filters: {type(exc).__name__}.', flush=True)
+        return False
+    if check_active_count:
+        _check_active_listing_count(driver)
+    deadline = time.monotonic() + AVAILABLE_FILTER_TIMEOUT
+
+    def remaining():
+        return max(0.1, deadline - time.monotonic())
+
     lower = "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'"
     available = (
         f"//*[@role='radio' and contains(translate(@aria-label,{lower}),'available')]",
@@ -624,8 +729,8 @@ def _set_available_filter(driver):
                         # An expandable Filters panel may reveal Status first.
                         return index < 2
                 return False
-            WebDriverWait(driver, 30).until(open_options)
-        radio = WebDriverWait(driver, 30).until(choose)
+            WebDriverWait(driver, remaining()).until(open_options)
+        radio = WebDriverWait(driver, remaining()).until(choose)
         if not radio:
             return False
         if radio.get_attribute('aria-checked') != 'true':
@@ -635,33 +740,67 @@ def _set_available_filter(driver):
         # option may be hidden while still confirming the selected status.
         def selected(current):
             return any(item.get_attribute('aria-checked') == 'true' for item in choices(current))
-        WebDriverWait(driver, 30).until(selected)
+        WebDriverWait(driver, remaining()).until(selected)
         # Check real DOM state as well, so an unsuccessful click cannot select this mode.
         if not selected(driver):
             return False
         print('[Import] Available filter selected. Waiting for listing cards.', flush=True)
-        _wait_for_inventory(driver)
+        _wait_for_inventory(driver, timeout=remaining())
+
+        def available_results(current):
+            if check_active_count:
+                _check_active_listing_count(current)
+            visible = _extract_visible_listing_candidates(current, include_image_lookup=False)
+            if visible:
+                return not any(_candidate_listing_status(candidate) == 'sold' for candidate in visible)
+            return current.execute_script("return /(?:you haven.t listed anything|you have no listings|no listings yet|no listings found|no results found)/i.test(document.querySelector('[role=main]')?.innerText || '');") is True
+
+        WebDriverWait(driver, remaining()).until(available_results)
         return True
     except Exception as exc:
         print(f'[Import] Could not set the Available filter: {type(exc).__name__}.', flush=True)
         return False
 
 
-def _open_available_url(driver):
+def _open_available_url(driver, timeout=AVAILABLE_URL_TIMEOUT, check_active_count=False):
     print('[Import] Opening the Available listings URL. Waiting for listings to load.', flush=True)
+    original_page_timeout = getattr(getattr(driver, 'timeouts', None), 'page_load', None)
+    client_config = getattr(getattr(driver, 'command_executor', None), '_client_config', None)
+    original_client_timeout = getattr(client_config, 'timeout', None) if client_config is not None else None
     try:
-        driver.get(AVAILABLE_SELLING_URL)
+        if client_config is not None:
+            client_config.timeout = max(timeout + 30, 90)
+        driver.set_page_load_timeout(timeout)
+        try:
+            driver.get(AVAILABLE_SELLING_URL)
+        except TimeoutException:
+            # Facebook can leave background requests open after the filtered
+            # inventory is already usable. Stop loading and verify the URL and
+            # listing cards instead of rejecting a successful navigation.
+            try:
+                driver.execute_script('window.stop();')
+            except Exception:
+                pass
+
+        # Do not treat an incomplete document as an empty inventory. Wait for
+        # Facebook's Selling page root before checking cards or empty states.
+        WebDriverWait(driver, timeout, poll_frequency=0.5).until(
+            EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
+        )
 
         def ready(current):
+            if check_active_count:
+                _check_active_listing_count(current)
             url = urlsplit(str(current.current_url or ''))
             query = parse_qs(url.query)
             if url.path.rstrip('/') != '/marketplace/you/selling' or query.get('status[0]') != ['IN_STOCK']:
                 return False
-            if _extract_visible_listing_candidates(current, include_image_lookup=False):
-                return True
+            candidates = _extract_visible_listing_candidates(current, include_image_lookup=False)
+            if candidates:
+                return not any(_candidate_listing_status(candidate) == 'sold' for candidate in candidates)
             return current.execute_script("return /(?:you haven.t listed anything|you have no listings|no listings yet|no listings found|no results found)/i.test(document.querySelector('[role=main]')?.innerText || '');") is True
 
-        WebDriverWait(driver, 30).until(ready)
+        WebDriverWait(driver, timeout, poll_frequency=0.5).until(ready)
         if not ready(driver):
             return False
         print('[Import] Available listings page is ready. Reading listings without Manage Listings.', flush=True)
@@ -669,6 +808,16 @@ def _open_available_url(driver):
     except Exception as exc:
         print(f'[Import] Available listings URL did not load: {type(exc).__name__}.', flush=True)
         return False
+    finally:
+        try:
+            driver.set_page_load_timeout(original_page_timeout or 30)
+        except Exception:
+            pass
+        if client_config is not None and original_client_timeout is not None:
+            try:
+                client_config.timeout = original_client_timeout
+            except Exception:
+                pass
 
 
 @traced('IMPORT')
@@ -716,14 +865,14 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
         nonlocal driver
         driver = opened
         _guard_import_driver(opened, stop_event)
-        opened.set_page_load_timeout(30)
-        opened.set_script_timeout(30)
+        opened.set_page_load_timeout(AVAILABLE_URL_TIMEOUT)
+        opened.set_script_timeout(AVAILABLE_URL_TIMEOUT)
         # Bound a hung ChromeDriver HTTP call as well as our polling loops.
         client_config = getattr(opened.command_executor, '_client_config', None)
         if client_config is not None:
-            # Let the browser's 30-second page timeout finish before the HTTP
-            # connection times out. A shorter HTTP timeout strands the session.
-            client_config.timeout = 60
+            # Let browser navigation and page-readiness waits finish before the
+            # HTTP connection times out. A shorter timeout strands the session.
+            client_config.timeout = AVAILABLE_URL_TIMEOUT + 30
         with _active_import_drivers_lock:
             _active_import_drivers[account] = opened
         if stop_event.is_set():
@@ -738,41 +887,55 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
             register_driver(opened)
         if stop_event.is_set():
             raise ListingImportCancelled()
-        driver.get(SELLING_URL)
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
-        )
-        filtered = _set_available_filter(driver)
-        via_url = False
+        # Start with the filtered URL: it reaches the available inventory
+        # directly without opening filters or loading the unfiltered rows.
+        filtered = _open_available_url(driver, check_active_count=True)
+        via_url = filtered
         if not filtered:
-            filtered = _open_available_url(driver)
-            via_url = filtered
+            driver.get(SELLING_URL)
+            WebDriverWait(driver, AVAILABLE_FILTER_TIMEOUT, poll_frequency=0.5).until(
+                EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
+            )
+            filtered = _set_available_filter(driver, check_active_count=True)
         filter_ready = filtered
         if filtered:
             method_name = 'Direct Available URL' if via_url else 'Available filter on Selling page'
             print(f'[Import] Listing extraction method: {method_name}.', flush=True)
             print('[Import] Reading available listings directly from Selling.', flush=True)
         else:
-            print('[Import] Listing extraction method: Manage Listings (skip sold listings).', flush=True)
-            print('[Import] Filter and URL methods failed. Using Manage Listings and skipping sold listings.', flush=True)
+            diagnostic_event('IMPORT', 'FILTER_FALLBACK', account=account,
+                             method='Manage Listings', reason='Available UI filter and URL did not become ready')
+            print('[Import] Filter and URL methods timed out. Falling back to Manage Listings and skipping sold listings.', flush=True)
             driver.get(SELLING_URL)
+            _check_active_listing_count(driver)
             _click_manage_listings(driver)
 
+        count = _check_active_listing_count(driver)
+        if count is not None:
+            print(f'[Import] Facebook reports {count} active listings for {account}.', flush=True)
+
         def return_to_selling(current):
-            nonlocal filter_ready, via_url
+            nonlocal filter_ready, via_url, filtered
             filter_ready = False
-            if via_url:
-                filter_ready = _open_available_url(current)
-            else:
-                current.get(SELLING_URL)
-                filter_ready = _set_available_filter(current)
-                if not filter_ready:
-                    filter_ready = _open_available_url(current)
-                    via_url = filter_ready
-                    if via_url:
-                        print('[Import] Listing extraction method changed to: Direct Available URL.', flush=True)
+            # Recovery also prefers the direct Available URL before the UI filter.
+            filter_ready = _open_available_url(current, check_active_count=True)
+            via_url = filter_ready
             if not filter_ready:
-                raise RuntimeError('The Available filter could not be restored. Saved listings were kept; restart Import.')
+                current.get(SELLING_URL)
+                WebDriverWait(current, AVAILABLE_FILTER_TIMEOUT, poll_frequency=0.5).until(
+                    EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
+                )
+                filter_ready = _set_available_filter(current, check_active_count=True)
+                via_url = False
+            if not filter_ready:
+                diagnostic_event('IMPORT', 'FILTER_RESTORE_FALLBACK', account=account,
+                                 method='Manage Listings')
+                print('[Import] Could not restore the Available filter. Continuing with Manage Listings and skipping sold listings.', flush=True)
+                current.get(SELLING_URL)
+                _click_manage_listings(current)
+                filter_ready = True
+                filtered = False
+                via_url = False
 
         idle_rounds = 0
         no_new_rounds = 0
@@ -871,6 +1034,16 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                         if record.get(field) and not existing_record.get(field):
                             existing_record[field] = record[field]
                             changed = True
+                    cleaned_existing = clean_imported_listing_fields(existing_record)
+                    for field in ('model', 'listed_date'):
+                        if cleaned_existing.get(field) and cleaned_existing.get(field) != existing_record.get(field):
+                            existing_record[field] = cleaned_existing[field]
+                            changed = True
+                    # If an older import saved the entire Marketplace row as
+                    # the model, replace it with the newly parsed vehicle name.
+                    if record.get('model') and _clean_card_title(existing_record.get('model')) != existing_record.get('model'):
+                        existing_record['model'] = record['model']
+                        changed = True
                     # Partial duplicate candidates are ignored. Only a DOM row
                     # that explicitly contains the click metric may write it.
                     if record.get("clicks_confirmed") and key not in clicks_confirmed_this_import:
@@ -948,17 +1121,45 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                     missing_fields = [key for key in REPOST_REQUIRED_FIELDS if not str(details.get(key) or '').strip()]
                     uncertain_fields = [key for key, state in (details.get('field_states') or {}).items()
                                         if state in {'unreadable', 'conflict', 'needs_review'}]
-                    diagnostic_event('IMPORT_LISTING', 'REVIEW' if missing_fields or uncertain_fields or errors or not photos else 'SAVED',
+                    video_issues = record.get('video_errors') or []
+                    diagnostic_event('IMPORT_LISTING', 'REVIEW' if missing_fields or uncertain_fields or errors or not photos or video_issues else 'SAVED',
                         account=account, listing_id=record['id'], title=details.get('title', listing_name),
                         missing_fields=missing_fields, uncertain_fields=uncertain_fields,
                         photo_sources=len(details.get('image_urls') or []), photos_saved=len(photos), photo_errors=errors,
                         videos_saved=len(record.get('downloaded_videos') or []), video_issues=record.get('video_errors') or [])
+                    if progress_callback and (missing_fields or uncertain_fields or errors or not photos or video_issues):
+                        problems = []
+                        if missing_fields:
+                            problems.append('Empty required Facebook fields: ' + ', '.join(missing_fields))
+                        if uncertain_fields:
+                            problems.append('Facebook fields need review: ' + ', '.join(uncertain_fields))
+                        if errors:
+                            problems.append('Photo errors: ' + '; '.join(map(str, errors)))
+                        if not photos:
+                            problems.append('No photos were saved.')
+                        if video_issues:
+                            problems.append('Video errors: ' + '; '.join(map(str, video_issues)))
+                        progress_callback({'failure': True, 'listing_id': record.get('id'),
+                                           'title': details.get('title') or listing_name,
+                                           'error': '\n'.join(problems), 'data': details,
+                                           'photo_count': len(photos), 'video_count': len(record.get('downloaded_videos') or []),
+                                           'photos': [item.get('name','') for item in photos],
+                                           'videos': [item.get('name','') for item in record.get('downloaded_videos') or []],
+                                           'message': 'Listing import needs review.'})
 
                 except Exception as exc:
                     if stop_event.is_set():
                         raise ListingImportCancelled() from exc
                     record['detail_error'] = str(exc)
                     diagnostic_event('IMPORT_LISTING', 'FAILED', account=account, listing_id=record['id'], error=str(exc))
+                    if progress_callback:
+                        progress_callback({'failure': True, 'listing_id': record.get('id'), 'title': listing_name,
+                                           'error': f'{type(exc).__name__}: {exc}', 'data': record.get('details') or record,
+                                           'photo_count': len(record.get('downloaded_images') or []),
+                                           'video_count': len(record.get('downloaded_videos') or []),
+                                           'photos': [item.get('name','') for item in record.get('downloaded_images') or []],
+                                           'videos': [item.get('name','') for item in record.get('downloaded_videos') or []],
+                                           'message': 'Listing detail import failed.'})
                     print(f"[Import] Listing {listing_number}: could not finish taking details: {exc}. Keeping the backup and moving to the next listing.", flush=True)
                     if stop_event.is_set():
                         raise ListingImportCancelled()
@@ -971,11 +1172,13 @@ def import_listings_from_facebook(account, stop_event=None, progress_callback=No
                     from automation.reposting import REPOST_REQUIRED_FIELDS
                     missing = [field.replace('_', ' ') for field in REPOST_REQUIRED_FIELDS
                                if not str(details.get(field) or '').strip()]
-                    if missing or details.get('visual_read_requires_review') or errors:
+                    if missing or details.get('visual_read_requires_review') or errors or record.get('video_errors'):
                         message = 'Please check: ' + ', '.join(missing) if missing else 'Please review the saved details and photos.'
+                        if record.get('video_errors'):
+                            message += ' Video capture needs review; see the video issue in diagnostics.'
                         print(f"[Import] Listing {listing_number}: details saved. {message}", flush=True)
                     else:
-                        print(f"[Import] Listing {listing_number}: successfully took all details and saved {len(photos)} photos.", flush=True)
+                        print(f"[Import] Listing {listing_number}: details saved; {len(photos)} photos and {len(record.get('downloaded_videos') or [])} videos captured.", flush=True)
                 print('[Import] Moving to the next listing.', flush=True)
                 driver.execute_script('window.scrollTo(0, arguments[0]);', scan_y)
                 # Returning to inventory already waits for listing cards.
@@ -1066,121 +1269,417 @@ def _confirmed_click_count(candidate):
     return _parse_click_count(candidate.get("click_text"), combined)
 
 
+def listing_click_refresh_total(account):
+    """Count unique live records included by the Refresh Clicks job."""
+    stored = load_listings(account).get('listings') or []
+    live = [item for item in stored if isinstance(item, dict) and not listing_store.is_backup(item)]
+    return len({str(item.get('id') or _record_key(item)) for item in live})
+
+
+def _find_listing_search_box(driver):
+    """Find Selling's listing search using its visible text before attributes."""
+    lower = "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'"
+    locators = (
+        (By.XPATH,
+         f"//span[contains(translate(normalize-space(.),{lower}),'search your listings')]"
+         "/ancestor::label[1]//input | "
+         f"//span[contains(translate(normalize-space(.),{lower}),'search your listings')]/following::input[1]"),
+        (By.XPATH, f"//label[.//span[contains(translate(normalize-space(.),{lower}),'search your listings')]]//input"),
+        (By.XPATH, f"//input[contains(translate(@placeholder,{lower}),'search your listings')]"),
+        (By.XPATH, f"//input[contains(translate(@aria-label,{lower}),'search your listings')]"),
+        (By.CSS_SELECTOR, "input[placeholder*='Search your listings']"),
+        (By.CSS_SELECTOR, "input[aria-label*='Search your listings']"),
+        (By.CSS_SELECTOR, "input[role='searchbox']"),
+    )
+    for locator in locators:
+        try:
+            for element in driver.find_elements(*locator):
+                if element.is_displayed() and element.is_enabled():
+                    return element
+        except Exception:
+            continue
+    return False
+
+
+def _click_saved_facebook_id(saved):
+    return (_extract_listing_id(saved.get('url') or '') or
+            _extract_listing_id(saved.get('edit_url') or ''))
+
+
+def _click_candidate_matches_listing(candidate, saved):
+    candidate_id = _extract_listing_id(candidate.get('href') or '')
+    saved_id = _click_saved_facebook_id(saved)
+    if candidate_id and saved_id:
+        return candidate_id == saved_id
+    current = _listing_from_candidate(candidate)
+    if not current:
+        return False
+    normalize = lambda value: re.sub(r'\s+', ' ', str(value or '').strip().casefold())
+    if normalize(current.get('year')) != normalize(saved.get('year')):
+        return False
+    if normalize(current.get('make')) != normalize(saved.get('make')):
+        return False
+    current_model = normalize(current.get('model'))
+    saved_model = normalize(saved.get('model'))
+    return bool(current_model and saved_model and
+                (current_model == saved_model or current_model.startswith(saved_model + ' ')))
+
+
+def _click_scan_candidates(driver):
+    """Use full rows when available, retaining separate same-title listings."""
+    candidates = _extract_visible_listing_candidates(driver, include_image_lookup=False)
+    rows = [item for item in candidates if item.get('source') == 'full_row_dom']
+    return rows or candidates
+
+
+def _scan_listing_click_counts(driver, listings, progress_callback=None):
+    """Read click metrics from inventory cards, leaving uncertain matches for search."""
+    cards = {}
+
+    def collect():
+        for candidate in _click_scan_candidates(driver):
+            clicks = _confirmed_click_count(candidate)
+            element = candidate.get('element')
+            if clicks is None or element is None:
+                continue
+            try:
+                if not element.is_displayed():
+                    continue
+            except Exception:
+                continue
+            facebook_id = _extract_listing_id(candidate.get('href') or '')
+            element_id = getattr(element, 'id', None)
+            if not facebook_id and not element_id:
+                continue
+            identity = ('facebook', facebook_id) if facebook_id else (
+                'element', element_id, str(candidate.get('title') or ''), str(candidate.get('text') or ''))
+            if identity in cards and cards[identity]['clicks'] != clicks:
+                cards[identity]['conflict'] = True
+            elif identity not in cards:
+                cards[identity] = {'candidate': dict(candidate), 'clicks': clicks, 'conflict': False}
+
+    def position():
+        return driver.execute_script(
+            "return {y: window.scrollY || 0, height: Math.max(document.body.scrollHeight, "
+            "document.documentElement.scrollHeight), viewport: window.innerHeight || 0};")
+
+    driver.execute_script('window.scrollTo(0, 0);')
+    collect()
+    started = time.monotonic()
+    saved_ids = [_click_saved_facebook_id(item) for item in listings]
+    while time.monotonic() - started < 90:
+        if (all(saved_ids) and len(set(saved_ids)) == len(saved_ids) and
+                all(('facebook', facebook_id) in cards and not cards[('facebook', facebook_id)]['conflict']
+                    for facebook_id in saved_ids)):
+            break
+        if progress_callback:
+            progress_callback({'confirmed_count': 0, 'processed_count': 0, 'failed_count': 0,
+                               'total_count': len(listings),
+                               'message': f'Scanning Facebook listings... {len(cards)} cards read'})
+        state = position()
+        at_bottom = state['y'] + state['viewport'] >= state['height'] - 5
+        if at_bottom:
+            before = set(cards)
+
+            def more_loaded(current):
+                collect()
+                new_state = position()
+                return new_state['height'] > state['height'] or bool(set(cards) - before)
+
+            try:
+                WebDriverWait(driver, 5, poll_frequency=0.5).until(more_loaded)
+            except TimeoutException:
+                break
+        driver.execute_script('window.scrollBy(0, Math.max(400, window.innerHeight * 0.8));')
+        time.sleep(0.25)
+        collect()
+
+    possible = {index: [] for index in range(len(listings))}
+    for card in cards.values():
+        if card['conflict']:
+            continue
+        candidate = card['candidate']
+        matches = [index for index, saved in enumerate(listings)
+                   if _click_candidate_matches_listing(candidate, saved)]
+        candidate_id = _extract_listing_id(candidate.get('href') or '')
+        exact = [index for index in matches if candidate_id and candidate_id ==
+                 _click_saved_facebook_id(listings[index])]
+        if exact:
+            matches = exact
+        elif len(matches) > 1:
+            price = _normalize_price((_listing_from_candidate(candidate) or {}).get('price'))
+            if price and all(_normalize_price(listings[index].get('price') or
+                                              (listings[index].get('details') or {}).get('price'))
+                             for index in matches):
+                matches = [index for index in matches if _normalize_price(
+                    listings[index].get('price') or (listings[index].get('details') or {}).get('price')) == price]
+        if len(matches) == 1:
+            possible[matches[0]].append(card)
+
+    resolved = {}
+    for index, candidates in possible.items():
+        saved_id = _click_saved_facebook_id(listings[index])
+        exact = [card for card in candidates if saved_id and saved_id ==
+                 _extract_listing_id(card['candidate'].get('href') or '')]
+        choices = exact or candidates
+        if len(choices) == 1:
+            resolved[index] = choices[0]['clicks']
+    return resolved
+
+
+def _search_listing_click_metric(driver, saved, query, timeout=30, known_listings=None):
+    search_box = WebDriverWait(driver, timeout, poll_frequency=0.4).until(_find_listing_search_box)
+    search_box.click()
+    try:
+        search_box.clear()
+    except Exception:
+        search_box.send_keys(Keys.CONTROL, 'a')
+        search_box.send_keys(Keys.BACKSPACE)
+    search_box.send_keys(query)
+    search_box.send_keys(Keys.ENTER)
+    # Facebook debounces this field; allow the search request to start before
+    # reading the result cards, while keeping the common path quick.
+    time.sleep(0.8)
+
+    def matched_result(current):
+        candidates, seen = [], set()
+        for candidate in _click_scan_candidates(current):
+            facebook_id = _extract_listing_id(candidate.get('href') or '')
+            element_id = getattr(candidate.get('element'), 'id', None)
+            identity = ('facebook', facebook_id) if facebook_id else ('element', element_id or id(candidate))
+            if identity not in seen:
+                seen.add(identity)
+                candidates.append(candidate)
+        matches = [candidate for candidate in candidates
+                   if _click_candidate_matches_listing(candidate, saved)
+                   and _confirmed_click_count(candidate) is not None]
+        if known_listings:
+            safe_matches = []
+            for candidate in matches:
+                candidate_id = _extract_listing_id(candidate.get('href') or '')
+                matching_saved = [item for item in known_listings
+                                  if _click_candidate_matches_listing(candidate, item)]
+                exact_saved = [item for item in matching_saved if candidate_id and candidate_id ==
+                               _click_saved_facebook_id(item)]
+                if exact_saved:
+                    matching_saved = exact_saved
+                elif len(matching_saved) > 1:
+                    price = _normalize_price((_listing_from_candidate(candidate) or {}).get('price'))
+                    if price and all(_normalize_price(item.get('price') or
+                                                      (item.get('details') or {}).get('price'))
+                                     for item in matching_saved):
+                        matching_saved = [item for item in matching_saved if _normalize_price(
+                            item.get('price') or (item.get('details') or {}).get('price')) == price]
+                if len(matching_saved) == 1 and matching_saved[0].get('id') == saved.get('id'):
+                    safe_matches.append(candidate)
+            matches = safe_matches
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            saved_price = _normalize_price(saved.get('price') or (saved.get('details') or {}).get('price'))
+            if saved_price:
+                price_matches = [candidate for candidate in matches
+                                 if _normalize_price(_listing_from_candidate(candidate).get('price')) == saved_price]
+                if len(price_matches) == 1:
+                    return price_matches[0]
+            return {'_ambiguous': len(matches)}
+        try:
+            no_results = current.execute_script(
+                "return /(?:no results|couldn.t find|no listings found)/i.test(document.querySelector('[role=main]')?.innerText || '');"
+            )
+            if no_results:
+                return {'_not_found': True}
+        except Exception:
+            pass
+        return False
+
+    result = WebDriverWait(driver, timeout, poll_frequency=0.5).until(matched_result)
+    if result.get('_ambiguous'):
+        raise RuntimeError(f"Search returned {result['_ambiguous']} matching cards; cannot safely choose one")
+    if result.get('_not_found'):
+        raise LookupError('Facebook search returned no matching listing')
+    return _confirmed_click_count(result)
+
+
+def _open_listing_search_page(driver, prefer_url=True, log_prefix='RefreshClicks'):
+    """Use the filtered URL first; open Manage Listings only when needed."""
+    if prefer_url and _open_available_url(driver):
+        try:
+            WebDriverWait(driver, 60, poll_frequency=0.4).until(_find_listing_search_box)
+            return 'Direct Available URL'
+        except TimeoutException:
+            print(f'[{log_prefix}] Available page has no usable search; opening Manage Listings.', flush=True)
+
+    print(f'[{log_prefix}] Falling back to Selling / Manage Listings.', flush=True)
+    try:
+        driver.get(SELLING_URL)
+    except TimeoutException:
+        driver.execute_script('window.stop();')
+    WebDriverWait(driver, 60, poll_frequency=0.4).until(
+        EC.presence_of_element_located((By.XPATH, "//div[@role='main']")))
+
+    def manage_or_search(current):
+        # Poll both labels together: missing controls must not cost two full
+        # timeouts. Some accounts already expose search without a view switch.
+        xpath = (
+            "//*[@aria-label='Manage listings'] | "
+            "//*[self::span or self::div][translate(normalize-space(.), "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='manage listings']"
+            "/ancestor::*[@role='button'][1]"
+        )
+        for control in current.find_elements(By.XPATH, xpath):
+            try:
+                if control.is_displayed() and control.is_enabled():
+                    return ('manage', control)
+            except Exception:
+                continue
+        search = _find_listing_search_box(current)
+        return ('search', search) if search else False
+
+    kind, control = WebDriverWait(driver, 60, poll_frequency=0.4).until(manage_or_search)
+    if kind == 'manage':
+        if not _click_element_safely(driver, control):
+            raise RuntimeError('Manage Listings control could not be clicked')
+        WebDriverWait(driver, 60, poll_frequency=0.4).until(_find_listing_search_box)
+    return 'Manage Listings' if kind == 'manage' else 'Selling search'
+
+
+def _open_click_refresh_search_page(driver, prefer_url=True):
+    return _open_listing_search_page(driver, prefer_url=prefer_url)
+
+
 @cancellable
 def refresh_listing_clicks_from_facebook(account, progress_callback=None):
-    """Refresh only confirmed click counts and persist every listing immediately."""
+    """Scan inventory click counts, then search for listings not resolved there."""
     if not account:
         raise ValueError("Account is required")
     stored = load_listings(account).get("listings") or []
-    listings = [dict(item) for item in stored if isinstance(item, dict) and not listing_store.is_backup(item)]
+    listings = []
+    seen_listing_ids = set()
+    for item in stored:
+        if isinstance(item, dict) and not listing_store.is_backup(item):
+            identity = str(item.get('id') or _record_key(item))
+            if identity not in seen_listing_ids:
+                listings.append(clean_imported_listing_fields(item))
+                seen_listing_ids.add(identity)
     print(
         f"[RefreshClicks] starting account={account} stored_listings={len(listings)} headless=yes",
         flush=True,
     )
+    diagnostic_event('REFRESH_CLICKS', 'START', account=account, total=len(listings))
     if not listings:
         print(f"[RefreshClicks] stopped account={account}: no stored listings", flush=True)
+        diagnostic_event('REFRESH_CLICKS', 'FINISHED', account=account, confirmed=0, total=0,
+                         note='No saved listings to refresh')
         return []
-    by_key = {_record_key(item): item for item in listings}
     driver = None
     confirmed_keys = set()
+    failed_keys = set()
     try:
         print(f"[RefreshClicks] opening saved Facebook session account={account}", flush=True)
         driver = _open_prelogged_facebook(account, force_headless=True)
+        driver.set_page_load_timeout(AVAILABLE_URL_TIMEOUT)
+        driver.set_script_timeout(60)
+        client_config = getattr(driver.command_executor, '_client_config', None)
+        if client_config is not None:
+            client_config.timeout = AVAILABLE_URL_TIMEOUT + 30
         with _active_import_drivers_lock:
             _active_import_drivers[account] = driver
-        print(f"[RefreshClicks] opening selling page url={SELLING_URL}", flush=True)
-        driver.get(SELLING_URL)
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
-        )
-        print(f"[RefreshClicks] selling page ready account={account}", flush=True)
-        _click_manage_listings(driver, settle_seconds=1.5)
-
-        idle_rounds = 0
-        previous_height = 0
-        scan_round = 0
-        while idle_rounds < 3 and len(confirmed_keys) < len(listings):
-            scan_round += 1
-            candidates = _extract_visible_listing_candidates(driver, include_image_lookup=False)
-            print(
-                f"[RefreshClicks] scan={scan_round} candidates={len(candidates)} "
-                f"confirmed={len(confirmed_keys)}/{len(listings)}",
-                flush=True,
-            )
-            missing_metric = 0
-            unmatched = 0
-            for candidate in candidates:
-                clicks = _confirmed_click_count(candidate)
-                if clicks is None:
-                    missing_metric += 1
-                    continue
-                record = _listing_from_candidate(candidate)
-                if not record:
-                    unmatched += 1
-                    continue
-                key = _matching_record_key(by_key, record)
-                target = by_key.get(key)
-                if target is None:
-                    unmatched += 1
-                    print(
-                        f"[RefreshClicks] no stored match title="
-                        f"{record.get('year','')} {record.get('make','')} {record.get('model','')} "
-                        f"clicks={clicks}",
-                        flush=True,
-                    )
-                    continue
-                if key in confirmed_keys:
-                    continue
-                confirmed_keys.add(key)
-                previous_clicks = target.get("clicks")
-                changed = previous_clicks != clicks
-                target["clicks"] = clicks
-                target["clicks_confirmed"] = True
-                target["clicks_checked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                # Save after every confirmed row so the polling UI updates
-                # progressively instead of waiting for the entire page scan.
+        search_method = _open_click_refresh_search_page(driver)
+        via_url = search_method == 'Direct Available URL'
+        print(f"[RefreshClicks] search ready via {search_method}", flush=True)
+        diagnostic_event('REFRESH_CLICKS', 'SEARCH_PAGE_READY', account=account,
+                         method=search_method,
+                         current_url=str(getattr(driver, 'current_url', '') or '')[:300])
+        started_at = time.monotonic()
+        try:
+            print('[RefreshClicks] scanning listing cards before searching missing listings', flush=True)
+            scanned_clicks = _scan_listing_click_counts(driver, listings, progress_callback)
+            print(f'[RefreshClicks] scan resolved {len(scanned_clicks)}/{len(listings)} listings', flush=True)
+            diagnostic_event('REFRESH_CLICKS', 'SCAN_FINISHED', account=account,
+                             matched=len(scanned_clicks), total=len(listings))
+        except Exception as exc:
+            print(f'[RefreshClicks] scan unavailable; using search: {type(exc).__name__}: {exc}', flush=True)
+            diagnostic_event('REFRESH_CLICKS', 'SCAN_FAILED', account=account,
+                             error_type=type(exc).__name__, error=str(exc))
+            scanned_clicks = {}
+        diagnostic_event('REFRESH_CLICKS', 'SEARCH_STARTED', account=account,
+                         method='search_year_make_model', total=len(listings) - len(scanned_clicks), timeout_seconds=30)
+        for index, target in enumerate(listings, start=1):
+            key = str(target.get('id') or _record_key(target))
+            title = str(target.get('title') or
+                        f"{target.get('year', '')} {target.get('make', '')} {target.get('model', '')}").strip()
+            query_parts = [str(target.get(field) or '').strip() for field in ('year', 'make', 'model')]
+            query = ' '.join(part for part in query_parts if part)
+            try:
+                if index - 1 in scanned_clicks:
+                    clicks = scanned_clicks[index - 1]
+                else:
+                    if not all(query_parts):
+                        raise ValueError('Saved listing is missing its year, make, or model')
+                    print(f"[RefreshClicks] searching missing listing {index}/{len(listings)}: {query}", flush=True)
+                    diagnostic_event('REFRESH_CLICKS_LISTING', 'SEARCHING', account=account,
+                                     listing_id=target.get('id'), title=title, query=query,
+                                     index=index, total=len(listings), timeout_seconds=30)
+                    try:
+                        clicks = _search_listing_click_metric(driver, target, query, timeout=30, known_listings=listings)
+                    except (LookupError, TimeoutException):
+                        if not via_url:
+                            raise
+                        # Available can hide pending listings or omit click metrics.
+                        via_url = False
+                        search_method = _open_click_refresh_search_page(driver, prefer_url=False)
+                        diagnostic_event('REFRESH_CLICKS', 'SEARCH_PAGE_FALLBACK',
+                                         account=account, method=search_method, listing_id=target.get('id'))
+                        clicks = _search_listing_click_metric(driver, target, query, timeout=30, known_listings=listings)
+                previous_clicks = target.get('clicks')
+                checked_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
                 listing_store.update_fields(account, target['id'], {
-                    'clicks': clicks, 'clicks_confirmed': True, 'clicks_checked_at': target['clicks_checked_at']})
-                print(
-                    f"[RefreshClicks] confirmed id={target.get('id') or '-'} "
-                    f"title={target.get('year','')} {target.get('make','')} {target.get('model','')} "
-                    f"clicks={previous_clicks}->{clicks} changed={'yes' if changed else 'no'} "
-                    f"progress={len(confirmed_keys)}/{len(listings)}",
-                    flush=True,
-                )
+                    'clicks': clicks, 'clicks_confirmed': True, 'clicks_checked_at': checked_at})
+                confirmed_keys.add(key)
+                diagnostic_event('REFRESH_CLICKS_LISTING', 'SAVED', account=account,
+                                 listing_id=target.get('id'), title=title, query=query,
+                                 clicks=clicks, previous_clicks=previous_clicks)
+                print(f"[RefreshClicks] saved {index}/{len(listings)} id={target.get('id') or '-'} "
+                      f"clicks={previous_clicks}->{clicks}", flush=True)
+            except Exception as exc:
+                failed_keys.add(key)
+                reason = f'{type(exc).__name__}: {exc}'
+                diagnostic_event('REFRESH_CLICKS_LISTING', 'SKIPPED', account=account,
+                                 listing_id=target.get('id'), title=title, query=query,
+                                 index=index, total=len(listings), error_type=type(exc).__name__,
+                                 error=str(exc))
+                print(f"[RefreshClicks] skipped {index}/{len(listings)} id={target.get('id') or '-'} "
+                      f"query={query!r}: {reason}", flush=True)
+            finally:
                 if progress_callback:
                     progress_callback({
-                        "confirmed_count": len(confirmed_keys),
-                        "total_count": len(listings),
-                        "listing_id": target.get("id"),
-                        "clicks": clicks,
-                        "changed": changed,
-                        "message": f"Refreshing clicks... {len(confirmed_keys)}/{len(listings)}",
+                        'confirmed_count': len(confirmed_keys),
+                        'processed_count': index,
+                        'failed_count': len(failed_keys),
+                        'total_count': len(listings),
+                        'listing_id': target.get('id'),
+                        'title': title,
+                        'status': 'failed' if key in failed_keys else 'success',
+                        'error': reason if key in failed_keys else '',
+                        'data': target,
+                        'message': f"Refreshing clicks... {index}/{len(listings)}",
                     })
-            print(
-                f"[RefreshClicks] scan={scan_round} missing_click_text={missing_metric} "
-                f"unmatched={unmatched}",
-                flush=True,
-            )
-
-            try:
-                height = int(driver.execute_script(
-                    "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);"
-                ) or 0)
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            except Exception:
-                height = previous_height
-            time.sleep(0.7)
-            idle_rounds = idle_rounds + 1 if height <= previous_height else 0
-            previous_height = height
         print(
             f"[RefreshClicks] finished account={account} "
-            f"confirmed={len(confirmed_keys)}/{len(listings)} scans={scan_round}",
+            f"confirmed={len(confirmed_keys)}/{len(listings)} skipped={len(failed_keys)} "
+            f"elapsed={round(time.monotonic() - started_at, 1)}s",
             flush=True,
         )
+        diagnostic_event('REFRESH_CLICKS', 'FINISHED' if not failed_keys else 'REVIEW',
+                         account=account, confirmed=len(confirmed_keys), skipped=len(failed_keys),
+                         total=len(listings), elapsed_seconds=round(time.monotonic() - started_at, 1))
         return listings
     except Exception as exc:
         print(f"[RefreshClicks] failed account={account}: {type(exc).__name__}: {exc}", flush=True)
+        diagnostic_event('REFRESH_CLICKS', 'STOPPED', account=account,
+                         confirmed=len(confirmed_keys), total=len(listings),
+                         error_type=type(exc).__name__, error=str(exc))
         raise
     finally:
         with _active_import_drivers_lock:
@@ -1202,14 +1701,15 @@ def _listing_text_key(record):
 
 
 def _same_listing(stored, visible):
-    """Match a stored selection to a Marketplace card without CSS classes."""
+    """Match a stored selection to a Marketplace card by vehicle details."""
+    details_only = bool(stored.get('_match_by_vehicle_details_only'))
     stored_url = str(stored.get("url") or "").split("?", 1)[0].rstrip("/").lower()
     visible_url = str(visible.get("url") or "").split("?", 1)[0].rstrip("/").lower()
-    if '/marketplace/item/' in stored_url and stored_url == visible_url:
+    if not details_only and '/marketplace/item/' in stored_url and stored_url == visible_url:
         return True
-    if stored.get('_require_source_url'):
+    if not details_only and stored.get('_require_source_url'):
         return False
-    if stored.get('_source_listing_id') and stored.get('price') and visible.get('price'):
+    if (details_only or stored.get('_source_listing_id')) and stored.get('price') and visible.get('price'):
         if _normalize_price(stored['price']) != _normalize_price(visible['price']):
             return False
     sy, sm, sx = _listing_text_key(stored)
@@ -1218,7 +1718,7 @@ def _same_listing(stored, visible):
         return False
     if sy != vy or sm != vm:
         return False
-    return sx == vx or sx.startswith(vx) or vx.startswith(sx)
+    return sx == vx if details_only else sx == vx or sx.startswith(vx) or vx.startswith(sx)
 
 
 def _verify_repost_source(driver, stored, timeout=10):
@@ -1245,7 +1745,7 @@ def _click_element_safely(driver, element):
             return False
 
 
-def _complete_facebook_delete_dialog(driver):
+def _complete_facebook_delete_dialog(driver, timeout=25, on_delete_started=None):
     """Click Delete listing, then the enabled confirmation Delete button."""
     lower = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     upper = "abcdefghijklmnopqrstuvwxyz"
@@ -1266,16 +1766,17 @@ def _complete_facebook_delete_dialog(driver):
         delete_listing_text
         + "/ancestor::div[.//*[@role='button']][1]//*[@role='button'][1]"
     )
-    try:
-        menu_item = WebDriverWait(driver, 25).until(
-            EC.visibility_of_element_located((By.XPATH, aria_delete_xpath))
-        )
-        print("[DeleteListings] found Delete marketplace listing icon by aria-label", flush=True)
-    except Exception:
-        menu_item = WebDriverWait(driver, 25).until(
-            EC.visibility_of_element_located((By.XPATH, delete_icon_xpath))
-        )
-        print("[DeleteListings] found Delete listing icon by span text fallback", flush=True)
+    def _find_delete_control(current):
+        for locator in (aria_delete_xpath, delete_icon_xpath):
+            for control in current.find_elements(By.XPATH, locator):
+                if control.is_displayed() and control.is_enabled():
+                    return control
+        return False
+
+    menu_item = WebDriverWait(driver, timeout, poll_frequency=0.4).until(_find_delete_control)
+    print("[DeleteListings] found Delete listing control", flush=True)
+    if on_delete_started:
+        on_delete_started()
     if not _click_element_safely(driver, menu_item):
         raise RuntimeError("Delete listing control could not be clicked")
     print("[DeleteListings] clicked Delete listing", flush=True)
@@ -1296,23 +1797,241 @@ def _complete_facebook_delete_dialog(driver):
         visible = [candidate for candidate in candidates if candidate.is_displayed() and candidate.is_enabled()]
         return visible[-1] if visible else False
 
-    confirm_button = WebDriverWait(driver, 25).until(_enabled_confirmation)
+    confirm_button = WebDriverWait(driver, timeout, poll_frequency=0.4).until(_enabled_confirmation)
     if not _click_element_safely(driver, confirm_button):
         raise RuntimeError("Delete confirmation could not be clicked")
     print("[DeleteListings] clicked confirmation Delete; waiting 5 seconds", flush=True)
     time.sleep(5)
-    WebDriverWait(driver, 25).until(EC.invisibility_of_element(confirm_button))
+    WebDriverWait(driver, timeout, poll_frequency=0.4).until(EC.invisibility_of_element(confirm_button))
+
+
+def _open_delete_selling_page(driver):
+    """Open an unfiltered Selling page before a search or fallback scan."""
+    try:
+        driver.get(SELLING_URL)
+    except TimeoutException:
+        driver.execute_script('window.stop();')
+    WebDriverWait(driver, 60, poll_frequency=0.4).until(
+        EC.presence_of_element_located((By.XPATH, "//div[@role='main']")))
+
+
+def _search_delete_candidate(driver, stored, stop_event, timeout=45):
+    """Search Selling by year, make and model and return a matching card."""
+    cleaned = clean_imported_listing_fields(stored)
+    parts = [str(cleaned.get(field) or '').strip() for field in ('year', 'make', 'model')]
+    if not all(parts):
+        raise ValueError('Cannot search: the saved listing is missing its year, make or model.')
+    query = ' '.join(parts)
+    search_box = WebDriverWait(driver, timeout, poll_frequency=0.4).until(_find_listing_search_box)
+    if stop_event.is_set():
+        raise ListingImportCancelled()
+    search_box.click()
+    search_box.send_keys(Keys.CONTROL, 'a')
+    search_box.send_keys(Keys.BACKSPACE)
+    search_box.send_keys(query)
+    search_box.send_keys(Keys.ENTER)
+    print(f'[DeleteListings] Searching Selling for {query}', flush=True)
+    # Allow Facebook's debounced search to begin before inspecting the cards.
+    time.sleep(1)
+
+    def matching_result(current):
+        if stop_event.is_set():
+            raise ListingImportCancelled()
+        for candidate in extract_delete_candidates(current):
+            visible = _listing_from_candidate(candidate)
+            element = candidate.get('element')
+            if visible and element is not None and _same_listing(cleaned, visible):
+                try:
+                    if element.is_displayed() and element.is_enabled():
+                        return candidate
+                except Exception:
+                    continue
+        try:
+            if current.execute_script(
+                "return /(?:no results|couldn.t find|no listings found)/i.test(document.querySelector('[role=main]')?.innerText || '');"
+            ):
+                return {'_not_found': True}
+        except Exception:
+            pass
+        return False
+
+    try:
+        result = WebDriverWait(driver, timeout, poll_frequency=0.5).until(matching_result)
+    except TimeoutException:
+        return None
+    return None if result.get('_not_found') else result
+
+
+def _scan_delete_candidate(driver, stored, stop_event, timeout=120):
+    """Use the existing Manage Listings card scan after search fails."""
+    deadline = time.monotonic() + timeout
+    idle_rounds = 0
+    previous_height = -1
+    while not stop_event.is_set() and idle_rounds < 8 and time.monotonic() < deadline:
+        for candidate in extract_delete_candidates(driver):
+            visible = _listing_from_candidate(candidate)
+            element = candidate.get('element')
+            if visible and element is not None and _same_listing(stored, visible):
+                try:
+                    if element.is_displayed() and element.is_enabled():
+                        return candidate
+                except Exception:
+                    continue
+        height = int(driver.execute_script(
+            'return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);') or 0)
+        driver.execute_script('window.scrollTo(0, document.body.scrollHeight);')
+        if stop_event.wait(1):
+            break
+        idle_rounds = idle_rounds + 1 if height <= previous_height else 0
+        previous_height = height
+    if stop_event.is_set():
+        raise ListingImportCancelled()
+    if time.monotonic() >= deadline and idle_rounds < 8:
+        raise TimeoutException('Manage Listings scan timed out before it could finish.')
+    return None
+
+
+def _open_delete_candidate(driver, candidate, timeout=45):
+    element = candidate['element']
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+    WebDriverWait(driver, timeout, poll_frequency=0.4).until(
+        lambda current: element.is_displayed() and element.is_enabled())
+    if not _click_element_safely(driver, element):
+        raise RuntimeError('The matching Facebook listing could not be opened.')
+
+
+def _delete_selected_with_search(account, selected, stop_event, progress_callback):
+    """Try Selling search first, then scan Manage Listings for each selection."""
+    driver = None
+    clicked = 0
+    deleted_ids = []
+    not_found = []
+
+    def progress(stored, status, method, message, error=''):
+        if progress_callback:
+            progress_callback({'clicked': clicked, 'deleted': len(deleted_ids), 'total': len(selected),
+                               'listing_id': str(stored.get('id') or ''), 'status': status,
+                               'method': method, 'detail': message, 'error': error, 'message': message,
+                               'confirmed_deleted': status == 'deleted'})
+
+    try:
+        driver = _open_prelogged_facebook(account)
+        with _active_delete_drivers_lock:
+            _active_delete_drivers[account] = driver
+        driver.set_page_load_timeout(65)
+        for stored in selected:
+            if stop_event.is_set():
+                break
+            title = ' '.join(str(stored.get(field) or '').strip() for field in ('year', 'make', 'model')).strip()
+            if not all(str(stored.get(field) or '').strip() for field in ('year', 'make', 'model')):
+                progress(stored, 'failed', 'Selling search', 'Could not search this listing.',
+                         'The saved listing is missing its year, make or model.')
+                continue
+            progress(stored, 'searching', 'Selling search', f'Searching Facebook for {title}...')
+            candidate = None
+            search_error = ''
+            search_checked = False
+            search_found = False
+            action_started = [False]
+            try:
+                _open_delete_selling_page(driver)
+                candidate = _search_delete_candidate(driver, stored, stop_event)
+                search_checked = True
+                search_found = candidate is not None
+                if candidate is not None:
+                    _open_delete_candidate(driver, candidate)
+                    if stop_event.is_set():
+                        break
+                    _complete_facebook_delete_dialog(driver, timeout=45,
+                        on_delete_started=lambda: action_started.__setitem__(0, True))
+                    clicked += 1
+                    deleted_ids.append(str(stored['id']))
+                    progress(stored, 'deleted', 'Selling search', 'Deleted using Facebook search.')
+                    diagnostic_event('DELETE_LISTING', 'DELETED', account=account,
+                                     listing_id=stored.get('id'), title=title, method='Selling search')
+                    continue
+                search_error = 'Search did not find a matching listing.'
+            except ListingImportCancelled:
+                break
+            except Exception as exc:
+                if stop_event.is_set():
+                    break
+                search_error = f'{type(exc).__name__}: {exc}'
+                if action_started[0]:
+                    progress(stored, 'failed', 'Selling search', 'Facebook did not confirm deletion.', search_error)
+                    diagnostic_event('DELETE_LISTING', 'FAILED', account=account,
+                                     listing_id=stored.get('id'), title=title, method='Selling search', error=search_error)
+                    continue
+            print(f'[DeleteListings] Selling search failed for {title}: {search_error}. Trying Manage Listings.', flush=True)
+            progress(stored, 'fallback', 'Manage Listings', f'Search did not finish; checking Manage Listings for {title}...')
+            try:
+                _open_delete_selling_page(driver)
+                manage_opened = _click_manage_listings(driver, timeout=45, candidate_reader=extract_delete_candidates)
+                if not manage_opened:
+                    _wait_for_inventory(driver, timeout=45, candidate_reader=extract_delete_candidates)
+                candidate = _scan_delete_candidate(driver, stored, stop_event)
+                if candidate is None:
+                    if not manage_opened:
+                        raise RuntimeError('Could not open Manage Listings to confirm whether the listing is present.')
+                    if search_found:
+                        raise RuntimeError('Facebook search found the listing but could not open it; Manage Listings did not find it.')
+                    if not search_checked:
+                        raise RuntimeError(f'Selling search failed ({search_error}); Manage Listings did not find the listing.')
+                    not_found.append(str(stored.get('id') or _record_key(stored)))
+                    progress(stored, 'failed', 'Manage Listings', 'Listing not found by either method.',
+                             'Listing not present on Facebook.')
+                    diagnostic_event('DELETE_LISTING', 'NOT_FOUND', account=account,
+                                     listing_id=stored.get('id'), title=title, search_error=search_error)
+                    continue
+                _open_delete_candidate(driver, candidate)
+                if stop_event.is_set():
+                    break
+                clicked += 1
+                _complete_facebook_delete_dialog(driver, timeout=45)
+                deleted_ids.append(str(stored['id']))
+                progress(stored, 'deleted', 'Manage Listings', 'Deleted using Manage Listings.')
+                diagnostic_event('DELETE_LISTING', 'DELETED', account=account,
+                                 listing_id=stored.get('id'), title=title, method='Manage Listings')
+            except ListingImportCancelled:
+                break
+            except Exception as exc:
+                if stop_event.is_set():
+                    break
+                error = f'{type(exc).__name__}: {exc}'
+                progress(stored, 'failed', 'Manage Listings', 'Facebook deletion failed.', error)
+                diagnostic_event('DELETE_LISTING', 'FAILED', account=account,
+                                 listing_id=stored.get('id'), title=title, method='Manage Listings', error=error)
+        stopped = stop_event.is_set()
+        diagnostic_event('DELETE_LISTINGS', 'STOPPED' if stopped else
+                         'FINISHED' if len(deleted_ids) == len(selected) else 'REVIEW',
+                         account=account, total=len(selected), deleted=len(deleted_ids), not_found=len(not_found))
+        return {'clicked': clicked, 'deleted': len(deleted_ids), 'deleted_ids': deleted_ids,
+                'not_found': len(not_found), 'not_found_ids': not_found, 'stopped': stopped}
+    finally:
+        with _active_delete_drivers_lock:
+            if _active_delete_drivers.get(account) is driver:
+                _active_delete_drivers.pop(account, None)
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
 
 @cancellable
 def delete_selected_listings_from_facebook(account, selected_listings, stop_event=None, progress_callback=None):
-    """Find each selected source, verify its ID and complete Facebook deletion."""
+    """Find each selected listing by vehicle details and delete it on Facebook."""
     if not account:
         raise ValueError("Account is required")
     selected = [item for item in (selected_listings or []) if isinstance(item, dict)]
     if not selected:
+        diagnostic_event('DELETE_LISTINGS', 'FINISHED', account=account, total=0, deleted=0)
         return {"clicked": 0, "not_found": 0}
     stop_event = stop_event or threading.Event()
+    if all(item.get('_match_by_vehicle_details_only') for item in selected):
+        diagnostic_event('DELETE_LISTINGS', 'START', account=account, total=len(selected))
+        return _delete_selected_with_search(account, selected, stop_event, progress_callback)
+    diagnostic_event('DELETE_LISTINGS', 'START', account=account, total=len(selected))
     driver = None
     clicked = 0
     deleted = 0
@@ -1381,15 +2100,15 @@ def delete_selected_listings_from_facebook(account, selected_listings, stop_even
                             driver.execute_script("arguments[0].click();", element)
                         print(
                             f"[DeleteListings] clicked {stored.get('year','')} {stored.get('make','')} "
-                            f"{stored.get('model','')} — waiting for listing controls",
+                            f"{stored.get('model','')} â€” waiting for listing controls",
                             flush=True,
                         )
-                        WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.XPATH, "//a[contains(@href,'/marketplace/edit/') and contains(@href,'listing_id=')]")))
+                        if not stored.get('_match_by_vehicle_details_only'):
+                            WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.XPATH, "//a[contains(@href,'/marketplace/edit/') and contains(@href,'listing_id=')]")))
                         if stop_event.is_set():
                             break
                         if not _verify_repost_source(driver, stored, timeout=25):
-                            # Several listings can share a title. Try the next
-                            # card, always verifying its Edit listing ID first.
+                            # Repost source cleanup still requires the saved Facebook ID.
                             stored['_match_occurrence'] = match_occurrence + 1
                             driver.get(SELLING_URL)
                             WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.XPATH, "//div[@role='main']")))
@@ -1401,6 +2120,9 @@ def delete_selected_listings_from_facebook(account, selected_listings, stop_even
                         deleted += 1
                         if stored.get("id"):
                             deleted_ids.append(str(stored.get("id")))
+                        diagnostic_event('DELETE_LISTING', 'DELETED', account=account,
+                                         listing_id=stored.get('id'), title=stored.get('title') or
+                                         f"{stored.get('year','')} {stored.get('make','')} {stored.get('model','')}")
                         found = True
                         if progress_callback:
                             progress_callback({"clicked": clicked, "deleted": deleted, "total": len(selected),
@@ -1408,6 +2130,14 @@ def delete_selected_listings_from_facebook(account, selected_listings, stop_even
                                                "message": "Listing deleted."})
                     except Exception as exc:
                         print(f"[DeleteListings] delete sequence failed for matched listing: {exc}", flush=True)
+                        diagnostic_event('DELETE_LISTING', 'FAILED', account=account,
+                                         listing_id=stored.get('id'), title=stored.get('title') or
+                                         f"{stored.get('year','')} {stored.get('make','')} {stored.get('model','')}",
+                                         error_type=type(exc).__name__, error=str(exc))
+                        if progress_callback:
+                            progress_callback({"clicked": clicked, "deleted": deleted, "total": len(selected),
+                                               "listing_id": str(stored.get('id') or ''), "status": "failed",
+                                               "error": str(exc), "message": "Facebook did not confirm this listing deletion."})
                         found = True
                     break
                 if retry_source:
@@ -1425,8 +2155,16 @@ def delete_selected_listings_from_facebook(account, selected_listings, stop_even
                 previous_height = height
             if not found:
                 not_found.append(stored.get("id") or _record_key(stored))
+                if progress_callback:
+                    progress_callback({"clicked": clicked, "deleted": deleted, "total": len(selected),
+                                       "listing_id": str(stored.get('id') or ''), "status": "not_found",
+                                       "error": "Listing not present on Facebook.",
+                                       "message": "Listing not found."})
+                diagnostic_event('DELETE_LISTING', 'NOT_FOUND', account=account,
+                                 listing_id=stored.get('id'), title=stored.get('title') or
+                                 f"{stored.get('year','')} {stored.get('make','')} {stored.get('model','')}")
                 print(
-                    f"[DeleteListings] listing not found: {stored.get('year','')} "
+                    f"[DeleteListings] Listing not present on Facebook: {stored.get('year','')} "
                     f"{stored.get('make','')} {stored.get('model','')}", flush=True,
                 )
             # The click may have opened the listing detail/editor. Return to
@@ -1435,13 +2173,23 @@ def delete_selected_listings_from_facebook(account, selected_listings, stop_even
                 driver.get(SELLING_URL)
                 WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.XPATH, "//div[@role='main']")))
                 _click_manage_listings(driver, timeout=25, candidate_reader=extract_delete_candidates)
-        return {
+        result = {
             "clicked": clicked,
             "deleted": deleted,
             "deleted_ids": deleted_ids,
             "not_found": len(not_found),
+            "not_found_ids": [str(value) for value in not_found],
             "stopped": stop_event.is_set(),
         }
+        complete = deleted == len(selected)
+        diagnostic_event('DELETE_LISTINGS', 'STOPPED' if stop_event.is_set() else
+                         'FINISHED' if complete else 'REVIEW', account=account, total=len(selected),
+                         deleted=deleted, not_found=len(not_found), stopped=stop_event.is_set())
+        return result
+    except Exception as exc:
+        diagnostic_event('DELETE_LISTINGS', 'STOPPED', account=account, total=len(selected),
+                         deleted=deleted, error_type=type(exc).__name__, error=str(exc))
+        raise
     finally:
         with _active_delete_drivers_lock:
             if _active_delete_drivers.get(account) is driver:

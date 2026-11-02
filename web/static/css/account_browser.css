@@ -1,0 +1,32 @@
+body:has(.account-browser) {overflow:hidden;}
+body:has(.account-browser) .sidebar {display:none; width:230px;}
+body:has(.account-browser) .main {margin-left:0;}
+body.account-browser-sidebar-open:has(.account-browser) .sidebar {display:flex;}
+body.account-browser-sidebar-open:has(.account-browser) .main {margin-left:230px;}
+.account-browser-menu-toggle {display:grid; flex:0 0 36px; place-items:center; width:36px; height:36px; padding:0; border:1px solid #dbe3ee; border-radius:8px; background:#fff; color:#36537a; cursor:pointer;}
+.account-browser-menu-toggle:hover,.account-browser-menu-toggle[aria-expanded="true"] {border-color:#b2c6e4; background:#edf3fc; color:var(--app-blue);}
+.account-browser-menu-toggle svg {width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round;}
+.account-browser-menu-toggle:focus-visible {outline:2px solid #db6b3b; outline-offset:2px;}
+.topbar:has(.account-browser-header) .topbar-inner {gap:16px;}
+.account-browser-header {display:flex; flex:1 1 auto; align-items:center; gap:9px; min-width:0; margin-left:auto;}
+.account-browser-header label {color:#62758d; font-size:10px; font-weight:750; white-space:nowrap;}
+.account-browser-header select {flex:1 1 210px; min-width:130px; max-width:320px; height:36px; padding:0 28px 0 10px; border:1px solid #d4deec; border-radius:8px; background:#f6f9fd; color:#143b73; font-size:12px; font-weight:650;}
+.account-browser-header button {flex:0 0 auto; height:36px; padding:0 13px; border:1px solid transparent; border-radius:7px; font-size:11px; font-weight:700; white-space:nowrap; cursor:pointer;}
+.account-browser-header button:disabled {opacity:.5; cursor:default;}
+.account-browser-header .browser-primary {background:var(--app-blue); color:#fff;}
+.account-browser-header .browser-primary:not(:disabled):hover {background:var(--app-blue-dark);}
+.account-browser-header .browser-secondary {border-color:#cad6e5; background:#fff; color:#315276;}
+.account-browser-header .browser-secondary:not(:disabled):hover {background:#edf3fc;}
+.account-browser-header .account-browser-status {display:inline-flex; align-items:center; gap:7px; max-width:165px; overflow:hidden; text-overflow:ellipsis; color:#4c647e; font-size:10px; font-weight:650; white-space:nowrap;}
+.account-browser-header .account-browser-status::before {content:''; flex:0 0 7px; width:7px; height:7px; border-radius:50%; background:#9aaabe;}
+.account-browser-header .account-browser-status.is-open::before {background:#26a269; box-shadow:0 0 0 3px #e0f5e9;}
+.account-browser-header button:focus-visible,.account-browser-header select:focus-visible {outline:2px solid #db6b3b; outline-offset:2px;}
+.content:has(.account-browser) {box-sizing:border-box; height:100vh; min-height:0; padding:87px 6px 6px; overflow:hidden;}
+.account-browser {width:100%; height:100%; min-height:0;}
+.account-browser-surface {position:relative; box-sizing:border-box; width:100%; height:100%; overflow:hidden; background:#f5f7fa;}
+.account-browser-placeholder {position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:9px; color:#28496f; text-align:center;}
+.account-browser-placeholder[hidden] {display:none;}
+.account-browser-placeholder-icon {display:grid; place-items:center; width:52px; height:52px; margin-bottom:2px; border:1px solid #ccdaea; background:#e9f1fb; color:var(--app-blue);}
+.account-browser-placeholder-icon svg {width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:1.5;}
+.account-browser-placeholder strong {font-size:15px;}
+.account-browser-placeholder p {margin:0; color:#65758c; font-size:12px;}

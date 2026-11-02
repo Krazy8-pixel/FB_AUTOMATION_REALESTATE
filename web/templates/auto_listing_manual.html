@@ -13,7 +13,7 @@
   <p class="create-upload-note">Complete all required fields. Mileage must be greater than 300 and at least one photo is required.</p>
 
   <div class="form-box manual-listing-form-box create-form-panel">
-    <form method="POST" action="{{ url_for('web.auto_listing_manual') }}" enctype="multipart/form-data">
+    <form id="manual-post-form" data-posting-timing method="POST" action="{{ url_for('web.auto_listing_manual') }}" enctype="multipart/form-data">
       <input type="hidden" name="account" value="{{ active_account or '' }}">
       <fieldset>
         {% set prefill_data = prefill if prefill else {} %}
@@ -113,13 +113,13 @@
         </div>
 
         {% set exterior_color_value = request.form.get('exterior_color', prefill_data.get('exterior_color', '')) %}
-        <label for="exterior_color" class="file-label">Exterior color</label>
+        <label for="exterior_color" class="file-label">Exterior color (required for posting)</label>
         <select id="exterior_color" name="exterior_color" class="input-field">
           {{ color_options(exterior_color_value, 'Select exterior color') }}
         </select>
 
         {% set interior_color_value = request.form.get('interior_color', prefill_data.get('interior_color', '')) %}
-        <label for="interior_color" class="file-label">Interior color</label>
+        <label for="interior_color" class="file-label">Interior color (required for posting)</label>
         <select id="interior_color" name="interior_color" class="input-field">
           {{ color_options(interior_color_value, 'Select interior color') }}
         </select>
@@ -221,7 +221,7 @@
           </div>
         </div>
         <div class="manual-group-actions">
-          <button type="button" id="manual-group-submit" class="manual-action-button">Post to Groups</button>
+          <button type="button" id="manual-group-submit" data-posting-timing-form="manual-post-form" class="manual-action-button">Post to Groups</button>
           <button type="button" id="manual-group-cancel" class="manual-action-button manual-action-secondary">Cancel</button>
         </div>
       </div>
@@ -240,7 +240,7 @@
           <label style="display:block; margin:6px 0;"><input class="manual-account-check" type="checkbox" name="target_accounts" value="{{ account }}"> {{ account }}</label>
           {% endfor %}
         </div>
-        <div class="manual-group-actions"><button type="button" id="manual-account-submit" class="manual-action-button">Post to Accounts</button><button type="button" class="manual-action-button manual-action-secondary" data-account-close="1">Cancel</button></div>
+        <div class="manual-group-actions"><button type="button" id="manual-account-submit" data-posting-timing-form="manual-post-form" class="manual-action-button">Post to Accounts</button><button type="button" class="manual-action-button manual-action-secondary" data-account-close="1">Cancel</button></div>
       </div>
     </div>
   </div>

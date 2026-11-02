@@ -1,5 +1,6 @@
 import json
 from automation.task_control import cancellable, cancellable_sleep
+from automation.diagnostics import event as diagnostic_event, traced
 import os
 import pickle
 import random
@@ -13,6 +14,7 @@ from automation.browser_settings import apply_background_mode_option
 from automation.runtime_paths import data_dir
 from automation.runtime_paths import sessions_dir
 from automation.chromedriver import build_chrome_driver
+from automation.cdp_login import load_current_cdp_cookies
 
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -266,6 +268,7 @@ def _extract_group_page_info(driver, fallback_name: str = "", fallback_link: str
     return result
 
 
+@traced('GROUP_IMPORT')
 @cancellable
 def import_groups_from_facebook(
     account_email: str,
@@ -289,10 +292,12 @@ def import_groups_from_facebook(
             raise ImportCancelled("Import cancelled by user.")
 
     _check_stop()
-    session_dir = sessions_dir()
-    session_file = _resolve_session_file(session_dir, account_email)
-    with open(session_file, "rb") as f:
-        cookies = pickle.load(f)
+    cookies = load_current_cdp_cookies(account_email)
+    if cookies is None:
+        session_dir = sessions_dir()
+        session_file = _resolve_session_file(session_dir, account_email)
+        with open(session_file, "rb") as f:
+            cookies = pickle.load(f)
 
     options = Options()
     options.add_argument("--profile-directory=Default")
@@ -475,6 +480,8 @@ def import_groups_from_facebook(
                         total_count = len(existing_map)
                         added_this_round += 1
                         save_groups(account_email, list(existing_map.values()))
+                        diagnostic_event('GROUP_IMPORT_ITEM', 'SAVED', account=account_email,
+                                         listing_id=group_id, title=header_name)
                         _progress(
                             {
                                 "event": "group",
@@ -523,6 +530,7 @@ def import_groups_from_facebook(
         _cleanup()
 
 
+@traced('GROUP_ADD_BY_LINK')
 @cancellable
 def add_buy_sell_group_by_link(
     account_email: str,
@@ -536,10 +544,12 @@ def add_buy_sell_group_by_link(
     if not link:
         return {"ok": False, "message": "Missing group link."}
 
-    session_dir = sessions_dir()
-    session_file = _resolve_session_file(session_dir, account_email)
-    with open(session_file, "rb") as f:
-        cookies = pickle.load(f)
+    cookies = load_current_cdp_cookies(account_email)
+    if cookies is None:
+        session_dir = sessions_dir()
+        session_file = _resolve_session_file(session_dir, account_email)
+        with open(session_file, "rb") as f:
+            cookies = pickle.load(f)
 
     options = Options()
     options.add_argument("--profile-directory=Default")
@@ -630,6 +640,7 @@ def add_buy_sell_group_by_link(
     finally:
         _cleanup()
 
+@traced('GROUP_POST')
 @cancellable
 def post_anonymous_group_posts(
     account_email: str,
@@ -670,10 +681,12 @@ def post_anonymous_group_posts(
     if not str(description or "").strip():
         return {"ok": False, "message": "Description is required."}
 
-    session_dir = sessions_dir()
-    session_file = _resolve_session_file(session_dir, account_email)
-    with open(session_file, "rb") as f:
-        cookies = pickle.load(f)
+    cookies = load_current_cdp_cookies(account_email)
+    if cookies is None:
+        session_dir = sessions_dir()
+        session_file = _resolve_session_file(session_dir, account_email)
+        with open(session_file, "rb") as f:
+            cookies = pickle.load(f)
 
     options = Options()
     options.add_argument("--profile-directory=Default")
@@ -842,9 +855,12 @@ def post_anonymous_group_posts(
                 cancellable_sleep(10)
                 posted += 1
                 results.append({"link": link, "ok": True})
+                diagnostic_event('GROUP_POST_ITEM', 'POSTED', account=account_email, group_link=link)
                 _log(f"[GroupPosting] Posted to group: {link}")
             except Exception as exc:
                 results.append({"link": link, "ok": False, "error": str(exc)})
+                diagnostic_event('GROUP_POST_ITEM', 'FAILED', account=account_email,
+                                 group_link=link, error_type=type(exc).__name__, error=str(exc))
                 _log(f"[GroupPosting] Failed for {link}: {exc}")
 
             if index < len(links) and delay_seconds and delay_seconds > 0:

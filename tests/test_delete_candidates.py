@@ -59,6 +59,22 @@ class DeleteCandidateBrowserTests(unittest.TestCase):
         self.assertIn('$100', rows[0]['text'])
         self.assertIn('$200', rows[1]['text'])
 
+    def test_original_delete_control_and_confirmation_in_browser(self):
+        self.driver.get('data:text/html,' + quote('''<main role="main">
+          <div role="button" aria-label="Delete marketplace listing" id="initial">Delete listing</div>
+          <div role="dialog" style="display:none" id="confirm">
+            <div role="button" aria-label="Delete" aria-disabled="true">Delete</div>
+            <div role="button" aria-label="Delete" id="yes">Delete</div>
+          </div></main>
+          <script>
+            document.getElementById('initial').onclick = () => document.getElementById('confirm').style.display='block';
+            document.getElementById('yes').onclick = () => {document.body.dataset.confirmed='yes';document.getElementById('confirm').remove()};
+          </script>'''))
+        with patch.object(importer.time, 'sleep') as sleep:
+            importer._complete_facebook_delete_dialog(self.driver)
+        self.assertEqual(self.driver.execute_script('return document.body.dataset.confirmed'), 'yes')
+        sleep.assert_called_once_with(5)
+
 
 if __name__ == '__main__':
     unittest.main()

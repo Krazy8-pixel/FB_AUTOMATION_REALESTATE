@@ -1,15 +1,7 @@
 (() => {
   const nativeFetch = window.fetch.bind(window);
   function showProblem(message) {
-    let notice = document.getElementById('app-connection-notice');
-    if (!notice) {
-      notice = document.createElement('div');
-      notice.id = 'app-connection-notice';
-      notice.setAttribute('role', 'status');
-      notice.style.cssText = 'padding:12px;background:#fff3cd;color:#513c00;border:1px solid #e3cf88';
-      document.querySelector('.main')?.prepend(notice);
-    }
-    notice.textContent = message;
+    if (window.appNotify) window.appNotify(message, 'failed');
   }
   window.appFetch = async (url, options = {}) => {
     const controller = new AbortController();
@@ -25,6 +17,19 @@
       if (response.status === 503) {
         showProblem('Another action is taking longer than expected. Check Posting Results before retrying a post.');
         throw new Error('The app is busy. Please try again shortly.');
+      }
+      // Show messages returned by user-initiated actions in the same box on
+      // every page. Background layout and status requests have no popup.
+      const method = String(options.method || 'GET').toUpperCase();
+      const path = String(url);
+      if (method !== 'GET' && !/\/account\/browser\/(layout|hide)(?:\?|$)/.test(path)
+          && (response.headers.get('content-type') || '').includes('application/json')) {
+        try {
+          const result = await response.clone().json();
+          if (typeof result.message === 'string' && result.message.trim() && window.appNotify) {
+            window.appNotify(result.message, !response.ok || result.ok === false ? 'failed' : 'success');
+          }
+        } catch (_) {}
       }
       return response;
     } catch (error) {

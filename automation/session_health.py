@@ -1,4 +1,5 @@
 from automation.responsiveness import RequestLock
+from automation.diagnostics import event as diagnostic_event
 import json
 from automation.task_control import cancellable
 import os
@@ -15,6 +16,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from automation.chromedriver import build_chrome_driver
 from automation.fb_login import _is_home_screen_visible
 from automation.runtime_paths import session_health_path, sessions_dir
+from automation.cdp_login import load_current_cdp_cookies
 
 
 SESSION_DIR = sessions_dir()
@@ -144,6 +146,23 @@ def check_account_login_cookie(account, cancel_event=None, driver_holder=None):
         if cancel_event.is_set():
             return None
 
+        # For current accounts, validate the live dedicated Chrome profile and
+        # refresh the exported snapshot from it. Testing an old pickle in a new
+        # headless browser can report a healthy profile as expired.
+        try:
+            current_cookies = load_current_cdp_cookies(account)
+        except RuntimeError as exc:
+            if "not logged in" in str(exc).lower():
+                return EXPIRED
+            raise
+        if current_cookies is not None:
+            return HEALTHY if any(
+                isinstance(cookie, dict)
+                and cookie.get("name") == "c_user"
+                and str(cookie.get("value") or "").strip()
+                for cookie in current_cookies
+            ) else EXPIRED
+
         session_file = _session_file_for_account(account)
         if not os.path.exists(session_file):
             return EXPIRED
@@ -257,6 +276,7 @@ class SessionCheckJob:
             threading.Thread(target=close_browser, daemon=True, name='stop-session-check').start()
 
     def _run(self):
+        diagnostic_event('SESSION_CHECK', 'START', total=len(self.accounts), accounts=self.accounts)
         try:
             for account in self.accounts:
                 if self.cancel_event.is_set():
@@ -271,7 +291,12 @@ class SessionCheckJob:
                     driver_holder=self.driver_holder,
                 )
                 if status is None:
+                    diagnostic_event('SESSION_CHECK_ACCOUNT', 'CANCELLED', account=account)
                     break
+                diagnostic_event('SESSION_CHECK_ACCOUNT',
+                                 'FAILED' if status == UNKNOWN else 'EXPIRED' if status == EXPIRED else 'HEALTHY',
+                                 account=account, result=status,
+                                 error=self.driver_holder.get('error', ''))
                 set_session_health(account, status)
                 with self.lock:
                     self.results[account] = status
@@ -285,6 +310,14 @@ class SessionCheckJob:
                 self.running = False
                 self.current_account = None
                 self.finished_at = _now_label()
+                final_status = 'CANCELLED' if self.cancelled else 'FINISHED'
+                completed = self.completed
+            diagnostic_event('SESSION_CHECK', final_status, completed=completed,
+                             total=len(self.accounts), results=self.results)
+        except BaseException as exc:
+            diagnostic_event('SESSION_CHECK', 'STOPPED', completed=self.completed,
+                             total=len(self.accounts), error_type=type(exc).__name__, error=str(exc))
+            raise
         finally:
             with _check_job_lock:
                 global _check_job

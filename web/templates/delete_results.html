@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Delete Results{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/post_schedular.css') }}">
+<style>
+  .delete-results .status-pill { text-transform:capitalize; }
+  .delete-results .status-pill.status-deleted { background:#e9fbf0;color:#1a7f4b;border:1px solid #b7eccf; }
+  .delete-results .status-pill.status-failed,.delete-results .status-pill.status-not_found { background:#fdecea;color:#8f2e2e;border:1px solid #f3c0bc; }
+  .delete-results .status-pill.status-pending,.delete-results .status-pill.status-searching,.delete-results .status-pill.status-fallback,.delete-results .status-pill.status-stopped { background:#fff7e6;color:#8a5a00;border:1px solid #f3d28c; }
+  .delete-results .delete-results-message { margin:0 0 16px;padding:12px 16px;background:#eff6ff;border-left:4px solid #2563eb;color:#174c91; }
+</style>
+{% endblock %}
+{% block content %}
+{% include '_active_tasks.html' %}
+<div class="schedular-page delete-results" data-account="{{ active_account or '' }}">
+  <div class="schedular-head">
+    <div><h1>Delete Results</h1><p>See which listings were deleted from Facebook{% if active_account %} for {{ active_account }}{% endif %}.</p></div>
+    <div class="schedular-meta"><span class="meta-label">Selected account</span><span class="meta-value">{{ active_account or 'No account selected' }}</span></div>
+  </div>
+  <p class="delete-results-message" id="delete-results-message" role="status" aria-live="polite">{{ delete_job.message or ('Choose listings in Manage Listings and confirm deletion. Their results will appear here.' if active_account else 'Choose an account to see its deletion results.') }}</p>
+  <div class="schedular-stats">
+    <div class="stat-card"><span class="stat-label">Finished</span><span class="stat-value" id="delete-progress">{{ delete_items|selectattr('status','in',['deleted','failed','not_found','stopped'])|list|length }}/{{ delete_job.total or 0 }}</span></div>
+    <div class="stat-card"><span class="stat-label">Deleted</span><span class="stat-value" id="delete-count">{{ delete_job.deleted or 0 }}</span></div>
+    <div class="stat-card"><span class="stat-label">Failed</span><span class="stat-value" id="delete-failed">{{ (delete_items|selectattr('status','in',['failed','not_found'])|list|length) }}</span></div>
+  </div>
+  <div class="schedular-table"><div class="table-head"><div><h2>Listing results</h2><span class="table-sub">This page updates automatically while deletion is in progress.</span></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Listing</th><th>Status</th><th>What happened</th></tr></thead><tbody id="delete-result-rows">
+      {% set status_labels = {'pending':'Waiting', 'searching':'Looking on Facebook', 'fallback':'Looking on Facebook', 'deleted':'Deleted', 'failed':'Failed', 'not_found':'Not found', 'stopped':'Stopped'} %}
+      {% for item in delete_items %}<tr><td>{{ item.title }}</td><td><span class="status-pill status-{{ item.status }}">{{ status_labels.get(item.status, item.status|replace('_',' ')|capitalize) }}</span></td><td>{{ item.error or ('Deleted from Facebook.' if item.status == 'deleted' else 'Looking for this listing on Facebook.' if item.status in ['searching','fallback'] else 'Waiting to start.' if item.status == 'pending' else '-') }}</td></tr>
+      {% else %}<tr><td colspan="3" class="empty">No deletion results yet. Select listings in Manage Listings to get started.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </div>
+</div>
+<script>
+(() => {
+  const page = document.querySelector('.delete-results');
+  const rows = document.getElementById('delete-result-rows');
+  const message = document.getElementById('delete-results-message');
+  const labels = {pending:'Waiting', searching:'Looking on Facebook', fallback:'Looking on Facebook', deleted:'Deleted', failed:'Failed', not_found:'Not found', stopped:'Stopped'};
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  async function refresh() {
+    try {
+      const response = await appFetch('{{ url_for("web.delete_results_data") }}');
+      const data = await response.json();
+      if (response.ok && data.ok && data.account === page.dataset.account) {
+        const job = data.job || {}, items = Array.isArray(job.items) ? job.items : [];
+        message.textContent = job.message || 'Choose listings in Manage Listings and confirm deletion. Their results will appear here.';
+        document.getElementById('delete-progress').textContent = `${items.filter(item => ['deleted','failed','not_found','stopped'].includes(item.status)).length}/${job.total || 0}`;
+        document.getElementById('delete-count').textContent = job.deleted || 0;
+        document.getElementById('delete-failed').textContent = items.filter(item => ['failed','not_found'].includes(item.status)).length;
+        rows.innerHTML = items.length ? items.map(item => `<tr><td>${esc(item.title)}</td><td><span class="status-pill status-${esc(item.status)}">${esc(labels[item.status] || String(item.status || '').replaceAll('_',' '))}</span></td><td>${esc(item.error || (item.status === 'deleted' ? 'Deleted from Facebook.' : ['searching','fallback'].includes(item.status) ? 'Looking for this listing on Facebook.' : item.status === 'pending' ? 'Waiting to start.' : '-'))}</td></tr>`).join('') : '<tr><td colspan="3" class="empty">No deletion results yet. Select listings in Manage Listings to get started.</td></tr>';
+      }
+    } catch (_) {}
+    window.setTimeout(refresh, 2500);
+  }
+  refresh();
+})();
+</script>
+{% endblock %}

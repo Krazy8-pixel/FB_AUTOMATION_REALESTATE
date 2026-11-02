@@ -84,6 +84,16 @@
 .schedular-page .posting-time-label { display: block; color: #55606b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
 .schedular-page .posting-time-clock { display: block; color: #174c91; font-size: 18px; font-weight: 750; line-height: 1.4; font-variant-numeric: tabular-nums; }
 .schedular-page .posting-time-date { display: block; color: #55606b; font-size: 12px; margin-top: 3px; }
+.schedular-page .posting-duration { min-width: 110px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.schedular-page .posting-duration-value { color: #166534; font-weight: 700; }
+.schedular-page .vehicle-summary { display: flex; align-items: center; gap: 10px; min-width: 220px; }
+.schedular-page .vehicle-thumb,
+.schedular-page .vehicle-thumb-placeholder { width: 58px; height: 58px; flex: 0 0 58px; border-radius: 8px; }
+.schedular-page .vehicle-thumb[hidden],
+.schedular-page .vehicle-thumb-placeholder[hidden] { display: none; }
+.schedular-page .vehicle-thumb { display: block; object-fit: cover; border: 1px solid #e2e8f0; background: #f1f5f9; }
+.schedular-page .vehicle-thumb-placeholder { display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 4px; color: #7b8794; background: #f1f5f9; border: 1px dashed #cbd5e1; font-size: 10px; text-align: center; }
+.schedular-page .vehicle-title { display: -webkit-box; max-width: 250px; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.35; overflow-wrap: anywhere; }
 
 .schedular-table {
   background: #ffffff;
@@ -117,7 +127,7 @@
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 600px;
+  min-width: 760px;
 }
 
 thead th {
@@ -240,4 +250,8 @@ tbody tr:hover {
   .stat-value {
     font-size: 20px;
   }
+
+  .schedular-page .vehicle-summary { min-width: 190px; gap: 8px; }
+  .schedular-page .vehicle-thumb,
+  .schedular-page .vehicle-thumb-placeholder { width: 48px; height: 48px; flex-basis: 48px; }
 }

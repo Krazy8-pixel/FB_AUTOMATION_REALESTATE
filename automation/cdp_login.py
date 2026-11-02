@@ -1,4 +1,5 @@
 from automation.responsiveness import RequestLock
+from automation.diagnostics import event as diagnostic_event
 import json
 from automation.task_control import cancellable, check_cancelled
 import os
@@ -145,7 +146,7 @@ def _next_port(accounts):
     raise RuntimeError("No free CDP port is available between 9222 and 9321.")
 
 
-def _launch_profile(meta, *, background=False):
+def _launch_profile(meta, *, background=False, app_mode=False):
     port = int(meta["port"])
     if _port_open(port):
         return None
@@ -162,8 +163,8 @@ def _launch_profile(meta, *, background=False):
             "--profile-directory=Default",
             "--no-first-run",
             "--no-default-browser-check",
-            "https://www.facebook.com/",
         ]
+    chrome_args.append("--app=https://www.facebook.com/" if app_mode else "https://www.facebook.com/")
     if background:
         chrome_args.insert(1, "--headless=new")
     proc = subprocess.Popen(
@@ -249,11 +250,14 @@ def _find_logged_in_tab(driver):
 def _capture_when_logged_in(account):
     deadline = time.time() + LOGIN_WAIT_SECONDS
     driver = None
+    diagnostic_event('CDP_LOGIN', 'WAITING_FOR_FACEBOOK', account=account)
     try:
         while time.time() < deadline:
             check_cancelled()
             meta = get_cdp_account(account)
             if not meta:
+                diagnostic_event('CDP_LOGIN', 'STOPPED', account=account,
+                                 reason='Login profile was removed before login completed')
                 return
             try:
                 if driver is None:
@@ -281,6 +285,8 @@ def _capture_when_logged_in(account):
                     if meta.get('relogin') and meta.get('facebook_user_id') and facebook_user_id != meta['facebook_user_id']:
                         _update_account(account, status='failed',
                                         message='Sign into the original Facebook account. Saved cookies and data were not replaced.')
+                        diagnostic_event('CDP_LOGIN', 'FAILED', account=account,
+                                         reason='A different Facebook account was used for re-login')
                         time.sleep(2)
                         continue
                     if duplicate_title:
@@ -291,6 +297,8 @@ def _capture_when_logged_in(account):
                         )
                         _close_dedicated_browser(driver)
                         driver = None
+                        diagnostic_event('CDP_LOGIN', 'FAILED', account=account,
+                                         reason=f'Facebook account is already saved as {duplicate_title}')
                         return
                     session_path = os.path.join(sessions_dir(), _safe_session_filename(account))
                     with open(session_path, "wb") as handle:
@@ -308,6 +316,7 @@ def _capture_when_logged_in(account):
                         facebook_user_id=facebook_user_id,
                         cookies_updated_at=int(time.time()),
                     )
+                    diagnostic_event('CDP_LOGIN', 'COMPLETED', account=account)
                     return
                 _update_account(
                     account,
@@ -321,11 +330,14 @@ def _capture_when_logged_in(account):
                 if current.get('message') != message or current.get('status') != 'failed':
                     print(f'[CDP Login] browser connection failed: {type(exc).__name__}: {message}', flush=True)
                     _update_account(account, status='failed', message=message)
+                    diagnostic_event('CDP_LOGIN', 'FAILED', account=account,
+                                     error_type=type(exc).__name__, error=message)
                 if driver is not None:
                     _detach(driver)
                     driver = None
             time.sleep(2)
         print(f"[CDP Login] {account}: login timed out after 40 minutes; closing Chrome and removing the attempt.", flush=True)
+        diagnostic_event('CDP_LOGIN', 'TIMED_OUT', account=account)
         if driver is not None:
             _close_dedicated_browser(driver)
             driver = None
@@ -334,6 +346,10 @@ def _capture_when_logged_in(account):
                             message='Re-login timed out. Saved account data was kept.')
         else:
             delete_cdp_account(account)
+    except BaseException as exc:
+        diagnostic_event('CDP_LOGIN', 'CANCELLED' if 'cancel' in type(exc).__name__.casefold()
+                         else 'STOPPED', account=account, error_type=type(exc).__name__, error=str(exc))
+        raise
     finally:
         if driver is not None:
             _detach(driver)
@@ -378,9 +394,12 @@ def start_cdp_login(account, relogin=False):
         proc = _launch_profile(meta, background=False)
     except Exception as exc:
         _update_account(account, status='failed', message=f'Could not open Chrome: {exc}')
+        diagnostic_event('CDP_LOGIN', 'FAILED_TO_START', account=account,
+                         relogin=relogin, error_type=type(exc).__name__, error=str(exc))
         raise
     if proc is not None:
         _update_account(account, pid=proc.pid)
+    diagnostic_event('CDP_LOGIN', 'STARTED', account=account, relogin=relogin)
     with _config_lock:
         watcher = _watchers.get(account)
         if not watcher or not watcher.is_alive():
@@ -394,25 +413,62 @@ def refresh_cdp_cookies(account):
     meta = get_cdp_account(account)
     if not meta:
         raise RuntimeError("No CDP profile is configured for this account.")
-    launched = not _port_open(meta["port"])
-    if launched:
-        _launch_profile(meta, background=is_run_in_background_enabled())
-        deadline = time.time() + 15
-        while time.time() < deadline and not _port_open(meta["port"]):
-            time.sleep(0.25)
-    driver = _attach(meta["port"])
+    lock = _account_locks.setdefault(account, threading.Lock())
+    if not lock.acquire(timeout=60):
+        raise RuntimeError("The Facebook profile is busy with another operation. Try again shortly.")
     try:
-        if not _facebook_login_confirmed(driver):
-            raise RuntimeError("Facebook is not logged in in the dedicated Chrome profile.")
-        cookies = driver.get_cookies()
-        with open(os.path.join(sessions_dir(), _safe_session_filename(account)), "wb") as handle:
-            pickle.dump(cookies, handle)
-        _update_account(account, status="ready", message="Facebook cookies refreshed.", cookies_updated_at=int(time.time()))
-    finally:
+        launched = not _port_open(meta["port"])
         if launched:
-            _close_dedicated_browser(driver)
-        else:
-            _detach(driver)
+            _launch_profile(meta, background=is_run_in_background_enabled())
+            deadline = time.time() + 15
+            while time.time() < deadline and not _port_open(meta["port"]):
+                time.sleep(0.25)
+        driver = _attach(meta["port"])
+        try:
+            if not _facebook_login_confirmed(driver):
+                raise RuntimeError("Facebook is not logged in in the dedicated Chrome profile.")
+            cookies = driver.get_cookies()
+            session_path = os.path.join(sessions_dir(), _safe_session_filename(account))
+            temp_path = f"{session_path}.{uuid4().hex}.tmp"
+            try:
+                with open(temp_path, "wb") as handle:
+                    pickle.dump(cookies, handle)
+                os.replace(temp_path, session_path)
+            finally:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            _update_account(
+                account,
+                status="ready",
+                message="Facebook login saved. Posting browser is ready.",
+                cookies_updated_at=int(time.time()),
+            )
+        finally:
+            if launched:
+                _close_dedicated_browser(driver)
+            else:
+                _detach(driver)
+    finally:
+        lock.release()
+
+
+def load_current_cdp_cookies(account):
+    """Refresh and return the cookie snapshot from a ready persistent profile.
+
+    Older accounts that have no CDP profile return None so their legacy cookie
+    file remains usable. For CDP accounts, callers should use this snapshot
+    instead of treating an older exported pickle as the current login.
+    """
+    meta = get_cdp_account(account)
+    if not meta or meta.get("status") != "ready":
+        return None
+    refresh_cdp_cookies(account)
+    session_path = os.path.join(sessions_dir(), _safe_session_filename(account))
+    with open(session_path, "rb") as handle:
+        cookies = pickle.load(handle)
+    return cookies if isinstance(cookies, list) else None
 
 
 def close_cdp_browser(account):

@@ -5,6 +5,7 @@ import time
 from urllib.parse import urlparse, parse_qs, urlsplit
 
 from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
@@ -13,6 +14,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from automation.browser_settings import apply_background_mode_option
 from automation.chromedriver import build_chrome_driver
 from automation.runtime_paths import sessions_dir
+from automation.cdp_login import load_current_cdp_cookies
 
 
 SESSION_DIR = sessions_dir()
@@ -35,16 +37,28 @@ REPOST_REQUIRED_FIELDS = ('title', 'vehicle_type', 'year', 'make', 'model', 'mil
 
 def read_edit_form_snapshot(driver):
     """Read actual controls once, including empty/absent/disabled field states."""
+    from automation.posting_description import DESCRIPTION_CONTROL_JS
     return driver.execute_script('''
         const fields = arguments[0];
         const norm = s => (s || '').replace(/colour/gi, 'color').replace(/\\s+/g, ' ').trim().toLowerCase();
-        const visible = el => !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
+        const visible = el => !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden'
+            && !el.closest('[hidden],[aria-hidden="true"]');
         const roots = [...document.querySelectorAll('[role="dialog"],[role="main"]')].filter(visible);
         const root = roots.reverse().find(el => el.querySelector('input:not([type="hidden"]),textarea,[contenteditable="true"]')) || document;
-        const containers = [...root.querySelectorAll('label,[role="combobox"]')];
-        const controls = [...root.querySelectorAll('input:not([type="hidden"]),textarea,[contenteditable="true"]')];
+        const descriptionControl = (''' + DESCRIPTION_CONTROL_JS + ''')(document);
+        const containers = [...root.querySelectorAll('label,[role="combobox"]')].filter(visible);
+        const controls = [...root.querySelectorAll('input:not([type="hidden"]),textarea,[contenteditable="true"]')].filter(visible);
         const result = {};
         for (const [key, label] of Object.entries(fields)) {
+            // Use precisely the same live editor as the posting description
+            // writer. Hidden mirrors and unrelated textareas are never valid.
+            if (key === 'description') {
+                if (!descriptionControl) { result[key] = {value:'',state:'unavailable'}; continue; }
+                const value = String(descriptionControl.value ?? descriptionControl.innerText ?? descriptionControl.textContent ?? '').trim();
+                const disabled = !!descriptionControl.disabled || !!descriptionControl.readOnly || descriptionControl.getAttribute('aria-disabled') === 'true';
+                result[key] = {value, state:disabled ? 'disabled' : value ? 'read' : 'empty'};
+                continue;
+            }
             const target = norm(label);
             const matchesLabel = value => norm(value) === target ||
                 (key === 'vehicle_condition' && norm(value) === 'condition');
@@ -55,12 +69,11 @@ def read_edit_form_snapshot(driver):
             if (!control && key === 'clean_title') {
                 control = controls.find(el => el.type === 'checkbox' &&
                     norm(el.closest('label')?.textContent || el.parentElement?.parentElement?.textContent).includes(target));
-                if (!control) control = [...root.querySelectorAll('[role="checkbox"]')].find(el =>
+                if (!control) control = [...root.querySelectorAll('[role="checkbox"]')].filter(visible).find(el =>
                     norm(controlLabel(el) || el.parentElement?.parentElement?.textContent).includes(target));
             }
             if (!container && control) container = control.closest('label') || control;
-            if (!control && container) control = container.querySelector('input:not([type="hidden"]),textarea,[contenteditable="true"]');
-            if (!control && key === 'description') control = root.querySelector('textarea');
+            if (!control && container) control = [...container.querySelectorAll('input:not([type="hidden"]),textarea,[contenteditable="true"]')].find(visible);
             if (!container && control) container = control.closest('label') || control;
             if (!container && !control) { result[key] = {value:'',state:'unavailable'}; continue; }
             let value = '';
@@ -1113,7 +1126,7 @@ def recover_unreadable_fields(driver, post, fallback, fields=None, skip_confirme
 
 
 def _public_media_in_new_tab(driver, listing):
-    """Resolve the selected item after navigation settles; always restore its tab."""
+    """Open the selected listing's public link, with a new-tab fallback."""
     from automation.public_listing_media import read_public_listing_media
 
     def exact_id(url):
@@ -1137,31 +1150,84 @@ def _public_media_in_new_tab(driver, listing):
         ids.discard('')
         if len(ids) == 1:
             return next(iter(ids))
-        return exact_id(listing.get('url')) or exact_id(listing.get('edit_url')) or False
+        # The clicked dialog may still be animating. A saved card URL can refer
+        # to an older repost, so wait for this selection rather than using it.
+        return False
 
-    listing_id = WebDriverWait(driver, 20).until(selected_item,
+    listing_id = WebDriverWait(driver, 20,
+        ignored_exceptions=(StaleElementReferenceException, NoSuchElementException)).until(selected_item,
         message='Selected listing did not expose its public URL or Edit listing ID within 20 seconds.')
     original = driver.current_window_handle
     previous_timeout = driver.timeouts.page_load
-    opened = None
+    original_url = driver.current_url
+    original_handles = set(driver.window_handles)
+    errors = []
     try:
-        driver.switch_to.new_window('tab')
-        opened = driver.current_window_handle
         driver.set_page_load_timeout(30)
         public_url = 'https://www.facebook.com/marketplace/item/' + listing_id + '/'
-        print(f'[Import] Opening public listing in separate tab: {public_url}', flush=True)
-        driver.get(public_url)
-        WebDriverWait(driver, 20).until(lambda current: exact_id(current.current_url) == listing_id,
-            message='Public listing did not open within 20 seconds.')
-        print(f'[Import] Public listing opened: {driver.current_url}', flush=True)
-        return read_public_listing_media(driver, listing_id)
-    finally:
+        # Prefer the exact public listing link inside the selected listing
+        # popup. Re-find it at click time because Facebook rerenders these rows.
         try:
-            if opened is not None and opened != original:
-                driver.close()
+            def public_link(current):
+                dialogs = [node for node in current.find_elements(By.CSS_SELECTOR, '[role="dialog"]')
+                           if node.is_displayed()]
+                scope = dialogs[-1] if dialogs else current
+                for link in scope.find_elements(By.XPATH, ".//a[contains(@href,'/marketplace/item/')]"):
+                    href = str(link.get_attribute('href') or '')
+                    if exact_id(href) == listing_id and link.is_displayed():
+                        return link
+                return False
+
+            print(f'[Import] Opening public listing from selected popup: {public_url}', flush=True)
+            link = WebDriverWait(driver, 25,
+                ignored_exceptions=(StaleElementReferenceException, NoSuchElementException)).until(
+                    public_link, message='Selected popup did not expose its public listing link.')
+            link.click()
+            WebDriverWait(driver, 25).until(lambda current: exact_id(current.current_url) == listing_id,
+                message='Public listing link did not open the selected item.')
+            media = read_public_listing_media(driver, listing_id)
+            # If navigation replaced the selected popup, restore it for Edit.
+            if driver.current_url != original_url:
+                driver.back()
+                WebDriverWait(driver, 25).until(lambda current: '/marketplace/edit/' in current.current_url
+                    or bool(current.find_elements(By.XPATH, "//a[contains(@href,'/marketplace/edit/') and contains(@href,'listing_id=')]")))
+            print(f'[Import] Public listing opened from popup: {public_url}', flush=True)
+            return media
+        except Exception as exc:
+            errors.append(f'popup link: {type(exc).__name__}: {exc}')
+            # A failed navigation can leave the original popup on the public
+            # page. Return to it before trying the established separate-tab route.
+            try:
+                if driver.current_url != original_url and exact_id(driver.current_url) == listing_id:
+                    driver.back()
+                    WebDriverWait(driver, 15).until(lambda current: exact_id(current.current_url) != listing_id)
+            except Exception:
+                pass
+
+        try:
+            driver.switch_to.new_window('tab')
+            opened = driver.current_window_handle
+            print(f'[Import] Popup link failed; opening public listing in fallback tab: {public_url}', flush=True)
+            driver.get(public_url)
+            WebDriverWait(driver, 25).until(lambda current: exact_id(current.current_url) == listing_id,
+                message='Fallback public listing did not open within 25 seconds.')
+            return read_public_listing_media(driver, listing_id)
+        except Exception as exc:
+            errors.append(f'fallback tab: {type(exc).__name__}: {exc}')
+            raise RuntimeError('Public listing media failed by popup link and fallback tab: ' + ' | '.join(errors)) from exc
         finally:
-            driver.switch_to.window(original)
-            driver.set_page_load_timeout(previous_timeout)
+            for handle in list(driver.window_handles):
+                if handle not in original_handles:
+                    try:
+                        driver.switch_to.window(handle)
+                        driver.close()
+                    except Exception:
+                        pass
+            if original in driver.window_handles:
+                driver.switch_to.window(original)
+    finally:
+        driver.switch_to.window(original)
+        driver.set_page_load_timeout(previous_timeout)
 
 
 def read_listing_from_manage(account, listing, driver=None, field_reader=None, visual_fallback=None,
@@ -1230,7 +1296,7 @@ def read_listing_from_manage(account, listing, driver=None, field_reader=None, v
         if public_media:
             try:
                 public_sources = _public_media_in_new_tab(driver, listing)
-                print(f"[Import] Public gallery: {len(public_sources['image_urls'])} photos, {len(public_sources['video_urls'])} optional HD videos.", flush=True)
+                print(f"[Import] Public gallery: {len(public_sources['image_urls'])} photos, {len(public_sources['video_urls'])} downloadable videos.", flush=True)
             except Exception as exc:
                 message = f'Public media extraction failed: {type(exc).__name__}: {exc}'
                 public_sources['photo_errors'] = [message]
@@ -1599,9 +1665,11 @@ def _resolve_session_file(session_dir, account):
 
 
 def _open_prelogged_facebook(account, force_headless=False, on_driver_ready=None):
-    session_file = _resolve_session_file(SESSION_DIR, account)
-    with open(session_file, "rb") as f:
-        cookies = pickle.load(f)
+    cookies = load_current_cdp_cookies(account)
+    if cookies is None:
+        session_file = _resolve_session_file(SESSION_DIR, account)
+        with open(session_file, "rb") as f:
+            cookies = pickle.load(f)
 
     options = Options()
     options.add_argument("--window-size=1920,1080")

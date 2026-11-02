@@ -10,6 +10,21 @@ from automation import listing_store
 
 
 class ListingRouteTests(unittest.TestCase):
+    def test_account_browser_is_desktop_sidebar_page(self):
+        with patch.dict('os.environ', {'FB_AUTOMATION_DESKTOP': '1'}), \
+             patch.object(self.routes.account_browser, 'status', return_value={'account': None, 'open': False}):
+            response = self.client.get('/account/browser')
+            dashboard = self.client.get('/')
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('href="/account/browser">Account Browser</a>', html)
+        self.assertIn('id="browser-surface"', html)
+        self.assertIn('class="account-browser-header"', html)
+        self.assertIn('id="browser-menu-toggle"', html)
+        self.assertNotIn('account-browser-heading', html)
+        self.assertNotIn('class="account-browser-header"', dashboard.get_data(as_text=True))
+        self.assertIn('class="header-account-box"', dashboard.get_data(as_text=True))
+
     def test_clear_posting_results_keeps_active_jobs_and_saved_listings(self):
         for job_id, state, account in [('posted', 'posted', 'test-account'), ('failed', 'failed', 'test-account'),
                                        ('cancelled', 'cancelled', 'test-account'), ('pending', 'pending', 'test-account'),
@@ -334,6 +349,41 @@ class ListingRouteTests(unittest.TestCase):
         self.assertEqual(listing['details']['price'], '100')
         self.assertEqual(listing['repost_preferences']['fields']['price'], '250')
         self.assertEqual(listing['repost_preferences']['image_order'][0], 'second.jpg')
+
+    def test_saved_details_edit_persists_empty_and_populated_fields(self):
+        listing = listing_store.load('test-account')['listings'][0]
+        fields = {key: str(listing['details'].get(key) or '') for key in self.routes.REPOST_EDIT_FIELDS}
+        fields.update(exterior_color='Blue', interior_color='', vin='12345', price='250')
+        response = self.client.post('/delete_listings/detail/one', json={'action': 'save_details', 'fields': fields})
+        self.assertEqual(response.status_code, 200)
+        saved = listing_store.load('test-account')['listings'][0]
+        self.assertEqual(saved['details']['exterior_color'], 'Blue')
+        self.assertEqual(saved['details']['interior_color'], '')
+        self.assertEqual(saved['details']['vin'], '12345')
+        self.assertEqual(saved['price'], '250')
+        html = self.client.get('/delete_listings/detail/one').get_data(as_text=True)
+        self.assertIn('Interior Color', html)
+        self.assertIn('Empty on Facebook', html)
+
+    def test_missing_saved_colors_block_repost_before_scheduling(self):
+        listing = listing_store.load('test-account')['listings'][0]
+        listing['details']['interior_color'] = ''
+        listing_store.save('test-account', [listing])
+        response = self.client.post('/delete_listings/repost', json={'account': 'test-account', 'listing_id': 'one', 'post_mode': 'now'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('colors', response.json['message'])
+        self.assertFalse(self.routes.repost_jobs)
+
+    def test_missing_backup_colors_block_cross_post_before_scheduling(self):
+        listing = listing_store.load('test-account')['listings'][0]
+        listing['facebook_present'] = False
+        listing['details']['exterior_color'] = ''
+        listing_store.save('test-account', [listing])
+        response = self.client.post('/delete_listings/cross_post', json={'account': 'test-account', 'listing_id': 'one',
+                                    'backup_post': True, 'target_accounts': ['test-account'], 'post_mode': 'now'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('colors', response.json['message'])
+        self.assertFalse(self.routes.scheduled_posts)
 
     def test_repost_updates_date_clicks_and_edited_data_only_after_success(self):
         original = listing_store.load('test-account')['listings'][0]

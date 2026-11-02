@@ -1,6 +1,7 @@
 ﻿import os
 import pickle
 import re
+from automation.diagnostics import traced
 
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
@@ -74,6 +75,7 @@ def _is_home_screen_visible(driver):
     return False
 
 
+@traced('FACEBOOK_LOGIN')
 def fb_login_function(email, password):
     print("1. Checking existing sessions...")
     existing_sessions = [f for f in os.listdir(SESSION_DIR) if f.endswith(".pkl")]

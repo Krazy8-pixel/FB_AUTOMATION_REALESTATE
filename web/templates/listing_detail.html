@@ -8,7 +8,7 @@
 {% set photos = listing.downloaded_images|default([], true) %}
 {% set labels = {'queued':'Queued','pending':'Scheduled','reading':'Preparing repost','posting':'Reposting','deleting':'Deleting original listing','done':'Reposted','failed':'Repost failed','facebook_deleting':'Deleting from Facebook'} %}
 {% set backup_record = listing.facebook_present is sameas false or (listing.source_deleted and not listing.facebook_reposted) %}
-<div class="listing-detail" data-account="{{ active_account }}" data-listing-id="{{ listing.id }}" data-repost-url="{{ url_for('web.delete_listings_repost') }}" data-delete-url="{{ url_for('web.delete_listings_delete') }}" data-listings-url="{{ url_for('web.backup_listings_page' if backup_record else 'web.delete_listings_page') }}" data-status-url="{{ url_for('web.delete_listings_data') }}">
+<div class="listing-detail" data-account="{{ active_account }}" data-listing-id="{{ listing.id }}" data-save-url="{{ url_for('web.listing_detail', listing_id=listing.id) }}" data-repost-url="{{ url_for('web.delete_listings_repost') }}" data-delete-url="{{ url_for('web.delete_listings_delete') }}" data-listings-url="{{ url_for('web.backup_listings_page' if backup_record else 'web.delete_listings_page') }}" data-status-url="{{ url_for('web.delete_listings_data') }}" data-missing-colors="{{ 'true' if not (source.get('exterior_color') or '')|trim or not (source.get('interior_color') or '')|trim else 'false' }}">
   <nav class="ld-navigation" aria-label="Listing navigation"><a class="ld-back" href="{{ url_for('web.backup_listings_page' if backup_record else 'web.delete_listings_page') }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 5-7 7 7 7M5 12h14"/></svg><span>{{ 'Backup Posts' if backup_record else 'Facebook listings' }}</span></a><span class="ld-navigation-label">{{ 'Backup Posts' if backup_record else 'Manage listings' }} / Details</span></nav>
   <header class="ld-header">
     <div class="ld-title-block"><span class="ld-eyebrow">LISTING DETAILS</span><h1>{{ source.title or (listing.year ~ ' ' ~ listing.make ~ ' ' ~ listing.model) }}</h1>
@@ -52,15 +52,27 @@
       <p class="ld-note">Original downloaded photos &middot; {{ photos[0].width }} &times; {{ photos[0].height }} pixels</p>
       {% else %}<div class="ld-photo-empty">No saved photos yet.<br>Import listings to download them.</div>{% endif %}
     </section>
-    <section class="ld-panel ld-information"><div class="ld-section-heading"><h2>Vehicle information</h2><span>Imported from Facebook</span></div>
-      <dl class="ld-info-grid">{% for field in fields if field not in ['title','description','vin','trim'] and (field not in ['exterior_color','interior_color'] or (source.get(field) or '')|trim) %}
+    <section class="ld-panel ld-information"><div class="ld-section-heading"><h2>Vehicle information</h2><button id="edit-listing" class="ld-btn ld-secondary" type="button" {% if busy %}disabled{% endif %}>Edit details</button></div>
+      <dl class="ld-info-grid">{% for field in fields if field not in ['title','description'] %}
       {% set state = source.get('field_states', {}).get(field) %}
       <div><dt>{{ field|replace('_',' ')|title }}</dt><dd>{% if source.get(field) %}{{ source.get(field) }}{% elif state == 'unavailable' %}<span class="ld-unset">Could not read from Facebook</span>{% elif state == 'empty' %}<span class="ld-unset">Empty on Facebook</span>{% elif state == 'disabled' %}<span class="ld-unset">Disabled on Facebook</span>{% else %}<span class="ld-unset">Not imported</span>{% endif %}</dd></div>
       {% endfor %}</dl>
       <div class="ld-description"><h3>Description</h3><p>{{ source.description or ('Empty on Facebook' if source.get('field_states', {}).get('description') == 'empty' else 'No description imported') }}</p></div>
     </section>
   </div>
-  <form id="repost-form" data-ajax="true" hidden>
+  <form id="listing-edit-form" class="ld-panel" hidden>
+    <div class="ld-section-heading"><h2>Edit saved listing details</h2><button id="cancel-edit-listing" class="ld-btn ld-secondary" type="button">Cancel</button></div>
+    <p class="ld-note">Save missing or changed details here before posting. These changes update the app's saved listing.</p>
+    <div class="ld-edit-grid">
+    {% for field in fields %}{% set value = source.get(field, '') or '' %}
+      <label class="ld-field{% if field == 'description' %} ld-wide{% endif %}"><span>{{ field|replace('_',' ')|title }}</span>
+      {% if field == 'description' %}<textarea name="{{ field }}" rows="5">{{ value }}</textarea>
+      {% elif field in ['exterior_color', 'interior_color'] %}<select name="{{ field }}">{{ color_options(value) }}</select>
+      {% else %}<input name="{{ field }}" value="{{ value }}">{% endif %}</label>
+    {% endfor %}
+    </div><div class="ld-submit-row"><button class="ld-btn ld-primary" type="submit">Save details</button></div>
+  </form>
+  <form data-posting-timing id="repost-form" data-ajax="true" hidden>
     <div class="ld-workflow-heading"><div><span class="ld-eyebrow">PREPARE YOUR REPOST</span><h2>Review details, photos and timing</h2><p>These changes apply to the new listing. Your imported details stay saved.</p></div><button id="cancel-repost" type="button" class="ld-btn ld-secondary">Cancel</button></div>
     <fieldset id="repost-fields" class="ld-fieldset">
       <section id="cross-post-accounts" class="ld-panel" hidden data-url="{{ url_for('web.cross_post_listing') }}">
@@ -68,12 +80,12 @@
         <p class="ld-note">Choose up to 19 accounts. Posts run one at a time; the next account starts after the previous attempt finishes.</p>
         <div class="ld-cross-accounts">{% for account in accounts if account != active_account %}<label><input type="checkbox" data-cross-account value="{{ account }}"> {{ account }}</label>{% endfor %}</div>
       </section>
-      <section class="ld-panel"><div class="ld-section-heading"><h2><span class="ld-step">1</span> Listing details</h2></div><p class="ld-note">Review or choose every required value before reposting. Colors and vehicle condition are optional.</p><div class="ld-edit-grid">
+      <section class="ld-panel"><div class="ld-section-heading"><h2><span class="ld-step">1</span> Listing details</h2></div><p class="ld-note">Review the listing before posting. Both colors are required.</p><div class="ld-edit-grid">
       {% set select_options = {'vehicle_type':['Car','Other'], 'body_style':['Convertible','Coupe','Hatchback','Minivan','Pickup truck','Sedan','Station wagon','SUV','Van','Other'], 'vehicle_condition':['Excellent','Very good','Good','Fair','Poor'], 'fuel_type':['Gasoline','Petrol','Diesel','Electric','Hybrid','Flex','Plug-in hybrid','Other'], 'transmission':['Automatic transmission','Manual transmission']} %}
-      {% for field in fields if field not in ['vin','trim'] and (field not in ['exterior_color','interior_color'] or (listing.repost_preferences.get('fields', {}).get(field, source.get(field, '')) or '')|trim) %}{% set value = listing.repost_preferences.get('fields', {}).get(field, source.get(field, '')) %}
-        <label class="ld-field{% if field == 'description' %} ld-wide{% endif %}"><span>{{ 'Body shape' if field == 'body_style' else ('VIN' if field == 'vin' else field|replace('_',' ')|title) }}{{ ' *' if field in required_fields else ' (optional)' }}</span>
+      {% for field in fields %}{% set value = listing.repost_preferences.get('fields', {}).get(field, source.get(field, '')) %}
+        <label class="ld-field{% if field == 'description' %} ld-wide{% endif %}"><span>{{ 'Body shape' if field == 'body_style' else ('VIN' if field == 'vin' else field|replace('_',' ')|title) }}{{ ' *' if field in required_fields or field in ['exterior_color','interior_color'] else ' (optional)' }}</span>
         {% if field == 'description' %}<textarea name="{{ field }}" rows="5" required>{{ value }}</textarea>
-        {% elif field in ['exterior_color', 'interior_color'] %}<select name="{{ field }}">{{ color_options(value) }}</select>
+        {% elif field in ['exterior_color', 'interior_color'] %}<select name="{{ field }}" required>{{ color_options(value) }}</select>
         {% elif field in select_options %}<select name="{{ field }}" {% if field in required_fields %}required{% endif %}><option value="">Select {{ field|replace('_',' ') }}</option>{% if value and value not in select_options[field] %}<option value="{{ value }}" selected>{{ value }}</option>{% endif %}{% for option in select_options[field] %}<option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select>
         {% elif field == 'clean_title' %}<select name="{{ field }}"><option value="" {% if not value %}selected{% endif %}>Not specified</option><option value="Yes" {% if value == 'Yes' %}selected{% endif %}>Yes</option><option value="No" {% if value == 'No' %}selected{% endif %}>No</option></select>
         {% else %}<input name="{{ field }}" value="{{ value }}" {% if field in required_fields %}required{% endif %}>{% endif %}</label>
