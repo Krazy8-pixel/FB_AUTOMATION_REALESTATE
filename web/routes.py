@@ -3,7 +3,7 @@ from automation.diagnostics import event as diagnostic_event
 from automation.github_reports import begin_log_capture, collect_logs, media_summary, submit_failure
 from automation.posting_timing import request_origin, complete_posting, duration_fields
 from automation.listing_videos import saved_paths as saved_video_paths
-from flask import Blueprint, current_app, render_template, request, redirect, url_for, session, jsonify, send_from_directory, Response
+from flask import Blueprint, current_app, render_template, request, redirect, url_for, session, jsonify, send_from_directory, send_file, Response
 import copy
 import base64
 import hashlib
@@ -37,7 +37,9 @@ import os
 from automation.delete_listings import delete_listing
 import traceback
 import re
+import shutil
 import tempfile
+import zipfile
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -67,11 +69,13 @@ from automation.session_health import (
 )
 from automation.groups import (
     delete_group_record,
+    delete_other_group_record,
     ImportCancelled,
     add_buy_sell_group_by_link,
     import_groups_from_facebook,
-    post_anonymous_group_posts,
+    post_group_posts,
     load_groups,
+    load_other_groups,
     summarize_groups,
 )
 web_bp = Blueprint("web", __name__)
@@ -117,6 +121,10 @@ else:
 
 
 scheduled_posts = {}
+excel_property_drafts = {}
+excel_property_drafts_lock = threading.Lock()
+group_post_reuse_drafts = {}
+group_post_reuse_drafts_lock = threading.Lock()
 cross_post_queue_lock = threading.Lock()
 PORTAL_AUTH_PATH = str(data_dir() / "portal_auth.json")
 portal_auth_lock = RequestLock('portal_auth_lock', reentrant=True)
@@ -897,6 +905,11 @@ def _run_saved_listing_repost(listing, account, job_id=None):
             }
             if not update_listing_fields(account, str(listing.get('id') or ''), changes, move_to_top=True):
                 raise RuntimeError('Repost was confirmed, but its saved listing record was not found for updating.')
+            if _is_property_backup(listing):
+                published_record = dict(listing)
+                published_record.update(changes)
+                from automation.manual_backups import save_marketplace_backup_copy
+                save_marketplace_backup_copy(account, published_record)
             if job_id:
                 with repost_jobs_lock:
                     if job_id in repost_jobs:
@@ -1072,12 +1085,22 @@ def _post_single_listing(post_data, account, job_id=None):
             if DESKTOP_MODE:
                 from automation.desktop_state import checkpoint
                 checkpoint()
-            result = post_to_fb_marketplace(post_data, account, post_mode=post_mode, group_names=group_names)
+            if post_data.get('_listing_kind') == 'property':
+                from automation.property_posting import post_property
+                result = post_property(post_data, account)
+            else:
+                result = post_to_fb_marketplace(post_data, account, post_mode=post_mode, group_names=group_names)
             if result and post_data.get('_manual_record_id') and post_data.get('_require_publish_confirmation'):
                 try:
                     from automation.manual_backups import save_manual_listing
                     save_manual_listing(account, post_data, confirmed=True)
+                    if post_data.get('_listing_kind') == 'property':
+                        diagnostic_event('PROPERTY_BACKUP', 'SAVED', account=account, job_id=job_id,
+                                         title=post_data.get('title', ''))
                 except Exception as storage_error:
+                    if post_data.get('_listing_kind') == 'property':
+                        diagnostic_event('PROPERTY_BACKUP', 'FAILED', account=account, job_id=job_id,
+                                         title=post_data.get('title', ''), error=str(storage_error))
                     _runtime_log(f'[ManualPosting] Confirmed post backup failed: {storage_error}')
                     if job_id:
                         with scheduled_posts_lock:
@@ -1115,6 +1138,7 @@ def _post_single_listing(post_data, account, job_id=None):
             with scheduled_posts_lock:
                 if job_id in scheduled_posts:
                     scheduled_posts[job_id]["status"] = "failed"
+                    scheduled_posts[job_id]["error"] = str(exc)
                     scheduled_posts[job_id]["posted_at"] = datetime.now()
                     complete_posting(scheduled_posts[job_id], False)
         title = (post_data or {}).get("title") or "Untitled"
@@ -1145,6 +1169,8 @@ def _register_scheduled_post(job_id, account, post_data, run_at, platform="faceb
             "platform": platform,
             "title": title,
             "make": make,
+            "listing_type": "property" if post_payload.get("_listing_kind") == "property" else "vehicle",
+            "post_data": dict(post_payload),
             "run_at": run_at,
             "status": "pending",
             "created_at": datetime.now(),
@@ -1154,6 +1180,10 @@ def _register_scheduled_post(job_id, account, post_data, run_at, platform="faceb
         }
         if post_payload.get('_posting_requested_at') is not None:
             scheduled_posts[job_id]['posting_requested_at'] = post_payload['_posting_requested_at']
+
+    if post_payload.get('_listing_kind') == 'property':
+        diagnostic_event('PROPERTY_POST', 'QUEUED', account=account, job_id=job_id,
+                         title=title, run_at=run_at)
 
     if DESKTOP_MODE:
         from automation.desktop_state import checkpoint
@@ -1215,6 +1245,7 @@ def _collect_account_schedule(active_account):
             "job_id": job.id,
             "title": job_meta.get("title", "Untitled"),
             "make": job_meta.get("make", ""),
+            "listing_type": "property" if post_data.get("_listing_kind") == "property" else "vehicle",
             "platform": "facebook",
             "source": "Manual / Excel",
             "status": status,
@@ -1241,6 +1272,7 @@ def _collect_account_schedule(active_account):
             remaining = max(0, int((run_at - datetime.now()).total_seconds()))
             items.append({
                 'job_id': job_id, 'title': meta['title'], 'make': meta.get('make', ''),
+                'listing_type': 'property' if (meta.get('post_data') or {}).get('_listing_kind') == 'property' else 'vehicle',
                 'platform': 'facebook', 'source': 'Cross posting',
                 'account': meta['account'], 'source_account': meta['source_account'],
                 'error': meta.get('error', ''), 'status': meta['status'],
@@ -1259,6 +1291,7 @@ def _collect_account_schedule(active_account):
             "job_id": job_id,
             "title": meta.get("title", "Untitled"),
             "make": meta.get("make", ""),
+            "listing_type": meta.get('listing_type') or ("property" if (meta.get('post_data') or {}).get('_listing_kind') == 'property' else "vehicle"),
             "platform": "facebook",
             "source": meta.get('source', "Manual / Excel"),
             "status": meta_status,
@@ -1478,7 +1511,7 @@ def _save_group_post_images(files):
     os.makedirs(target_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    for index, file in enumerate(files[:10], start=1):
+    for index, file in enumerate(files[:20], start=1):
         if not file:
             continue
         original_name = str(file.filename or "").strip()
@@ -1495,6 +1528,63 @@ def _save_group_post_images(files):
         saved_paths.append(full_path)
 
     return saved_paths
+
+
+@web_bp.route('/backup/group-post/<listing_id>/prepare', methods=['POST'])
+def prepare_group_post_reuse(listing_id):
+    accounts = get_all_accounts()
+    source_account = str(request.form.get('source_account') or get_active_account() or '').strip()
+    target_account = str(request.form.get('account') or '').strip()
+    if source_account not in accounts or target_account not in accounts:
+        return 'Choose a valid Facebook account.', 400
+    listing = next((item for item in load_listings(source_account).get('listings', [])
+                   if str(item.get('id') or '') == listing_id and item.get('listing_type') == 'group_post'), None)
+    if not listing:
+        return 'Saved group post was not found.', 404
+    description = str(request.form.get('description') or '').strip()
+    if not description or len(description) > 20000:
+        return 'Enter a description of 1 to 20,000 characters.', 400
+    saved_photos = [photo for photo in (listing.get('downloaded_images') or [])
+                    if isinstance(photo, dict) and os.path.isfile(str(photo.get('path') or ''))]
+    by_name = {str(photo.get('name') or ''): photo for photo in saved_photos}
+    try:
+        photo_order = json.loads(request.form.get('image_order') or '[]')
+    except (TypeError, ValueError):
+        photo_order = None
+    added = [file for file in request.files.getlist('new_images') if file and file.filename]
+    if (not isinstance(photo_order, list) or not photo_order or any(not isinstance(token, str) for token in photo_order)
+            or len(photo_order) != len(set(photo_order))
+            or len(photo_order) > 20 or len(added) > 20
+            or any((token not in by_name and not (token.startswith('new:')
+                    and token[4:].isdigit() and int(token[4:]) < len(added))) for token in photo_order)
+            or set(token for token in photo_order if token.startswith('new:'))
+               != {f'new:{index}' for index in range(len(added))}
+            ):
+        return 'Review the saved photos and their order, then try again.', 400
+    try:
+        saved_added = []
+        for index, path in enumerate(_save_group_post_images(added)):
+            with Image.open(path) as image:
+                width, height = image.size
+                image.verify()
+            saved_added.append({'name': os.path.basename(path), 'path': path,
+                                'width': width, 'height': height})
+        new_by_token = {f'new:{index}': photo for index, photo in enumerate(saved_added)}
+        ordered_photos = [by_name[token] if token in by_name else new_by_token[token] for token in photo_order]
+    except Exception as exc:
+        return f'Could not save an added photo: {exc}', 400
+    draft_id = uuid4().hex
+    with group_post_reuse_drafts_lock:
+        expiry = time.time() - 7200
+        for old_id in [key for key, value in group_post_reuse_drafts.items()
+                       if float(value.get('created_at') or 0) < expiry]:
+            group_post_reuse_drafts.pop(old_id, None)
+        group_post_reuse_drafts[draft_id] = {
+            'source_account': source_account, 'account': target_account, 'backup_id': listing_id,
+            'description': description, 'photos': ordered_photos, 'created_at': time.time(),
+        }
+    return redirect(url_for('web.posting_in_groups_page', account=target_account,
+                            source_account=source_account, backup_id=listing_id, draft_id=draft_id))
 
 # =========================
 # Routes
@@ -1521,8 +1611,9 @@ def _render_groups_page(message=None, message_type=None):
     active_account = get_active_account()
 
     groups_payload = load_groups(active_account) if active_account else {"groups": []}
-    groups = groups_payload.get("groups") or []
-    groups = [g for g in groups if isinstance(g, dict)]
+    other_payload = load_other_groups(active_account) if active_account else {"groups": []}
+    groups = [dict(g, portal_category="buy_sell") for g in (groups_payload.get("groups") or []) if isinstance(g, dict)]
+    groups.extend(dict(g, portal_category="other") for g in (other_payload.get("groups") or []) if isinstance(g, dict))
 
     if message is None:
         message = session.pop("groups_message", None)
@@ -1615,7 +1706,7 @@ def _start_groups_import_job(account_email: str) -> tuple[bool, str]:
                 job = groups_jobs.get(account_email) or {}
                 job["running"] = False
                 job["finished_at"] = time.time()
-                total_now = len((load_groups(account_email).get("groups") or []))
+                total_now = len((load_groups(account_email).get("groups") or [])) + len((load_other_groups(account_email).get("groups") or []))
                 job["imported_total_count"] = max(int(job.get("imported_total_count") or 0), total_now)
                 job["message"] = f"Import complete. {job['imported_total_count']} groups scraped."
                 groups_jobs[account_email] = job
@@ -1624,7 +1715,7 @@ def _start_groups_import_job(account_email: str) -> tuple[bool, str]:
                 job = groups_jobs.get(account_email) or {}
                 job["running"] = False
                 job["finished_at"] = time.time()
-                total_now = len((load_groups(account_email).get("groups") or []))
+                total_now = len((load_groups(account_email).get("groups") or [])) + len((load_other_groups(account_email).get("groups") or []))
                 job["imported_total_count"] = max(int(job.get("imported_total_count") or 0), total_now)
                 job["message"] = f"Importing cancelled. {job['imported_total_count']} groups scraped."
                 groups_jobs[account_email] = job
@@ -1732,8 +1823,9 @@ def groups_data():
         return jsonify({"ok": False, "message": "No active account selected.", "groups": [], "status": {"running": False}})
 
     payload = load_groups(active_account)
-    groups = payload.get("groups") or []
-    groups = [g for g in groups if isinstance(g, dict)]
+    other_payload = load_other_groups(active_account)
+    groups = [dict(g, portal_category="buy_sell") for g in (payload.get("groups") or []) if isinstance(g, dict)]
+    groups.extend(dict(g, portal_category="other") for g in (other_payload.get("groups") or []) if isinstance(g, dict))
 
     with groups_jobs_lock:
         import_status = dict(groups_jobs.get(active_account) or {"running": False, "finished_at": None})
@@ -1784,7 +1876,9 @@ def groups_delete():
 
     deleted = 0
     for gid in group_ids:
-        if delete_group_record(active_account, gid):
+        removed_buy_sell = delete_group_record(active_account, gid)
+        removed_other = delete_other_group_record(active_account, gid)
+        if removed_buy_sell or removed_other:
             deleted += 1
 
     if deleted == 0:
@@ -1804,7 +1898,35 @@ def posting_in_groups_page():
     if request.method == 'GET' and not GROUP_UI_ENABLED:
         return redirect(url_for('web.settings_page'))
     accounts = get_all_accounts()
-    active_account = get_active_account()
+    active_account = str(request.values.get('account') or get_active_account() or '').strip()
+    if active_account not in accounts:
+        active_account = None
+    source_account = str(request.values.get('source_account') or active_account or '').strip()
+    if source_account not in accounts:
+        source_account = active_account
+    other_payload = load_other_groups(active_account) if active_account else {"groups": []}
+    other_groups = [g for g in (other_payload.get("groups") or []) if isinstance(g, dict)]
+    selected_other_group_ids = [str(gid).strip() for gid in request.form.getlist("other_group_ids") if str(gid).strip()]
+    group_backup_id = str(request.values.get("backup_id") or request.form.get("backup_group_id") or "").strip()
+    group_draft_id = str(request.values.get('draft_id') or request.form.get('group_draft_id') or '').strip()
+    with group_post_reuse_drafts_lock:
+        group_draft = dict(group_post_reuse_drafts.get(group_draft_id) or {}) if group_draft_id else {}
+    if group_draft and (group_draft.get('account') != active_account or group_draft.get('source_account') != source_account):
+        group_draft = {}
+    group_backup = None
+    if source_account and group_backup_id:
+        group_backup = next(
+            (item for item in (load_listings(source_account).get("listings") or [])
+             if str(item.get("id") or "") == group_backup_id and item.get("listing_type") == "group_post"),
+            None,
+        )
+    group_backup_photos = list(group_draft.get('photos') or []) if group_draft else [
+        photo for photo in ((group_backup or {}).get("downloaded_images") or [])
+        if isinstance(photo, dict) and os.path.isfile(str(photo.get("path") or ""))]
+    default_group_mode = "links" if group_backup else ("saved" if other_groups else "links")
+    group_selection_mode = (request.form.get("group_selection_mode") or default_group_mode).strip().lower()
+    if group_selection_mode not in {"saved", "links"}:
+        group_selection_mode = default_group_mode
 
     if request.method == "POST":
         if not active_account:
@@ -1815,14 +1937,20 @@ def posting_in_groups_page():
                 accounts=accounts,
                 active_account=None,
                 active_page="posting_in_groups",
+                other_groups=other_groups,
+                selected_other_group_ids=selected_other_group_ids,
+                group_selection_mode=group_selection_mode,
+                group_backup=group_backup,
+                group_backup_id=group_backup_id,
+                group_backup_photos=group_backup_photos,
             )
 
-        description = (request.form.get("description") or "").strip()
+        description = request.form.get("description") or group_draft.get('description') or ((group_backup or {}).get('details') or {}).get('description') or ""
         group_links_raw = request.form.get("group_links") or ""
         delay_unit = (request.form.get("delay_unit") or "").strip().lower()
         delay_value_raw = (request.form.get("delay_value") or "").strip()
 
-        if not description:
+        if not description.strip():
             return render_template(
                 "posting_in_groups.html",
                 message="Description is required.",
@@ -1830,17 +1958,43 @@ def posting_in_groups_page():
                 accounts=accounts,
                 active_account=active_account,
                 active_page="posting_in_groups",
+                other_groups=other_groups,
+                selected_other_group_ids=selected_other_group_ids,
+                group_selection_mode=group_selection_mode,
+                group_backup=group_backup,
+                group_backup_id=group_backup_id,
+                group_backup_photos=group_backup_photos,
             )
 
-        group_links = _parse_manual_urls(group_links_raw)
+        if group_selection_mode == "saved":
+            saved_group_map = {
+                str(group.get("id") or "").strip(): group
+                for group in other_groups
+                if str(group.get("id") or "").strip()
+            }
+            group_links = [
+                str((saved_group_map.get(group_id) or {}).get("link") or "").strip()
+                for group_id in selected_other_group_ids
+                if str((saved_group_map.get(group_id) or {}).get("link") or "").strip()
+            ]
+        else:
+            group_links = _parse_manual_urls(group_links_raw)
+        group_links = list(dict.fromkeys(group_links))
         if not group_links:
             return render_template(
                 "posting_in_groups.html",
-                message="Please provide at least one group link.",
+                message=("Select at least one saved Other Group." if group_selection_mode == "saved"
+                         else "Enter at least one group link."),
                 message_type="failed",
                 accounts=accounts,
                 active_account=active_account,
                 active_page="posting_in_groups",
+                other_groups=other_groups,
+                selected_other_group_ids=selected_other_group_ids,
+                group_selection_mode=group_selection_mode,
+                group_backup=group_backup,
+                group_backup_id=group_backup_id,
+                group_backup_photos=group_backup_photos,
             )
 
         if delay_unit not in {"seconds", "minutes", "hours"}:
@@ -1851,6 +2005,12 @@ def posting_in_groups_page():
                 accounts=accounts,
                 active_account=active_account,
                 active_page="posting_in_groups",
+                other_groups=other_groups,
+                selected_other_group_ids=selected_other_group_ids,
+                group_selection_mode=group_selection_mode,
+                group_backup=group_backup,
+                group_backup_id=group_backup_id,
+                group_backup_photos=group_backup_photos,
             )
 
         try:
@@ -1863,6 +2023,12 @@ def posting_in_groups_page():
                 accounts=accounts,
                 active_account=active_account,
                 active_page="posting_in_groups",
+                other_groups=other_groups,
+                selected_other_group_ids=selected_other_group_ids,
+                group_selection_mode=group_selection_mode,
+                group_backup=group_backup,
+                group_backup_id=group_backup_id,
+                group_backup_photos=group_backup_photos,
             )
 
         if delay_value < 1:
@@ -1873,13 +2039,33 @@ def posting_in_groups_page():
                 accounts=accounts,
                 active_account=active_account,
                 active_page="posting_in_groups",
+                other_groups=other_groups,
+                selected_other_group_ids=selected_other_group_ids,
+                group_selection_mode=group_selection_mode,
+                group_backup=group_backup,
+                group_backup_id=group_backup_id,
+                group_backup_photos=group_backup_photos,
             )
 
         multiplier = {"seconds": 1, "minutes": 60, "hours": 3600}
         delay_seconds = delay_value * multiplier[delay_unit]
 
         image_files = [f for f in request.files.getlist("images") if f and f.filename]
-        if not image_files:
+        if group_backup_id and not group_backup:
+            return render_template("posting_in_groups.html", message="Saved group post was not found.", message_type="failed",
+                                   accounts=accounts, active_account=active_account, active_page="posting_in_groups",
+                                   other_groups=other_groups, selected_other_group_ids=selected_other_group_ids,
+                                   group_selection_mode=group_selection_mode, group_backup=None,
+                                   group_backup_id=group_backup_id, group_backup_photos=[])
+        if group_backup:
+            saved_image_paths = [str(photo.get('path') or '') for photo in group_backup_photos]
+            if not saved_image_paths or any(not path or not os.path.isfile(path) for path in saved_image_paths):
+                return render_template("posting_in_groups.html", message="Saved group post photos are missing. Upload the photos again.", message_type="failed",
+                                       accounts=accounts, active_account=active_account, active_page="posting_in_groups",
+                                       other_groups=other_groups, selected_other_group_ids=selected_other_group_ids,
+                                       group_selection_mode=group_selection_mode, group_backup=group_backup,
+                                       group_backup_id=group_backup_id, group_backup_photos=group_backup_photos)
+        elif not image_files:
             return render_template(
                 "posting_in_groups.html",
                 message="Please upload at least one image.",
@@ -1887,9 +2073,31 @@ def posting_in_groups_page():
                 accounts=accounts,
                 active_account=active_account,
                 active_page="posting_in_groups",
+                other_groups=other_groups,
+                selected_other_group_ids=selected_other_group_ids,
+                group_selection_mode=group_selection_mode,
+                group_backup=group_backup,
+                group_backup_id=group_backup_id,
+                group_backup_photos=group_backup_photos,
+            )
+        elif len(image_files) > 20:
+            return render_template(
+                "posting_in_groups.html",
+                message="Choose no more than 20 images.",
+                message_type="failed",
+                accounts=accounts,
+                active_account=active_account,
+                active_page="posting_in_groups",
+                other_groups=other_groups,
+                selected_other_group_ids=selected_other_group_ids,
+                group_selection_mode=group_selection_mode,
+                group_backup=group_backup,
+                group_backup_id=group_backup_id,
+                group_backup_photos=group_backup_photos,
             )
 
-        saved_image_paths = _save_group_post_images(image_files)
+        else:
+            saved_image_paths = _save_group_post_images(image_files)
         if not saved_image_paths:
             return render_template(
                 "posting_in_groups.html",
@@ -1898,6 +2106,12 @@ def posting_in_groups_page():
                 accounts=accounts,
                 active_account=active_account,
                 active_page="posting_in_groups",
+                other_groups=other_groups,
+                selected_other_group_ids=selected_other_group_ids,
+                group_selection_mode=group_selection_mode,
+                group_backup=group_backup,
+                group_backup_id=group_backup_id,
+                group_backup_photos=group_backup_photos,
             )
 
         group_job_id = 'groups_' + uuid4().hex
@@ -1910,10 +2124,12 @@ def posting_in_groups_page():
 
         def _run_group_posting():
             try:
+                _runtime_log(f"[GroupPosting] Waiting in posting queue for account={active_account}")
                 with _get_post_lock(active_account):
+                    _runtime_log(f"[GroupPosting] Posting queue acquired for account={active_account}")
                     with scheduled_posts_lock:
                         scheduled_posts[group_job_id].update(status='posting', started_at=datetime.now())
-                    result = post_anonymous_group_posts(
+                    result = post_group_posts(
                         active_account,
                         group_links,
                         description,
@@ -1921,12 +2137,25 @@ def posting_in_groups_page():
                         delay_seconds=delay_seconds,
                         progress_callback=lambda msg: _runtime_log(msg),
                     )
+                backup_error = ''
+                if int(result.get('posted') or 0) > 0:
+                    try:
+                        from automation.manual_backups import save_group_post
+                        backup_id = save_group_post(
+                            active_account,
+                            description,
+                            saved_image_paths,
+                        )
+                        _runtime_log(f"[GroupPosting] Saved shared backup={backup_id} account={active_account}")
+                    except Exception as storage_error:
+                        backup_error = f'Posted to Facebook, but saving the group post backup failed: {storage_error}'
+                        _runtime_log(f"[GroupPosting] Backup save failed: {storage_error}")
                 with scheduled_posts_lock:
                     meta = scheduled_posts[group_job_id]
                     success = bool(result.get('ok'))
                     meta.update(status='posted' if success else 'failed', posted_at=datetime.now(),
-                                error='' if int(result.get('posted') or 0) == int(result.get('total') or 0)
-                                else str(result.get('message') or 'Some group posts failed.'))
+                                error=(backup_error or ('' if int(result.get('posted') or 0) == int(result.get('total') or 0)
+                                       else str(result.get('message') or 'Some group posts failed.'))))
                     complete_posting(meta, success)
                 _runtime_log(f"[GroupPosting] {result.get('message')}")
             except Exception as exc:
@@ -1937,6 +2166,9 @@ def posting_in_groups_page():
                 _runtime_log(f"[GroupPosting] Failed: {exc}")
 
         threading.Thread(target=_run_group_posting, daemon=True).start()
+        if group_draft_id:
+            with group_post_reuse_drafts_lock:
+                group_post_reuse_drafts.pop(group_draft_id, None)
 
         return render_template(
             "posting_in_groups.html",
@@ -1945,6 +2177,9 @@ def posting_in_groups_page():
             accounts=accounts,
             active_account=active_account,
             active_page="posting_in_groups",
+            other_groups=other_groups,
+            selected_other_group_ids=selected_other_group_ids,
+            group_selection_mode=group_selection_mode,
         )
 
     return render_template(
@@ -1952,6 +2187,15 @@ def posting_in_groups_page():
         accounts=accounts,
         active_account=active_account,
         active_page="posting_in_groups",
+        other_groups=other_groups,
+        selected_other_group_ids=selected_other_group_ids,
+        group_selection_mode=group_selection_mode,
+        group_backup=group_backup,
+        group_backup_id=group_backup_id,
+        group_backup_photos=group_backup_photos,
+        group_draft=group_draft,
+        group_draft_id=group_draft_id,
+        source_account=source_account,
     )
 
 
@@ -2112,7 +2356,7 @@ def terminal_page():
 def diagnostics_download():
     from automation.terminal_log import export_text
     response = Response(export_text(), content_type='text/plain; charset=utf-8')
-    response.headers['Content-Disposition'] = 'attachment; filename="tayyara-diagnostics.txt"'
+    response.headers['Content-Disposition'] = 'attachment; filename="real-estate-diagnostics.txt"'
     response.headers['Cache-Control'] = 'no-store'
     return response
 
@@ -2196,12 +2440,60 @@ def account_browser_open():
         return jsonify(ok=False, message=str(exc)), 409
 
 
+@web_bp.route('/account/browser/posting', methods=['POST'])
+def account_browser_posting():
+    account = str((request.get_json(silent=True) or {}).get('account') or '').strip()
+    if account not in get_all_accounts():
+        return jsonify(ok=False, message='Saved account not found.'), 404
+    try:
+        return jsonify(ok=True, **account_browser.open_posting_page(account))
+    except Exception as exc:
+        return jsonify(ok=False, message='Could not open mobile posting page: ' + str(exc)), 409
+
+
+@web_bp.route('/account/browser/group-posts', methods=['POST'])
+def account_browser_group_posts():
+    account = str((request.get_json(silent=True) or {}).get('account') or '').strip()
+    if account not in get_all_accounts():
+        return jsonify(ok=False, message='Saved account not found.'), 404
+    try:
+        return jsonify(ok=True, **account_browser.open_group_posts_page(account))
+    except Exception as exc:
+        return jsonify(ok=False, message='Could not open group posts: ' + str(exc)), 409
+
+
+@web_bp.route('/account/browser/marketplace-ads', methods=['POST'])
+def account_browser_marketplace_ads():
+    account = str((request.get_json(silent=True) or {}).get('account') or '').strip()
+    if account not in get_all_accounts():
+        return jsonify(ok=False, message='Saved account not found.'), 404
+    try:
+        return jsonify(ok=True, **account_browser.open_marketplace_ads_page(account))
+    except Exception as exc:
+        return jsonify(ok=False, message='Could not open Marketplace listings: ' + str(exc)), 409
+
+
+@web_bp.route('/account/browser/desktop', methods=['POST'])
+def account_browser_desktop():
+    try:
+        return jsonify(ok=True, **account_browser.desktop_view())
+    except Exception as exc:
+        return jsonify(ok=False, message='Could not restore desktop view: ' + str(exc)), 409
+
+
 @web_bp.route('/account/browser/stop', methods=['POST'])
 def account_browser_stop():
     try:
-        return jsonify(ok=True, **account_browser.stop())
+        return jsonify(ok=True, **account_browser.return_home())
     except RuntimeError as exc:
         return jsonify(ok=False, message=str(exc)), 409
+
+
+@web_bp.route('/account/browser/leave', methods=['POST'])
+def account_browser_leave():
+    # The account browser belongs to its portal page. Release its embedded
+    # Chrome session when the user navigates to another portal section.
+    return jsonify(ok=True, **account_browser.stop(force=True))
 
 
 @web_bp.route('/account/browser/layout', methods=['POST'])
@@ -2578,6 +2870,178 @@ def auto_listing_clear_junk():
 
     return redirect(redirect_target)
 
+@web_bp.route('/auto_listing_excel/template', methods=['GET'])
+def auto_listing_excel_template():
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    headers = ['Title', 'Price', 'Location', 'Description', 'Images ZIP']
+    workbook = Workbook()
+    listings = workbook.active
+    listings.title = 'Listings'
+    listings.append(headers)
+    for cell in listings[1]:
+        cell.font = Font(name='Arial', bold=True, color='FFFFFF')
+        cell.fill = PatternFill('solid', fgColor='0B3D91')
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    listings.freeze_panes = 'A2'
+    listings.auto_filter.ref = 'A1:E501'
+    listings.row_dimensions[1].height = 32
+    widths = [34, 18, 30, 56, 56]
+    for index, width in enumerate(widths, 1):
+        listings.column_dimensions[listings.cell(1, index).column_letter].width = width
+    for row in range(2, 502):
+        listings.cell(row, 4).alignment = Alignment(wrap_text=True, vertical='top')
+
+    output = io.BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return send_file(output, as_attachment=True,
+                     download_name='FBMK_Bulk_Real_Estate_Posting_Template.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+def _extract_property_zip_images(post_data):
+    row_number = post_data.get('_excel_row_number', '?')
+    raw_path = str(post_data.get('image_zip_path') or '').strip().strip('"').strip("'")
+    if not raw_path:
+        raise ValueError(f'Excel row {row_number}: Images ZIP path is required.')
+    zip_path = Path(raw_path).expanduser()
+    if not zip_path.is_absolute():
+        raise ValueError(f'Excel row {row_number}: use the full path to the ZIP file so the app can find it: {raw_path}')
+    zip_path = zip_path.resolve()
+    if zip_path.suffix.lower() != '.zip' or not zip_path.is_file():
+        raise ValueError(f'Excel row {row_number}: ZIP file not found: {raw_path}. Use a path accessible to the computer running this app.')
+
+    target_dir = str(data_dir('scheduled_property_images', 'excel_' + uuid4().hex))
+    os.makedirs(target_dir, exist_ok=True)
+    supported = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.jfif'}
+    image_paths = []
+    total_bytes = 0
+    actual_total_bytes = 0
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                raw_name = str(info.filename or '').replace('\\', '/')
+                parts = raw_name.split('/')
+                if raw_name.startswith('/') or ':' in parts[0] or any(part in {'', '.', '..'} for part in parts):
+                    raise ValueError(f'Excel row {row_number}: unsafe path in ZIP entry "{info.filename}".')
+                mode = (info.external_attr >> 16) & 0xFFFF
+                if mode and (mode & 0o170000) == 0o120000:
+                    raise ValueError(f'Excel row {row_number}: ZIP contains a symbolic link.')
+                if parts[0] == '__MACOSX':
+                    continue
+                extension = os.path.splitext(parts[-1])[1].lower()
+                if extension not in supported:
+                    continue
+                if len(image_paths) >= 20:
+                    raise ValueError(f'Excel row {row_number}: each ZIP can contain at most 20 photos.')
+                declared_size = int(info.file_size or 0)
+                total_bytes += declared_size
+                if declared_size > 50 * 1024 * 1024 or total_bytes > 250 * 1024 * 1024:
+                    raise ValueError(f'Excel row {row_number}: ZIP photos exceed the 250 MB per-listing limit.')
+                target = os.path.join(target_dir, f'photo_{len(image_paths) + 1:02d}{extension}')
+                copied = 0
+                with archive.open(info) as source, open(target, 'wb') as destination:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        copied += len(chunk)
+                        actual_total_bytes += len(chunk)
+                        if copied > 50 * 1024 * 1024 or actual_total_bytes > 250 * 1024 * 1024:
+                            raise ValueError(f'Excel row {row_number}: extracted photos exceed the allowed size.')
+                        destination.write(chunk)
+                try:
+                    with Image.open(target) as photo:
+                        photo.verify()
+                except Exception as image_error:
+                    raise ValueError(f'Excel row {row_number}: ZIP contains an unreadable image ({parts[-1]}).') from image_error
+                image_paths.append(target)
+    except zipfile.BadZipFile as exc:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise ValueError(f'Excel row {row_number}: could not open ZIP file "{raw_path}".') from exc
+    except Exception:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise
+
+    if not image_paths:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise ValueError(f'Excel row {row_number}: ZIP contains no supported photos.')
+    for index, path in enumerate(image_paths, start=1):
+        post_data[f'image_path{index}'] = path
+    post_data.pop('image_zip_path', None)
+    print(f"[PropertyExcel] Row {row_number}: extracted {len(image_paths)} photo(s) from {zip_path}", flush=True)
+
+
+@web_bp.route('/auto_listing_excel/create_zip', methods=['POST'])
+def auto_listing_excel_create_zip():
+    files = [uploaded for uploaded in request.files.getlist('photos') if uploaded and uploaded.filename]
+    if not 1 <= len(files) <= 20:
+        return jsonify(ok=False, message='Select between 1 and 20 photos for one property.'), 400
+
+    allowed = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.jfif'}
+    requested_name = secure_filename(str(request.form.get('zip_name') or '').strip())
+    stem = re.sub(r'[^A-Za-z0-9_-]+', '_', os.path.splitext(requested_name)[0])[:60].strip('_') or 'property_photos'
+    filename = f'{stem}.zip'
+    temporary_file = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+    temporary = temporary_file.name
+    temporary_file.close()
+    total_bytes = 0
+    try:
+        with zipfile.ZipFile(temporary, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            for index, uploaded in enumerate(files, start=1):
+                extension = os.path.splitext(uploaded.filename)[1].lower()
+                if extension not in allowed:
+                    raise ValueError(f'Photo {index} has an unsupported file type.')
+                try:
+                    uploaded.stream.seek(0, os.SEEK_END)
+                    source_size = uploaded.stream.tell()
+                    uploaded.stream.seek(0)
+                    if source_size > 50 * 1024 * 1024 or total_bytes + source_size > 250 * 1024 * 1024:
+                        raise ValueError('Photos are too large. Limit each photo to 50 MB and the ZIP to 250 MB.')
+                    with Image.open(uploaded.stream) as photo:
+                        photo.verify()
+                    uploaded.stream.seek(0)
+                except ValueError:
+                    raise
+                except Exception as image_error:
+                    raise ValueError(f'Photo {index} is not a readable image.') from image_error
+                copied = 0
+                with archive.open(f'photo_{index:02d}{extension}', 'w') as destination:
+                    while True:
+                        chunk = uploaded.stream.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        copied += len(chunk)
+                        total_bytes += len(chunk)
+                        if copied > 50 * 1024 * 1024 or total_bytes > 250 * 1024 * 1024:
+                            raise ValueError('Photos are too large. Limit each photo to 50 MB and the ZIP to 250 MB.')
+                        destination.write(chunk)
+    except Exception as exc:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        return jsonify(ok=False, message=str(exc)), 400
+
+    try:
+        response = send_file(temporary, as_attachment=True, download_name=filename,
+                             mimetype='application/zip', conditional=False)
+    except Exception:
+        os.remove(temporary)
+        raise
+    def remove_temporary_zip():
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+    response.call_on_close(remove_temporary_zip)
+    return response
+
+
 @web_bp.route("/auto_listing_excel", methods=["GET"])
 def auto_listing_excel():
     accounts = get_all_accounts()
@@ -2599,38 +3063,80 @@ def auto_listing_excel_post():
     active_account = get_active_account()
     auto_listing_running = _is_auto_listing_running_for_account(active_account)
 
-    if not active_account:
+    def render_excel(message=None, kind='failed', **extra):
+        groups_payload = load_groups(active_account) if active_account else {"groups": []}
+        groups = [g for g in (groups_payload.get("groups") or []) if isinstance(g, dict)]
         return render_template(
-            "auto_listing_excel.html",
-            message="No active account selected",
-            message_type="failed",
-            accounts=accounts,
-            active_account=None,
-            active_page="auto_listing",
-            auto_listing_running=False,
+            "auto_listing_excel.html", message=message, message_type=kind,
+            accounts=accounts, active_account=active_account, active_page="auto_listing",
+            auto_listing_running=_is_auto_listing_running_for_account(active_account),
+            groups=groups, **extra,
         )
 
-    if auto_listing_running:
-        return render_template(
-            "auto_listing_excel.html",
-            message="Auto Listing is already running for this account. Wait until scheduled/ongoing posts finish.",
-            message_type="failed",
-            accounts=accounts,
-            active_account=active_account,
-            active_page="auto_listing",
-            auto_listing_running=True,
-        )
+    if not active_account:
+        return render_template("auto_listing_excel.html", message="No active account selected",
+                               message_type="failed", accounts=accounts, active_account=None,
+                               active_page="auto_listing", auto_listing_running=False, groups=[])
+
+    if auto_listing_running and not request.form.get('draft_token'):
+        return render_excel("A posting job is already queued or running for this account. Wait for it to finish before starting another batch.")
+
+    draft_token = str(request.form.get('draft_token') or '').strip()
+    if draft_token:
+        if auto_listing_running:
+            return render_excel('Another listing is already queued or posting for this account. Wait for it to finish, then upload this batch again.')
+        with excel_property_drafts_lock:
+            draft = excel_property_drafts.pop(draft_token, None)
+        if not draft or draft.get('account') != active_account:
+            return render_excel('This review expired or belongs to another account. Upload the workbook again.')
+        selected_names = []
+        raw_ids = list(dict.fromkeys(str(value).strip() for value in request.form.getlist('group_ids') if str(value).strip()))
+        if len(raw_ids) > 20:
+            with excel_property_drafts_lock:
+                excel_property_drafts[draft_token] = draft
+            return render_excel('Select no more than 20 groups.', draft_token=draft_token,
+                                review_count=len(draft['posts']), delay_value=draft['delay_value'],
+                                delay_unit=draft['delay_unit'])
+        # Older page scripts or browsers may omit a submit button's value.
+        # The checkbox selection is authoritative: IDs mean post to groups;
+        # an empty list means skip group posting.
+        if raw_ids:
+            available = {str(group.get('id') or '').strip(): str(group.get('name') or '').strip()
+                         for group in (load_groups(active_account).get('groups') or []) if isinstance(group, dict)}
+            selected_names = [available[group_id] for group_id in raw_ids if group_id in available and available[group_id]]
+        posts = draft['posts']
+        batch_time = datetime.now()
+        job_ids = []
+        try:
+            for index, post_data in enumerate(posts, start=1):
+                post_data['group_names'] = list(selected_names)
+                post_data['_listing_kind'] = 'property'
+                post_data['_manual_record_id'] = uuid4().hex[:20]
+                post_data['_require_publish_confirmation'] = True
+                post_data['_posting_requested_at'] = draft.get('posting_requested_at') or posting_requested_at
+                run_at = batch_time + timedelta(seconds=draft['delay_seconds'] * index)
+                safe_account = re.sub(r"[^a-zA-Z0-9_]+", "_", active_account or "account")
+                job_id = f"excel_property_{safe_account}_{int(batch_time.timestamp())}_{index}_{uuid4().hex[:8]}"
+                scheduler.add_job(_post_single_listing, trigger='date', run_date=run_at,
+                                  args=[post_data, active_account, job_id], id=job_id,
+                                  replace_existing=False)
+                job_ids.append(job_id)
+                _register_scheduled_post(job_id, active_account, post_data, run_at)
+                _runtime_log(f"[PropertyExcel] Scheduled job={job_id} account={active_account} run_at={run_at:%Y-%m-%d %H:%M:%S} groups={len(selected_names)}")
+        except Exception as exc:
+            for job_id in job_ids:
+                try:
+                    scheduler.remove_job(job_id)
+                except Exception:
+                    pass
+                with scheduled_posts_lock:
+                    scheduled_posts.pop(job_id, None)
+            return render_excel(f'Could not schedule the full batch: {exc}')
+        group_message = f' with {len(selected_names)} selected group(s)' if selected_names else ' without group posting'
+        return render_excel(f'Scheduled {len(posts)} real-estate listing(s){group_message}. First listing starts after the selected delay.', 'success')
 
     if "excel_file" not in request.files:
-        return render_template(
-            "auto_listing_excel.html",
-            message="No file uploaded",
-            message_type="failed",
-            accounts=accounts,
-            active_account=active_account,
-            active_page="auto_listing",
-            auto_listing_running=False,
-        )
+        return render_excel("No Excel file uploaded.")
 
     file = request.files["excel_file"]
     delay_unit = (request.form.get("delay_unit") or "").strip().lower()
@@ -2638,121 +3144,71 @@ def auto_listing_excel_post():
 
     valid_units = {"hours", "minutes"}
     if delay_unit not in valid_units:
-        return render_template(
-            "auto_listing_excel.html",
-            message="Please select a valid delay unit.",
-            message_type="failed",
-            accounts=accounts,
-            active_account=active_account,
-            active_page="auto_listing",
-            auto_listing_running=False,
-        )
+        return render_excel("Please select a valid delay unit.")
 
     try:
         delay_value = int(delay_value_raw)
     except ValueError:
-        return render_template(
-            "auto_listing_excel.html",
-            message="Delay value must be a whole number.",
-            message_type="failed",
-            accounts=accounts,
-            active_account=active_account,
-            active_page="auto_listing",
-            auto_listing_running=False,
-        )
+        return render_excel("Delay value must be a whole number.")
 
     if delay_value < 1:
-        return render_template(
-            "auto_listing_excel.html",
-            message=f"{delay_unit.capitalize()} delay must be at least 1.",
-            message_type="failed",
-            accounts=accounts,
-            active_account=active_account,
-            active_page="auto_listing",
-            auto_listing_running=False,
-        )
+        return render_excel(f"{delay_unit.capitalize()} delay must be at least 1.")
 
     delay_multiplier = {"hours": 3600, "minutes": 60}
     delay_seconds = delay_value * delay_multiplier[delay_unit]
 
     if file.filename == "":
-        return render_template(
-            "auto_listing_excel.html",
-            message="No file selected",
-            message_type="failed",
-            accounts=accounts,
-            active_account=active_account,
-            active_page="auto_listing",
-            auto_listing_running=False,
-        )
+        return render_excel("No file selected")
+    if os.path.splitext(file.filename)[1].lower() != '.xlsx':
+        return render_excel('Please save the workbook as .xlsx before uploading. This format is supported reliably.')
 
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
     file.save(temp_file.name)
     temp_file.close()
 
     try:
-        post_data_list = read_excel_flexible(temp_file.name)
+        post_data_list = read_excel_flexible(temp_file.name, listing_kind='property')
 
         if not post_data_list:
             raise Exception("Excel file is empty or invalid")
 
-        for index, post_data in enumerate(post_data_list, start=2):
-            if any(not str(post_data.get(key) or '').strip() for key in ('exterior_color', 'interior_color')):
-                raise ValueError(f'Excel row {index}: exterior and interior colors are required for posting.')
-
-        total_posts = len(post_data_list)
-        batch_time = datetime.now()
-
-        for index, post_data in enumerate(post_data_list, start=1):
-            post_data['_posting_requested_at'] = posting_requested_at
-            run_at = batch_time + timedelta(seconds=delay_seconds * index)
-            safe_account = re.sub(r"[^a-zA-Z0-9_]+", "_", active_account or "account")
-            job_id = f"excel_{safe_account}_{int(batch_time.timestamp())}_{index}_{uuid4().hex[:8]}"
-            scheduler.add_job(
-                _post_single_listing,
-                trigger="date",
-                run_date=run_at,
-                args=[post_data, active_account, job_id],
-                id=job_id,
-                replace_existing=False
-            )
-            _register_scheduled_post(job_id, active_account, post_data, run_at)
-            _runtime_log(
-                f"[AutoListing] Scheduled job={job_id} account={active_account} run_at={run_at.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-
-        message = (
-            f"Scheduled {total_posts} listing(s). "
-            f"Each post will run every {delay_value} {delay_unit}. "
-            f"First post will also run after the selected delay."
-        )
-        message_type = "success"
+        for post_data in post_data_list:
+            _extract_property_zip_images(post_data)
+            row_number = post_data.get('_excel_row_number', '?')
+            for image_index in range(1, 21):
+                image_path = str(post_data.get(f'image_path{image_index}') or '').strip()
+                if image_path and not os.path.isfile(image_path):
+                    raise ValueError(f'Excel row {row_number}: photo "{image_path}" is not a local file. Use a photo ZIP or a full path accessible to this computer.')
+                if image_path:
+                    try:
+                        with Image.open(image_path) as photo:
+                            photo.verify()
+                    except Exception as image_error:
+                        raise ValueError(f'Excel row {row_number}: photo "{image_path}" is not a readable image file.') from image_error
+        draft_token = uuid4().hex
+        with excel_property_drafts_lock:
+            now = datetime.now()
+            for old_token, old_draft in list(excel_property_drafts.items()):
+                if now - old_draft.get('created_at', now) > timedelta(hours=4):
+                    excel_property_drafts.pop(old_token, None)
+            excel_property_drafts[draft_token] = {
+                'account': active_account, 'posts': post_data_list, 'delay_seconds': delay_seconds,
+                'delay_value': delay_value, 'delay_unit': delay_unit,
+                'posting_requested_at': posting_requested_at, 'created_at': now,
+            }
+        groups_payload = load_groups(active_account)
+        groups = [g for g in (groups_payload.get('groups') or []) if isinstance(g, dict)]
+        return render_template('auto_listing_excel.html', accounts=accounts, active_account=active_account,
+                               active_page='auto_listing', auto_listing_running=False, groups=groups,
+                               draft_token=draft_token, review_count=len(post_data_list),
+                               delay_value=delay_value, delay_unit=delay_unit)
 
     except Exception as e:
-        return render_template(
-            "auto_listing_excel.html",
-            message=f"Error processing Excel: {str(e)}",
-            message_type="failed",
-            accounts=accounts,
-            active_account=active_account,
-            active_page="auto_listing",
-            auto_listing_running=False,
-        )
+        return render_excel(f"Error processing Excel: {str(e)}")
 
     finally:
         if os.path.exists(temp_file.name):
             os.remove(temp_file.name)
-
-    return render_template(
-        "auto_listing_excel.html",
-        message=message,
-        message_type=message_type,
-        accounts=accounts,
-        active_account=active_account,
-        active_page="auto_listing",
-        auto_listing_running=any(_is_auto_listing_running_for_account(account) for account in get_all_accounts()),
-    )
-
 
 @web_bp.route("/auto_listing_manual", methods=["GET"])
 def auto_listing_manual():
@@ -2770,11 +3226,109 @@ def auto_listing_manual():
         auto_listing_running=any(_is_auto_listing_running_for_account(account) for account in get_all_accounts()),
         prefill=prefill,
         groups=groups,
+        property_posting=True,
     )
 
 
 @web_bp.route("/auto_listing_manual", methods=["POST"])
 def auto_listing_manual_post():
+    accounts = get_all_accounts()
+    active_account = get_active_account()
+
+    def respond(message, kind='failed', status=400):
+        groups_payload = load_groups(active_account) if active_account else {"groups": []}
+        groups = [g for g in (groups_payload.get("groups") or []) if isinstance(g, dict)]
+        return render_template('auto_listing_manual.html', message=message, message_type=kind,
+                               accounts=accounts, active_account=active_account,
+                               active_page='auto_listing', groups=groups, property_posting=True), status
+
+    if not active_account or active_account not in accounts:
+        return respond('Select a saved Facebook account before posting.')
+    if request.form.get('account') != active_account:
+        return respond('The active account changed. Reload the form before posting.')
+    post_action = (request.form.get('post_action') or 'simple').strip().lower()
+    if post_action not in {'simple', 'group'} or request.form.get('multi_account') == '1':
+        return respond('Property posting currently supports the active account only.')
+    payload = {key: str(request.form.get(key) or '').strip() for key in ('title', 'price', 'location', 'description')}
+    missing = [key.title() for key in ('title', 'price', 'location') if not payload[key]]
+    if missing:
+        return respond('Required fields: ' + ', '.join(missing))
+    try:
+        from decimal import Decimal, InvalidOperation
+        price = Decimal(payload['price'])
+        if not price.is_finite() or price < 0:
+            raise InvalidOperation
+    except (InvalidOperation, ValueError):
+        return respond('Enter a valid nonnegative price.')
+    files = [f for f in request.files.getlist('images') if f and f.filename]
+    names = [str(v or '').strip() for v in request.form.getlist('prefilled_images') if str(v or '').strip()]
+    if len(files) + len(names) > 20:
+        return respond('Choose no more than 20 photos.')
+    prefilled = []
+    for name in names:
+        if os.path.basename(name) != name or os.path.splitext(name)[1].lower() not in {'.jpg','.jpeg','.png','.webp','.gif','.bmp','.jfif'}:
+            return respond('A selected photo is invalid.')
+        path = os.path.join(screenshots_dir(), name)
+        if not os.path.isfile(path):
+            return respond('A selected photo is no longer available.')
+        prefilled.append(path)
+    if not files and not prefilled:
+        return respond('At least one photo is required.')
+    try:
+        for image_file in files:
+            with Image.open(image_file.stream) as photo:
+                photo.verify()
+            image_file.stream.seek(0)
+        paths = _save_manual_images(files) + prefilled
+    except (ValueError, OSError, SyntaxError):
+        return respond('Could not read the selected photos. Choose valid image files.')
+    job_id = 'property_' + uuid4().hex
+    job_image_dir = str(data_dir('scheduled_property_images', job_id))
+    durable_paths = []
+    try:
+        os.makedirs(job_image_dir, exist_ok=True)
+        for index, source in enumerate(paths, 1):
+            if not os.path.isfile(source):
+                raise OSError(f'Selected photo disappeared before it could be queued: {source}')
+            extension = os.path.splitext(source)[1].lower() or '.jpg'
+            target = os.path.join(job_image_dir, f'photo_{index:02d}{extension}')
+            shutil.copy2(source, target)
+            if not os.path.isfile(target) or os.path.getsize(target) <= 0:
+                raise OSError(f'Could not preserve selected photo: {source}')
+            durable_paths.append(target)
+    except OSError as exc:
+        return respond(f'Could not preserve the selected photos for posting: {exc}')
+    for index, path in enumerate(durable_paths, 1):
+        payload[f'image_path{index}'] = path
+    if post_action == 'group':
+        raw_ids = list(dict.fromkeys(str(g or '').strip() for g in request.form.getlist('group_ids') if str(g or '').strip()))
+        if len(raw_ids) > 20:
+            return respond('You can select up to 20 groups.')
+        groups_payload = load_groups(active_account)
+        known = {str(g.get('id') or '').strip(): str(g.get('name') or '').strip()
+                 for g in (groups_payload.get('groups') or []) if isinstance(g, dict)}
+        selected_ids = [gid for gid in raw_ids if gid in known]
+        if selected_ids:
+            payload['group_ids'] = selected_ids
+            payload['group_names'] = [known[gid] for gid in selected_ids if known[gid]]
+            payload['post_action'] = 'group'
+        else:
+            payload['post_action'] = 'simple'
+    payload.update(_listing_kind='property', _manual_record_id=uuid4().hex[:20],
+                   _require_publish_confirmation=True, _posting_requested_at=_request_posting_origin())
+    run_at = datetime.now() + timedelta(seconds=2)
+    _register_scheduled_post(job_id, active_account, payload, run_at)
+    try:
+        scheduler.add_job(_post_single_listing, trigger='date', run_date=run_at,
+                          args=[payload, active_account, job_id], id=job_id, replace_existing=False)
+    except Exception:
+        with scheduled_posts_lock:
+            scheduled_posts.pop(job_id, None)
+        raise
+    return respond('Property post queued. Check Posting Results for its status.', 'success', 200)
+
+
+def _legacy_vehicle_manual_post():
     posting_requested_at = _request_posting_origin()
     accounts = get_all_accounts()
     active_account = get_active_account()
@@ -3047,6 +3601,7 @@ def post_schedular_data():
             "job_id": item["job_id"],
             "title": item["title"],
             "make": item.get("make", ""),
+            "listing_type": item.get("listing_type", "vehicle"),
             "platform": item.get("platform", "facebook"),
             "source": item.get("source", ""),
             "account": item.get("account", active_account),
@@ -3211,10 +3766,17 @@ def _render_delete_listings_page(message=None, message_type=None, *, backups_pag
     stored = (load_listings(active_account) if active_account else None) or {"listings": [], "updated_at": None}
     listings = _ordered_manage_listings([item for item in (stored.get("listings") or []) if isinstance(item, dict)])
     listings = [clean_imported_listing_fields(item) for item in listings]
+    for listing in listings:
+        if not listing.get('listing_type') and _is_property_backup(listing):
+            listing['listing_type'] = 'marketplace_ad'
     listings = [item for item in listings if bool(item.get('facebook_present') is False or (item.get('source_deleted') and not item.get('facebook_reposted'))) == backups_page]
     for listing in listings:
         listing['display_status'] = _repost_listing_status(active_account, listing)
     import_status = _delete_import_snapshot(active_account)
+    if backups_page:
+        return render_template('backup_posts.html', message=message, message_type=message_type,
+                               accounts=accounts, active_account=active_account, active_page='backups',
+                               listings=listings, scheduled_repost_ids=_active_repost_listing_ids(active_account))
     return render_template(
         "delete_listings.html",
         message=message,
@@ -3509,6 +4071,24 @@ def backup_listings_page():
     return _render_delete_listings_page(request.args.get('message'), request.args.get('message_type'), backups_page=True)
 
 
+@web_bp.route('/backup_listings/clear_category', methods=['POST'])
+def backup_listings_clear_category():
+    account = get_active_account()
+    data = request.get_json(silent=True) or {}
+    if not account:
+        return jsonify(ok=False, message='Select an account first.'), 400
+    if data.get('account') != account:
+        return jsonify(ok=False, message='The active account changed. Reload Backup Posts.'), 409
+    category = str(data.get('category') or '').strip().lower()
+    try:
+        from automation.listing_store import clear_backup_category
+        removed = clear_backup_category(category)
+    except ValueError as exc:
+        return jsonify(ok=False, message=str(exc)), 400
+    label = 'Marketplace Ads' if category == 'marketplace_ad' else 'Group Posts'
+    return jsonify(ok=True, message=f'Cleared {removed} {label} backup(s) from the shared database.')
+
+
 @web_bp.route("/delete_listings", methods=["GET", "POST"])
 def delete_listings_page():
     if request.method == "POST":
@@ -3598,6 +4178,20 @@ def delete_listings_data():
 REPOST_EDIT_FIELDS = ('title', 'vehicle_type', 'year', 'make', 'model', 'mileage', 'price',
                      'body_style', 'exterior_color', 'interior_color', 'vehicle_condition',
                      'fuel_type', 'transmission', 'description', 'location', 'clean_title', 'vin', 'trim')
+PROPERTY_EDIT_FIELDS = ('title', 'price', 'location', 'description')
+
+
+def _is_property_backup(listing):
+    listing = listing or {}
+    if listing.get('listing_type') == 'marketplace_ad':
+        return True
+    if listing.get('listing_type') or not isinstance(listing.get('details'), dict):
+        return False
+    details = listing['details']
+    vehicle_fields = ('year', 'make', 'model', 'mileage', 'vehicle_type', 'body_style', 'vin',
+                      'exterior_color', 'interior_color', 'fuel_type', 'transmission')
+    return bool(details.get('title') and details.get('location') and details.get('price')
+                and not any(details.get(field) for field in vehicle_fields))
 
 
 def _missing_post_colors(details):
@@ -3640,6 +4234,16 @@ def listing_detail(listing_id):
     listing = next((item for item in load_listings(account).get('listings', []) if item.get('id') == listing_id), None) if account else None
     if listing is None:
         return 'Listing not found', 404
+    if listing.get('listing_type') == 'group_post':
+        return render_template('group_post_backup_detail.html', listing=listing,
+                               group_post_photos=[photo for photo in (listing.get('downloaded_images') or [])
+                                                  if isinstance(photo, dict) and os.path.isfile(str(photo.get('path') or ''))],
+                               accounts=get_all_accounts(), active_account=account, active_page='backups')
+    property_listing = _is_property_backup(listing)
+    if not property_listing:
+        return 'This page is only available for property listings.', 404
+    fields = PROPERTY_EDIT_FIELDS
+    required_fields = ('title', 'price', 'location')
     busy = bool(listing_id in _active_repost_listing_ids(account) or _delete_import_snapshot(account).get('running')
                 or _listing_click_snapshot(account).get('running') or _facebook_delete_snapshot(account).get('running'))
     if request.method == 'POST':
@@ -3648,22 +4252,70 @@ def listing_detail(listing_id):
         data = request.get_json(silent=True) or {}
         if data.get('action') == 'save_details':
             fields = data.get('fields')
-            if not isinstance(fields, dict) or set(fields) != set(REPOST_EDIT_FIELDS) or any(not isinstance(value, str) or len(value) > 20000 for value in fields.values()):
+            if not isinstance(fields, dict) or set(fields) != set(PROPERTY_EDIT_FIELDS) or any(not isinstance(value, str) or len(value) > 20000 for value in fields.values()):
                 return jsonify(ok=False, message='Invalid listing details.'), 400
+            diagnostic_event('PROPERTY_BACKUP_EDIT', 'START', account=account,
+                             listing_id=listing_id, title=(listing.get('details') or {}).get('title', ''))
             if not save_listing_details(account, listing_id, {key: value.strip() for key, value in fields.items()}):
+                diagnostic_event('PROPERTY_BACKUP_EDIT', 'FAILED', account=account, listing_id=listing_id,
+                                 error='Property backup was not found while saving.')
                 return jsonify(ok=False, message='Listing was not found.'), 404
+            diagnostic_event('PROPERTY_BACKUP_EDIT', 'SAVED', account=account, listing_id=listing_id,
+                             title=fields.get('title', ''))
             return jsonify(ok=True, message='Listing details saved.')
-        try:
-            preferences = _repost_preferences(listing, data)
-        except ValueError as exc:
-            return jsonify(ok=False, message=str(exc)), 400
-        save_preferences(account, listing_id, preferences)
-        return jsonify(ok=True, message='Repost preferences saved.')
-    return render_template('listing_detail.html', listing=listing, fields=REPOST_EDIT_FIELDS,
-                           required_fields=REPOST_REQUIRED_FIELDS,
+        return jsonify(ok=False, message='Only property details can be edited from this page.'), 400
+    return render_template('listing_detail.html', listing=listing, fields=fields,
+                           required_fields=required_fields, property_listing=property_listing,
                            busy=busy, repost_status=_repost_listing_status(account, listing),
                            accounts=get_all_accounts(), active_account=account,
                            active_page='backups' if (listing.get('facebook_present') is False or (listing.get('source_deleted') and not listing.get('facebook_reposted'))) else 'delete')
+
+
+@web_bp.route('/backup_listings/<listing_id>/edit', methods=['POST'])
+def edit_backup_content(listing_id):
+    from automation.listing_store import save_backup_content
+    account = get_active_account()
+    listing = next ( (item for item in load_listings(account).get('listings', []) if item.get('id') == listing_id), None) if account else None
+    if not listing or not is_listing_backup(listing):
+        return jsonify(ok=False, message='Backup not found.'), 404
+    if listing_id in _active_repost_listing_ids(account) or _delete_import_snapshot(account).get('running') or _facebook_delete_snapshot(account).get('running'):
+        return jsonify(ok=False, message='Wait for listing operations to finish.'), 409
+    description = request.form.get('description', '').strip()
+    uploads = [f for f in request.files.getlist('photos') if f and f.filename]
+    if len(description) > 20000 or len(listing.get('downloaded_images') or []) + len(uploads) > 20:
+        return jsonify(ok=False, message='Use at most 20 photos and 20,000 characters.'), 400
+    diagnostic_event('PROPERTY_BACKUP_EDIT', 'START', account=account, listing_id=listing_id,
+                     title=(listing.get('details') or {}).get('title', ''), new_photos=len(uploads))
+    root = data_dir('manual_backups') / 'edited' / uuid4().hex
+    saved = []
+    try:
+        if uploads:
+            root.mkdir(parents=True, exist_ok=True)
+        for upload in uploads:
+            raw = upload.stream.read(20 * 1024 * 1024 + 1)
+            if len(raw) > 20 * 1024 * 1024:
+                raise ValueError('Each photo must be 20 MB or smaller.')
+            with Image.open(io.BytesIO(raw)) as image:
+                width, height = image.size
+                fmt = image.format
+                image.verify()
+            extension = {'JPEG': '.jpg', 'PNG': '.png', 'WEBP': '.webp', 'GIF': '.gif', 'BMP': '.bmp'}.get(fmt)
+            if not extension:
+                raise ValueError('Choose a JPEG, PNG, WebP, GIF, or BMP image.')
+            name = uuid4().hex + extension
+            path = root / name
+            path.write_bytes(raw)
+            saved.append({'name': name, 'path': str(path.resolve()), 'width': width, 'height': height})
+        if not save_backup_content(account, listing_id, description, saved):
+            raise ValueError('Backup no longer exists.')
+    except Exception as exc:
+        shutil.rmtree(root, ignore_errors=True)
+        diagnostic_event('PROPERTY_BACKUP_EDIT', 'FAILED', account=account, listing_id=listing_id,
+                         error_type=type(exc).__name__, error=str(exc))
+        return jsonify(ok=False, message=str(exc) if isinstance(exc, ValueError) else 'Could not save the photos. Check that they are valid images.'), 400
+    diagnostic_event('PROPERTY_BACKUP_EDIT', 'SAVED', account=account, listing_id=listing_id,
+                     title=(listing.get('details') or {}).get('title', ''), added_photos=len(saved))
+    return jsonify(ok=True, message='Backup saved.')
 
 
 @web_bp.route('/delete_listings/photo/<listing_id>/<name>')
@@ -3724,10 +4376,15 @@ def _save_confirmed_cross_post(meta):
         'repost_preferences': {'fields': {}, 'image_order': [photo['name'] for photo in copied_photos]},
     })
     add_at_top(meta['account'], record)
+    from automation.manual_backups import save_marketplace_backup_copy
+    save_marketplace_backup_copy(meta['account'], record)
 
 
 @cancellable
 def _cross_post_payload(payload, account, job_id):
+    if payload.get('_listing_kind') == 'property':
+        from automation.property_posting import post_property
+        return post_property(payload, account)
     return post_to_fb_marketplace(payload, account)
 
 
@@ -3771,7 +4428,14 @@ def _run_cross_post_batch(job_ids):
                         complete_posting(meta, True)
                     try:
                         _save_confirmed_cross_post(meta)
+                        if payload.get('_listing_kind') == 'property':
+                            diagnostic_event('PROPERTY_BACKUP', 'SAVED', account=account, job_id=job_id,
+                                             title=payload.get('title', ''), source='cross_post')
                     except Exception as storage_error:
+                        if payload.get('_listing_kind') == 'property':
+                            diagnostic_event('PROPERTY_BACKUP', 'FAILED', account=account, job_id=job_id,
+                                             title=payload.get('title', ''), source='cross_post',
+                                             error=str(storage_error))
                         with scheduled_posts_lock:
                             meta['error'] = f'Facebook Publish was clicked, but saving the target listing failed: {storage_error}'
                         _runtime_log(f'[CrossPosting] Target backup failed job={job_id}: {storage_error}')
@@ -3809,7 +4473,8 @@ def cross_post_listing():
     listing = next((item for item in load_listings(account).get('listings', []) if str(item.get('id')) == listing_id), None)
     if not listing:
         return jsonify(ok=False, message='Listing was not found.'), 404
-    if _missing_post_colors(listing.get('details')):
+    property_listing = _is_property_backup(listing)
+    if not property_listing and _missing_post_colors(listing.get('details')):
         return jsonify(ok=False, message='Add and save both exterior and interior colors on View Listing before posting.'), 400
     backup_post = data.get('backup_post') is True
     is_backup = listing.get('facebook_present') is False or (listing.get('source_deleted') and not listing.get('facebook_reposted'))
@@ -3817,7 +4482,7 @@ def cross_post_listing():
         return jsonify(ok=False, message='This listing is no longer a backup. Refresh and try again.'), 409
     targets = data.get('target_accounts')
     available = set(get_all_accounts())
-    if not backup_post:
+    if not backup_post or property_listing:
         available.discard(account)
     if (not isinstance(targets, list) or not 1 <= len(targets) < 20
             or any(not isinstance(target, str) for target in targets)
@@ -3827,7 +4492,19 @@ def cross_post_listing():
             or _listing_click_snapshot(account).get('running') or _facebook_delete_snapshot(account).get('running')):
         return jsonify(ok=False, message='Wait for the current listing operation to finish.'), 409
     try:
-        preferences = _repost_preferences(listing, data)
+        if property_listing:
+            raw_fields = data.get('fields') or {}
+            if not isinstance(raw_fields, dict) or any(key not in PROPERTY_EDIT_FIELDS or not isinstance(value, str) or len(value) > 20000 for key, value in raw_fields.items()):
+                raise ValueError('Invalid property listing fields.')
+            source_details = listing.get('details') or {}
+            names = [photo['name'] for photo in listing.get('downloaded_images') or []]
+            order = data.get('image_order')
+            if not isinstance(order, list) or len(order) != len(names) or set(order) != set(names):
+                raise ValueError('Image order must contain every saved photo once.')
+            preferences = {'fields': {key: value for key, value in raw_fields.items() if value != str(source_details.get(key) or '')},
+                           'reviewed_fields': list(raw_fields), 'image_order': order}
+        else:
+            preferences = _repost_preferences(listing, data)
         if data.get('post_mode') not in {'now', 'schedule'}:
             raise ValueError('Choose Post now or Schedule for later.')
         seconds = 0
@@ -3842,7 +4519,7 @@ def cross_post_listing():
         if not listing.get('details') or not photos or listing.get('image_errors'):
             raise ValueError('Import the listing details and photos first.')
         post = dict(listing['details'], **preferences['fields'])
-        if _missing_post_colors(post):
+        if not property_listing and _missing_post_colors(post):
             raise ValueError('Both exterior and interior colors are required for posting.')
         post['video_paths'] = saved_video_paths(listing)
         if 'title' not in preferences['fields'] and any(key in preferences['fields'] for key in ('year', 'make', 'model')):
@@ -3851,7 +4528,18 @@ def cross_post_listing():
         post['image_urls'] = [by_name[name] for name in preferences['image_order']]
         if any(not os.path.isfile(path) for path in post['image_urls']):
             raise ValueError('Saved photos are missing. Import the listing again.')
-        payloads = _build_repost_payloads({'posts': [post]})
+        if property_listing:
+            payload = {key: str(post.get(key) or '').strip() for key in PROPERTY_EDIT_FIELDS}
+            payload['image_urls'] = post['image_urls']
+            for index, path in enumerate(post['image_urls'][:20], start=1):
+                payload[f'image_path{index}'] = path
+            payload['video_paths'] = []
+            payload['_listing_kind'] = 'property'
+            if not payload['title'] or not payload['price'] or not payload['location']:
+                raise ValueError('Title, price, and location are required.')
+            payloads = [payload]
+        else:
+            payloads = _build_repost_payloads({'posts': [post]})
         if not payloads or not payloads[0]['title'] or not payloads[0]['price']:
             raise ValueError('Title and price are required.')
     except (ValueError, KeyError) as exc:
@@ -3899,11 +4587,12 @@ def cross_post_listing():
                 'target_listing_id': uuid4().hex[:20],
                 'listing_snapshot': {
                     **{key: listing.get(key, '') for key in ('year', 'make', 'model')},
+                    'listing_type': 'marketplace_ad' if property_listing else listing.get('listing_type', ''),
                     **{key: value for key, value in post.items() if key != 'image_urls'},
                     'details': {key: value for key, value in post.items() if key != 'image_urls'},
                     'downloaded_videos': copy.deepcopy(listing.get('downloaded_videos') or []),
                     'downloaded_images': [copy.deepcopy(next(photo for photo in photos if photo['name'] == name))
-                                          for name in preferences['image_order'][:10]],
+                                          for name in preferences['image_order'][:20]],
                 },
                 **thumbnail_fields,
             }

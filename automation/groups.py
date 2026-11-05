@@ -14,7 +14,13 @@ from automation.browser_settings import apply_background_mode_option
 from automation.runtime_paths import data_dir
 from automation.runtime_paths import sessions_dir
 from automation.chromedriver import build_chrome_driver
-from automation.cdp_login import load_current_cdp_cookies
+from automation.cdp_login import (
+    close_cdp_browser,
+    close_posting_tab,
+    get_cdp_account,
+    load_current_cdp_cookies,
+    open_posting_tab,
+)
 
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -37,6 +43,11 @@ def _safe_key(value: str) -> str:
 def _groups_store_path(account_email: str) -> Path:
     base = Path(data_dir("groups"))
     return base / f"groups_{_safe_key(account_email)}.json"
+
+
+def _other_groups_store_path(account_email: str) -> Path:
+    base = Path(data_dir("groups"))
+    return base / f"other_groups_{_safe_key(account_email)}.json"
 
 
 def load_groups(account_email: str) -> dict:
@@ -79,6 +90,36 @@ def save_groups(account_email: str, groups: list) -> None:
     store_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_other_groups(account_email: str) -> dict:
+    store_path = _other_groups_store_path(account_email)
+    if not store_path.exists():
+        return {"account_email": account_email, "updated_at": None, "groups": []}
+    try:
+        raw = json.loads(store_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"account_email": account_email, "updated_at": None, "groups": []}
+    if not isinstance(raw, dict):
+        return {"account_email": account_email, "updated_at": None, "groups": []}
+    groups = raw.get("groups") or []
+    if not isinstance(groups, list):
+        groups = []
+    return {
+        "account_email": raw.get("account_email") or account_email,
+        "updated_at": raw.get("updated_at"),
+        "groups": groups,
+    }
+
+
+def save_other_groups(account_email: str, groups: list) -> None:
+    store_path = _other_groups_store_path(account_email)
+    payload = {
+        "account_email": account_email,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "groups": groups if isinstance(groups, list) else [],
+    }
+    store_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def delete_group_record(account_email: str, group_id: str) -> bool:
     data = load_groups(account_email)
     groups = data.get("groups") or []
@@ -89,6 +130,16 @@ def delete_group_record(account_email: str, group_id: str) -> bool:
         return False
 
     save_groups(account_email, groups)
+    return True
+
+
+def delete_other_group_record(account_email: str, group_id: str) -> bool:
+    data = load_other_groups(account_email)
+    groups = data.get("groups") or []
+    remaining = [g for g in groups if str((g or {}).get("id", "")).strip() != str(group_id or "").strip()]
+    if len(remaining) == len(groups):
+        return False
+    save_other_groups(account_email, remaining)
     return True
 
 
@@ -371,14 +422,23 @@ def import_groups_from_facebook(
             pass
 
         existing = load_groups(account_email).get("groups") or []
+        existing_other = load_other_groups(account_email).get("groups") or []
         existing_map = {}
         for g in existing:
             if isinstance(g, dict) and g.get("id"):
                 existing_map[str(g["id"])] = g
+        other_map = {}
+        for g in existing_other:
+            if isinstance(g, dict) and g.get("id"):
+                group_id = str(g["id"])
+                if group_id not in existing_map:
+                    other_map[group_id] = g
 
         new_added = 0
-        existing_total = len(existing_map)
-        seen_links = set(_normalize_group_link((g or {}).get("link")) for g in existing if isinstance(g, dict))
+        existing_total = len(existing_map) + len(other_map)
+        # Recheck existing joined groups too, so old records are moved into
+        # the correct Buy and Sell or Other store during this import.
+        seen_links = set()
 
         def _extract_join_groups():
             main = None
@@ -462,37 +522,47 @@ def import_groups_from_facebook(
                     members_label = page_info.get("member_count_label")
 
                     has_buy_sell = _has_buy_sell_tab(driver)
+                    group_id = page_group_id or requested_group_id
+                    group_obj = {
+                        "id": group_id,
+                        "name": header_name,
+                        "link": page_link,
+                        "member_count_label": members_label,
+                        "privacy": privacy,
+                    }
+                    group_key = str(group_id)
+                    added_this_round += 1
                     if has_buy_sell is True:
-                        group_id = page_group_id or requested_group_id
-                        group_obj = {
-                            "id": group_id,
-                            "name": header_name,
-                            "link": page_link,
-                            "member_count_label": members_label,
-                            "privacy": privacy,
-                        }
-
-                        is_new = str(group_id) not in existing_map
-                        existing_map[str(group_id)] = group_obj
+                        is_new = group_key not in existing_map
+                        existing_map[group_key] = group_obj
+                        other_map.pop(group_key, None)
                         if is_new:
                             new_added += 1
-
-                        total_count = len(existing_map)
-                        added_this_round += 1
                         save_groups(account_email, list(existing_map.values()))
+                        save_other_groups(account_email, list(other_map.values()))
                         diagnostic_event('GROUP_IMPORT_ITEM', 'SAVED', account=account_email,
                                          listing_id=group_id, title=header_name)
-                        _progress(
-                            {
-                                "event": "group",
-                                "message": f"Imported: {header_name}",
-                                "new_count": new_added,
-                                "total_count": total_count,
-                                "existing_total": existing_total,
-                            }
-                        )
+                        category_label = "Buy and Sell"
                     else:
-                        _progress({"event": "status", "message": f"Skipped (no Buy & Sell): {header_name}"})
+                        is_new = group_key not in other_map
+                        other_map[group_key] = group_obj
+                        existing_map.pop(group_key, None)
+                        if is_new:
+                            new_added += 1
+                        save_groups(account_email, list(existing_map.values()))
+                        save_other_groups(account_email, list(other_map.values()))
+                        category_label = "Other"
+
+                    total_count = len(existing_map) + len(other_map)
+                    _progress(
+                        {
+                            "event": "group",
+                            "message": f"Imported to {category_label} Groups: {header_name}",
+                            "new_count": new_added,
+                            "total_count": total_count,
+                            "existing_total": existing_total,
+                        }
+                    )
 
                 _sleep_with_stop(0.6)
                 try:
@@ -524,7 +594,8 @@ def import_groups_from_facebook(
 
         final_groups = list(existing_map.values())
         save_groups(account_email, final_groups)
-        _progress({"event": "status", "message": f"Collected {len(final_groups)} groups ({new_added} new)."})
+        save_other_groups(account_email, list(other_map.values()))
+        _progress({"event": "status", "message": f"Collected {len(final_groups) + len(other_map)} groups ({new_added} new)."})
         return final_groups
     finally:
         _cleanup()
@@ -620,6 +691,12 @@ def add_buy_sell_group_by_link(
             "privacy": privacy,
         }
 
+        other_data = load_other_groups(account_email)
+        other_groups = [g for g in (other_data.get("groups") or []) if isinstance(g, dict)]
+        remaining_other = [g for g in other_groups if str(g.get("id") or "").strip() != str(group_id)]
+        if len(remaining_other) != len(other_groups):
+            save_other_groups(account_email, remaining_other)
+
         data = load_groups(account_email)
         groups = data.get("groups") or []
         groups = [g for g in groups if isinstance(g, dict)]
@@ -642,7 +719,7 @@ def add_buy_sell_group_by_link(
 
 @traced('GROUP_POST')
 @cancellable
-def post_anonymous_group_posts(
+def post_group_posts(
     account_email: str,
     group_links: list[str],
     description: str,
@@ -681,43 +758,65 @@ def post_anonymous_group_posts(
     if not str(description or "").strip():
         return {"ok": False, "message": "Description is required."}
 
-    cookies = load_current_cdp_cookies(account_email)
-    if cookies is None:
-        session_dir = sessions_dir()
-        session_file = _resolve_session_file(session_dir, account_email)
-        with open(session_file, "rb") as f:
-            cookies = pickle.load(f)
-
-    options = Options()
-    options.add_argument("--profile-directory=Default")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--log-level=3")
-    options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-notifications")
-    options.add_argument("--disable-gpu")
-    apply_background_mode_option(options)
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    )
-
-    driver = build_chrome_driver(options)
-    _apply_browser_safety_patches(driver)
-    wait = WebDriverWait(driver, 20)
-
-    def _cleanup():
+    cdp_meta = get_cdp_account(account_email)
+    use_cdp = bool(cdp_meta and cdp_meta.get('status') == 'ready')
+    cdp_posting_handle = None
+    cdp_original_handles = set()
+    cdp_lock = None
+    cookies = None
+    if use_cdp:
+        _log(f'[GroupPosting] Attaching to persistent CDP Chrome for account {account_email}.')
         try:
-            driver.quit()
+            driver, cdp_posting_handle, cdp_original_handles, cdp_lock = open_posting_tab(account_email)
         except Exception:
-            pass
+            _log('[GroupPosting] CDP setup failed; closing the account Chrome window.')
+            close_cdp_browser(account_email)
+            raise
+    else:
+        _log(f'[GroupPosting] No ready CDP profile for {account_email}; using the saved-session Chrome fallback.')
+        cookies = load_current_cdp_cookies(account_email)
+        if cookies is None:
+            session_dir = sessions_dir()
+            session_file = _resolve_session_file(session_dir, account_email)
+            with open(session_file, "rb") as f:
+                cookies = pickle.load(f)
 
-    def _wait_clickable(xpath: str):
-        return wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+        options = Options()
+        options.add_argument("--profile-directory=Default")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--log-level=3")
+        options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--disable-notifications")
+        options.add_argument("--disable-gpu")
+        apply_background_mode_option(options)
+        options.add_argument(
+            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        )
+        driver = build_chrome_driver(options)
+    def _cleanup():
+        if use_cdp:
+            close_posting_tab(driver, cdp_posting_handle, cdp_original_handles, cdp_lock, close_browser=True)
+            _log('[GroupPosting] Closed the account CDP Chrome after group posting.')
+        else:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+
+    try:
+        _apply_browser_safety_patches(driver)
+    except Exception:
+        _log('[GroupPosting] Browser setup failed; closing Chrome before returning the error.')
+        _cleanup()
+        raise
+
+    wait = WebDriverWait(driver, 20)
 
     def _wait_present(xpath: str):
         return wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
@@ -740,45 +839,17 @@ def post_anonymous_group_posts(
         file_input.send_keys("\n".join(upload_paths))
         cancellable_sleep(2)
 
-    def _turn_off_anonymous_toggle():
-        try:
-            toggle = _wait_present(
-                "//div[@role='dialog' and .//span[normalize-space()='Create post']]"
-                "//input[@role='switch' and (contains(@aria-label, 'Anonymous') or contains(@aria-label, 'anonymous'))]"
-            )
-        except Exception:
-            return
-
-        try:
-            aria_checked = str(toggle.get_attribute("aria-checked") or "").strip().lower()
-            if aria_checked in {"true", "false"}:
-                checked = aria_checked == "true"
-            else:
-                checked = None
-        except Exception:
-            checked = None
-
-        try:
-            if checked is None:
-                checked = toggle.is_selected()
-        except Exception:
-            pass
-
-        if checked is None:
-            try:
-                checked = bool(driver.execute_script("return arguments[0].checked === true;", toggle))
-            except Exception:
-                checked = False
-
-        if checked:
-            try:
-                driver.execute_script("arguments[0].click();", toggle)
-            except Exception:
+    def _composer_dialog(timeout=20):
+        def find_dialog(_driver):
+            for candidate in _driver.find_elements(By.XPATH, "//div[@role='dialog']"):
                 try:
-                    toggle.click()
+                    if candidate.is_displayed() and candidate.find_elements(
+                            By.XPATH, ".//div[@role='textbox' and @contenteditable='true']"):
+                        return candidate
                 except Exception:
-                    return
-            cancellable_sleep(0.6)
+                    continue
+            return False
+        return WebDriverWait(driver, timeout).until(find_dialog)
 
     results = []
     posted = 0
@@ -787,16 +858,18 @@ def post_anonymous_group_posts(
         driver.get("https://www.facebook.com/")
         cancellable_sleep(random.uniform(0.6, 1.0))
 
-        for cookie in cookies:
-            if isinstance(cookie, dict) and "sameSite" not in cookie:
-                cookie["sameSite"] = "Lax"
-            try:
-                driver.add_cookie(cookie)
-            except Exception:
-                continue
-
-        driver.refresh()
-        cancellable_sleep(random.uniform(0.8, 1.2))
+        if not use_cdp:
+            for cookie in cookies:
+                if isinstance(cookie, dict) and "sameSite" not in cookie:
+                    cookie["sameSite"] = "Lax"
+                try:
+                    driver.add_cookie(cookie)
+                except Exception:
+                    continue
+            driver.refresh()
+            cancellable_sleep(random.uniform(0.8, 1.2))
+        else:
+            _log('[GroupPosting] Using the authenticated account cookies already stored in the CDP profile.')
 
         upload_paths = []
         for p in image_paths or []:
@@ -813,43 +886,42 @@ def post_anonymous_group_posts(
             _log(f"[GroupPosting] Opening group {index}/{len(links)}: {link}")
             try:
                 driver.get(link)
+                _log(f'[GroupPosting] Group page loaded; trying the standard Write something composer for group {index}.')
+                write_button = WebDriverWait(driver, 15).until(EC.element_to_be_clickable((
+                    By.XPATH,
+                    "//div[@role='button'][.//span[starts-with(normalize-space(.), 'Write something')]]"
+                )))
+                _log(f'[GroupPosting] Clicked Write something on group {index}.')
+                write_button.click()
+                dialog = _composer_dialog(timeout=20)
+                _log(f'[GroupPosting] Standard group composer opened for group {index}.')
 
-                anonymous_btn = _wait_clickable(
-                    "//span[normalize-space()='Anonymous post']/ancestor::*[@role='button'][1]"
-                )
-                anonymous_btn.click()
-
-                create_btn = _wait_clickable(
-                    "//span[normalize-space()='Create Anonymous Post']/ancestor::*[@role='button'][1]"
-                )
-                create_btn.click()
-
-                dialog = _wait_present("//div[@role='dialog' and .//span[normalize-space()='Create post']]")
-
-                _turn_off_anonymous_toggle()
-
-                try:
-                    textbox = _wait_clickable(
-                        "//div[@role='dialog' and .//span[normalize-space()='Create post']]"
-                        "//div[@role='textbox' and @contenteditable='true' and contains(@aria-placeholder, 'anonymous post')]"
-                    )
-                except Exception:
-                    textbox = _wait_clickable(
-                        "//div[@role='dialog' and .//span[normalize-space()='Create post']]"
-                        "//div[@role='textbox' and @contenteditable='true']"
-                    )
+                textbox = WebDriverWait(driver, 20).until(lambda _driver: next((box for box in dialog.find_elements(
+                    By.XPATH, ".//div[@role='textbox' and @contenteditable='true']") if box.is_displayed()), False))
+                _log(f'[GroupPosting] Found composer text field for group {index}.')
                 textbox.click()
                 textbox.send_keys(Keys.CONTROL, "a")
                 textbox.send_keys(Keys.BACKSPACE)
-                textbox.send_keys(description)
+                description_lines = str(description).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+                for line_index, line in enumerate(description_lines):
+                    if line:
+                        textbox.send_keys(line)
+                    if line_index < len(description_lines) - 1:
+                        textbox.send_keys(Keys.SHIFT, Keys.ENTER)
+                _log(f"[GroupPosting] Entered description with {len(description_lines)} line(s), preserving line breaks.")
 
                 if upload_paths:
+                    _log(f'[GroupPosting] Uploading {len(upload_paths)} photo(s) to group {index}.')
                     _upload_images(dialog, upload_paths)
+                    _log(f'[GroupPosting] Photo upload input accepted files for group {index}.')
 
-                submit_btn = _wait_clickable(
-                    "//div[@role='dialog' and .//span[normalize-space()='Create post']]"
-                    "//span[normalize-space()='Submit' or normalize-space()='Post']/ancestor::*[@role='button'][1]"
-                )
+                _log(f'[GroupPosting] Waiting for enabled Post/Submit button for group {index}.')
+                submit_btn = WebDriverWait(driver, 30).until(EC.element_to_be_clickable((
+                    By.XPATH,
+                    "//div[@role='dialog']//*[@role='button' and not(@aria-disabled='true') and "
+                    "(@aria-label='Post' or .//span[normalize-space()='Post' or normalize-space()='Submit'])]"
+                )))
+                _log(f'[GroupPosting] Clicking Post/Submit for group {index}.')
                 submit_btn.click()
 
                 cancellable_sleep(10)

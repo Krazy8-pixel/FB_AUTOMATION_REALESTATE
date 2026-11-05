@@ -16,31 +16,15 @@
   {% endfor %}
   </div>
   <section class="settings-cleanup hub-storage" aria-labelledby="cleanup-heading"><div><div class="hub-storage-title"><span class="settings-card-icon">{{ icon('storage') }}</span><div><h2 id="cleanup-heading">Storage & cleanup</h2><p>Free space after your posting jobs finish.</p></div></div><div class="settings-storage"><span><span>Temp screenshots</span><strong>{{ junk_files_size_label or '0 MB' }}</strong></span><span><span>Manual media uploads</span><strong>{{ manual_pics_size_label or '0 MB' }}</strong></span></div><p class="settings-caption">Clean Up removes screenshots and uploaded photos/videos. Wait until queued posts finish using them. Accounts, listing backups, and Facebook posts are kept.</p>{% if auto_listing_running %}<p class="hub-busy" role="status">Posting is in progress. Cleanup will be available when it finishes.</p>{% endif %}</div><form method="post" action="{{ url_for('web.auto_listing_clear_junk') }}"><button class="delete-btn" type="submit" {% if auto_listing_running %}disabled{% endif %}>Clean Up</button></form></section>
-  <section class="hub-section desktop-panel" aria-labelledby="background-title"><div class="hub-section-head"><h2 id="background-title">Desktop preferences</h2><p>Listing imports, click refreshes, and session checks run only when you start them.</p></div>
-    <form method="post" action="{{ url_for('web.desktop_preferences_save') }}" class="desktop-preferences">
-      <label><input type="checkbox" name="start_with_windows" value="1" {% if desktop_preferences.start_with_windows %}checked{% endif %}><span><strong>Start with Windows</strong><small>The desktop app starts quietly in the system tray when you sign in.</small></span></label>
-      <p>Closing the desktop window leaves the app in the tray. No automatic imports, click refreshes, or cookie checks run. Use Exit App to stop the app.</p>
-      <button type="submit">Save preferences</button>
-      {% if not desktop_mode %}<p class="settings-caption">Tray mode and Windows startup take effect in the installed desktop edition.</p>{% endif %}
-    </form>
-  </section>
   <section class="hub-section desktop-panel" aria-labelledby="updates-title"><div class="hub-section-head"><h2 id="updates-title">App updates <span class="update-version">Version {{ app_version }}</span></h2><p>Check for updates and choose when to download and install them here.</p></div>
     <p id="update-message" role="status" aria-live="polite">Updates preserve saved accounts, listings, and media unless a release explicitly resets listings.</p>
     <progress id="update-progress" max="100" hidden aria-label="Update download progress" style="width:100%;height:18px;margin-bottom:16px"></progress>
     <p id="update-reset-notice" hidden>A database reset is included in this release. Saved listings will be cleared; accounts are kept.</p>
     <div class="guide-actions"><button type="button" id="update-check">Check for Updates</button><button type="button" id="update-install" hidden>Download &amp; Install</button></div>
   </section>
-  <section class="hub-section desktop-panel" aria-labelledby="github-reports-title">
-    <div class="hub-section-head"><h2 id="github-reports-title">Failure reports to GitHub</h2><p>Each failed posting, repost, delete, import, or refresh can create its own private-repository issue with the operation details and logs.</p></div>
-    <p id="github-reports-status" role="status" aria-live="polite">{% if github_report_status.connected %}Connected as {{ github_report_status.github_user }}. {{ github_report_status.queued_reports }} report(s) waiting to send.{% elif not github_report_status.configured %}GitHub App setup is still needed. The app will show the device login here after its public Client ID is configured.{% else %}Not connected to GitHub. Connect to enable failure reports.{% endif %}</p>
-    <p id="github-device-code" hidden></p>
-    <label for="github-repository">Private report repository <input id="github-repository" type="text" autocomplete="off" spellcheck="false" value="{{ github_report_status.repository }}" placeholder="owner/repository"></label>
-    <label for="github-client-id">GitHub App Client ID <input id="github-client-id" type="text" autocomplete="off" spellcheck="false" placeholder="Enter the public Client ID" value="{{ github_report_status.client_id }}"></label>
-    <div class="guide-actions"><button type="button" id="github-client-id-save">Save Client ID</button><button type="button" id="github-reports-connect" {% if not github_report_status.configured %}disabled{% endif %}>Connect GitHub</button><button type="button" id="github-reports-disconnect" {% if not github_report_status.connected %}hidden{% endif %}>Disconnect</button></div>
-  </section>
   <a class="hub-help" href="{{ url_for('web.info_page') }}"><span class="settings-card-icon">{{ icon('help') }}</span><span><strong>Need a hand?</strong><span>Open Help &amp; Instructions for simple guides to every feature.</span></span><span class="hub-help-action">View guide <span aria-hidden="true">&rarr;</span></span></a>
   <section class="settings-diagnostics" aria-labelledby="diagnostics-heading">
-    <div class="diagnostics-copy"><span class="settings-card-icon">{{ icon('log') }}</span><div><h2 id="diagnostics-heading">Diagnostic report</h2><p>Download recent logs to help review listing imports and posting results.</p><span class="diagnostics-caption">Text file &middot; May include account names and listing details</span></div></div>
+    <div class="diagnostics-copy"><span class="settings-card-icon">{{ icon('log') }}</span><div><h2 id="diagnostics-heading">Real Estate Diagnostic Report</h2><p>Review property posting, Marketplace imports, backups, cross-posting, deletion, and account-session activity. Group imports are excluded.</p><span class="diagnostics-caption">Text file &middot; May include account names and property details</span></div></div>
     <a class="diagnostics-download" href="{{ url_for('web.diagnostics_download') }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5"/></svg>Download report</a>
   </section>
 </main>
@@ -58,21 +42,7 @@
   check.addEventListener('click',()=>action('{{ url_for("web.desktop_update_check") }}'));
   install.addEventListener('click',()=>{if(!reset.hidden&&!window.confirm('This release clears saved listing backups. Continue?'))return;action('{{ url_for("web.desktop_update_install") }}');});
   poll();
-  const githubMessage=document.getElementById('github-reports-status'), githubCode=document.getElementById('github-device-code');
-  const githubConnect=document.getElementById('github-reports-connect'), githubDisconnect=document.getElementById('github-reports-disconnect');
-  const githubClientId=document.getElementById('github-client-id'), githubClientSave=document.getElementById('github-client-id-save');
-  async function githubPoll(){try{const response=await appFetch('{{ url_for("web.github_reports_status") }}'),data=await response.json();
-    githubConnect.disabled=!data.configured;
-    if(document.activeElement!==githubClientId)githubClientId.value=data.client_id||'';
-    if(data.connected){githubMessage.textContent=`Connected as ${data.github_user}. ${data.queued_reports} report(s) waiting to send.${data.last_error?' Last delivery error: '+data.last_error:''}`;githubCode.hidden=true;githubConnect.hidden=true;githubDisconnect.hidden=false;}
-    else if(data.login?.state==='waiting'){githubMessage.textContent=data.login.message||'Waiting for GitHub authorization.';githubCode.hidden=false;githubCode.textContent=`Enter code ${data.login.user_code} at ${data.login.verification_uri}`;githubConnect.hidden=false;githubDisconnect.hidden=true;}
-    else if(data.login?.state==='error'||data.login?.state==='expired'){githubMessage.textContent=data.login.message;githubCode.hidden=true;githubConnect.hidden=false;githubDisconnect.hidden=true;}
-    else {githubMessage.textContent=data.configured?`Not connected to GitHub. ${data.queued_reports} report(s) queued. Connect to send them.${data.last_error?' Last delivery error: '+data.last_error:''}`:'GitHub App setup is still needed. Configure its public Client ID to enable connection.';githubCode.hidden=true;githubConnect.hidden=false;githubDisconnect.hidden=true;}
-  }catch(error){githubMessage.textContent='Could not refresh GitHub report status.';}window.setTimeout(githubPoll,2000);}
-  githubClientSave.addEventListener('click',async()=>{githubClientSave.disabled=true;githubMessage.textContent='Saving GitHub App settings…';try{const response=await appFetch('{{ url_for("web.github_reports_config") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repository:document.getElementById('github-repository').value,client_id:githubClientId.value})}),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'Could not save GitHub settings.');githubMessage.textContent=data.configured?'GitHub settings saved. Connect GitHub to send reports.':'GitHub settings saved.';window.appNotify(githubMessage.textContent,'success');}catch(error){githubMessage.textContent=error.message||'Could not save GitHub settings.';window.appNotify(githubMessage.textContent,'failed');}finally{githubClientSave.disabled=false;githubPoll();}});
-  githubConnect.addEventListener('click',async()=>{githubConnect.disabled=true;githubMessage.textContent='Starting GitHub sign-in…';try{const response=await appFetch('{{ url_for("web.github_reports_connect") }}',{method:'POST'}),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'Could not start GitHub sign-in.');}catch(error){githubMessage.textContent=error.message||'Could not start GitHub sign-in.';}finally{githubConnect.disabled=false;githubPoll();}});
-  githubDisconnect.addEventListener('click',async()=>{githubDisconnect.disabled=true;try{const response=await appFetch('{{ url_for("web.github_reports_disconnect") }}',{method:'POST'}),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'Could not disconnect GitHub.');githubCode.hidden=true;githubPoll();}catch(error){githubMessage.textContent=error.message||'Could not disconnect GitHub.';}finally{githubDisconnect.disabled=false;}});
-  githubPoll();
+
 })();
 </script>
 {% endblock %}

@@ -591,13 +591,49 @@ def open_posting_tab(account):
         raise
 
 
-def close_posting_tab(driver, posting_handle, original_handles, lock):
+def close_posting_tab(driver, posting_handle, original_handles, lock, *, close_browser=False, verify_browser_closed=False):
+    close_error = None
+    browser_closed = None
     try:
-        _close_dedicated_browser(driver)
-    except Exception:
-        pass
+        if close_browser:
+            port = None
+            if verify_browser_closed:
+                try:
+                    address = driver.capabilities.get('goog:chromeOptions', {}).get('debuggerAddress', '')
+                    port = int(str(address).rsplit(':', 1)[-1]) if address else None
+                except (TypeError, ValueError, AttributeError):
+                    port = None
+            _close_dedicated_browser(driver)
+            if verify_browser_closed and port is not None:
+                deadline = time.time() + 8
+                while time.time() < deadline and _port_open(port):
+                    time.sleep(0.25)
+                browser_closed = not _port_open(port)
+                if not browser_closed:
+                    print(f"[CDP Posting] Browser close verification failed for port {port}.", flush=True)
+                else:
+                    print(f"[CDP Posting] Browser close verified for port {port}.", flush=True)
+        else:
+            handles = set(driver.window_handles)
+            if posting_handle in handles:
+                driver.switch_to.window(posting_handle)
+                driver.close()
+            remaining = set(driver.window_handles)
+            preferred = next((handle for handle in original_handles if handle in remaining), None)
+            if preferred:
+                driver.switch_to.window(preferred)
+            elif remaining:
+                driver.switch_to.window(next(iter(remaining)))
+    except Exception as exc:
+        close_error = exc
+        print(f"[CDP Posting] Browser cleanup encountered an error: {exc}", flush=True)
     finally:
+        if not close_browser:
+            _detach(driver)
         try:
             lock.release()
         except RuntimeError:
             pass
+    if close_error is not None and verify_browser_closed:
+        raise RuntimeError(f"Could not cleanly close the Facebook posting browser: {close_error}") from close_error
+    return browser_closed

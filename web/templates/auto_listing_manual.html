@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 {% from '_marketplace_colors.html' import color_options %}
 
-{% block title %}Manual Vehicle Post{% endblock %}
+{% block title %}Manual Property Post{% endblock %}
 {% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/create_listings.css') }}">{% endblock %}
 
 {% block content %}
 <main class="create-page manual-listing-page">
   <div class="create-page-head">
-    <div><h1>Manual Posting</h1><p>Add the vehicle information and photos, then choose where you want to post it.</p></div>
+    <div><h1>Manual Posting</h1><p>{% if property_posting %}Enter property details.{% else %}Add listing details and photos.{% endif %}</p></div>
     <a href="{{ url_for('web.auto_listing_page') }}" class="create-back">Back to Create Listings</a>
   </div>
-  <p class="create-upload-note">Complete all required fields. Mileage must be greater than 300 and at least one photo is required.</p>
+  <p class="create-upload-note">Add at least one photo and complete the required fields.</p>
 
   <div class="form-box manual-listing-form-box create-form-panel">
     <form id="manual-post-form" data-posting-timing method="POST" action="{{ url_for('web.auto_listing_manual') }}" enctype="multipart/form-data">
@@ -18,14 +18,6 @@
       <fieldset>
         {% set prefill_data = prefill if prefill else {} %}
         {% set prefilled_images = request.form.getlist('prefilled_images') if 'prefilled_images' in request.form else prefill_data.get('prefilled_images', []) %}
-        {% set vehicle_type_value = request.form.get('vehicle_type', prefill_data.get('vehicle_type', 'Car')) %}
-        <label for="vehicle_type" class="file-label">Vehicle type</label>
-        <select id="vehicle_type" name="vehicle_type" class="input-field" required>
-          <option value="Car" {% if vehicle_type_value|lower not in ['other', 'motorcycle', 'motorcycle/bike', 'motorbike', 'bike'] %}selected{% endif %}>Car/Truck/Van</option>
-          <option value="Motorcycle" {% if vehicle_type_value|lower in ['motorcycle', 'motorcycle/bike', 'motorbike', 'bike'] %}selected{% endif %}>Motorcycle/Bike</option>
-          <option value="Other" {% if vehicle_type_value|lower == 'other' %}selected{% endif %}>Other</option>
-        </select>
-
         <label class="file-label">Images (up to 20)</label>
         <label for="bulk-images" class="file-label">Add multiple photos</label>
         <input id="bulk-images" type="file" accept="image/*" multiple data-bulk-media="image">
@@ -68,112 +60,31 @@
           </div>
           {% endfor %}
         </div>
+        <label for="category" class="file-label">Category</label>
+        <input id="category" name="category" class="input-field" value="Property for sale" readonly>
 
-        <label class="file-label">Videos (up to 5, optional)</label>
-        <label for="bulk-videos" class="file-label">Add multiple videos</label>
-        <input id="bulk-videos" type="file" accept="video/*" multiple data-bulk-media="video">
-        <p class="manual-note" id="bulk-video-message" aria-live="polite">Select several videos together. They will fill the available slots below.</p>
-        <p class="manual-note">Videos are attempted when the posting page supports them. If a video cannot be uploaded, the app skips it and continues posting.</p>
-        <div class="manual-image-grid">
-          {% for i in range(1, 6) %}
-          <div class="manual-image-slot">
-            <input id="video_slot_{{ i }}" type="file" name="videos" accept="video/*" class="manual-image-input" data-slot="{{ i }}" data-media="video">
-            <label for="video_slot_{{ i }}" class="manual-image-label"><span class="manual-image-plus">+</span><span class="manual-image-text">Video {{ i }}</span></label>
-            <div class="manual-image-name" id="video_slot_name_{{ i }}">No file chosen</div>
-          </div>
-          {% endfor %}
-        </div>
-
-        <label for="year" class="file-label">Year</label>
-        <input id="year" name="year" type="number" min="1900" max="2100" step="1" class="input-field" required value="{% if 'year' in request.form %}{{ request.form.get('year', '') }}{% else %}{{ prefill_data.get('year', '') }}{% endif %}">
-
-        <label for="make" class="file-label">Make</label>
-        <input id="make" name="make" type="text" class="input-field" maxlength="120" required value="{% if 'make' in request.form %}{{ request.form.get('make', '') }}{% else %}{{ prefill_data.get('make', '') }}{% endif %}">
-
-        <label for="model" class="file-label">Model</label>
-        <input id="model" name="model" type="text" class="input-field" maxlength="120" required value="{% if 'model' in request.form %}{{ request.form.get('model', '') }}{% else %}{{ prefill_data.get('model', '') }}{% endif %}">
-
-        <label for="mileage" class="file-label">Mileage</label>
-        <input id="mileage" name="mileage" type="number" min="301" step="1" class="input-field" required value="{% if 'mileage' in request.form %}{{ request.form.get('mileage', '') }}{% else %}{{ prefill_data.get('mileage', '') }}{% endif %}">
+        <label for="title" class="file-label">Title</label>
+        <input id="title" name="title" type="text" class="input-field" maxlength="200" required value="{{ request.form.get('title', prefill_data.get('title', '')) }}">
 
         <label for="price" class="file-label">Price</label>
-        <input id="price" name="price" type="number" min="0" step="1" class="input-field" required value="{{ request.form.get('price', '') }}">
+        <input id="price" name="price" type="number" min="0" step="1" class="input-field" required value="{{ request.form.get('price', prefill_data.get('price', '')) }}">
 
-        {% set body_style_value = request.form.get('body_style', prefill_data.get('body_style', 'Other')) %}
-        {% set body_style_lower = body_style_value|lower %}
-        {% set body_style_options = ['Convertible', 'Coupe', 'Hatchback', 'Minivan', 'Pickup truck', 'Sedan', 'Station wagon', 'SUV', 'Van'] %}
-        <div id="body-style-field">
-          <label for="body_style" class="file-label">Body style</label>
-          <select id="body_style" name="body_style" class="input-field" required>
-            {% for option in body_style_options %}
-            <option value="{{ option }}" {% if body_style_lower == option|lower %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-            <option value="Other" {% if body_style_lower not in ['convertible','coupe','hatchback','minivan','pickup truck','sedan','station wagon','suv','van'] %}selected{% endif %}>Other</option>
-          </select>
-        </div>
-
-        {% set exterior_color_value = request.form.get('exterior_color', prefill_data.get('exterior_color', '')) %}
-        <label for="exterior_color" class="file-label">Exterior color (required for posting)</label>
-        <select id="exterior_color" name="exterior_color" class="input-field">
-          {{ color_options(exterior_color_value, 'Select exterior color') }}
-        </select>
-
-        {% set interior_color_value = request.form.get('interior_color', prefill_data.get('interior_color', '')) %}
-        <label for="interior_color" class="file-label">Interior color (required for posting)</label>
-        <select id="interior_color" name="interior_color" class="input-field">
-          {{ color_options(interior_color_value, 'Select interior color') }}
-        </select>
-
-        <label for="vehicle_condition" class="file-label">Vehicle condition</label>
-        <input id="vehicle_condition" name="vehicle_condition" type="text" class="input-field" value="Very good" readonly>
-
-        {% set fuel_type_value = request.form.get('fuel_type', prefill_data.get('fuel_type', 'Other')) %}
-        <label for="fuel_type" class="file-label">Fuel type</label>
-        <select id="fuel_type" name="fuel_type" class="input-field">
-          {% for value, label in [('Gasoline','Gasoline'),('Diesel','Diesel'),('Electric','Electric'),('Petrol','Petrol'),('Hybrid','Hybrid'),('Flex','Flex'),('Plug-in hybrid','Plug-in hybrid'),('Other','Other')] %}
-          <option value="{{ value }}" {% if fuel_type_value|lower == value|lower %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-
-        {% set transmission_value = request.form.get('transmission', prefill_data.get('transmission', 'Automatic transmission')) %}
-        {% set transmission_lower = transmission_value|lower %}
-        <label for="transmission" class="file-label">Transmission</label>
-        <select id="transmission" name="transmission" class="input-field">
-          <option value="Manual transmission" {% if transmission_lower[:6] == 'manual' %}selected{% endif %}>Manual transmission</option>
-          <option value="Automatic transmission" {% if transmission_lower[:6] != 'manual' %}selected{% endif %}>Automatic transmission</option>
-        </select>
+        <label for="location" class="file-label">Location</label>
+        <input id="location" name="location" type="text" class="input-field" required autocomplete="address-level2" value="{{ request.form.get('location', prefill_data.get('location', '')) }}">
 
         <label for="description" class="file-label">Description</label>
-        <textarea id="description" name="description" rows="8" class="input-field">{{ request.form.get('description', '') }}</textarea>
+        <textarea id="description" name="description" rows="8" class="input-field">{{ request.form.get('description', prefill_data.get('description', '')) }}</textarea>
 
-        <label for="manual_timing" class="file-label">When to post</label>
-        <select id="manual_timing" name="manual_timing" class="input-field">
-          <option value="now" {% if request.form.get('manual_timing', 'now') == 'now' %}selected{% endif %}>Post now</option>
-          <option value="schedule" {% if request.form.get('manual_timing') == 'schedule' %}selected{% endif %}>Post after a delay</option>
-        </select>
-        <div id="manual-delay-fields">
-        <label for="delay_unit" class="file-label">Delay unit</label>
-        <select id="delay_unit" name="delay_unit" class="input-field" required>
-          <option value="">Select unit</option>
-          <option value="hours" {% if request.form.get('delay_unit') == 'hours' %}selected{% endif %}>Hours</option>
-          <option value="minutes" {% if request.form.get('delay_unit') == 'minutes' %}selected{% endif %}>Minutes</option>
-        </select>
-
-        <label for="delay_value" class="file-label">Delay value</label>
-        <input id="delay_value" type="number" name="delay_value" class="input-field" required min="1" step="1" value="{{ request.form.get('delay_value', '') }}">
-        </div>
-
+        <p class="manual-note">The property will be posted to the active Facebook account.</p>
         <div class="manual-actions">
-          <button type="submit" name="post_action" value="simple" class="manual-action-button">Simple Post</button>
-          <button type="button" id="manual-save-template" class="manual-action-button manual-action-secondary">Save template</button>
-          {% if group_ui_enabled %}<button type="button" id="manual-group-trigger" class="manual-action-button">Group Post</button>{% endif %}
-          <button type="button" id="manual-account-trigger" class="manual-action-button">Accounts Post</button>
+          <button type="button" id="manual-group-trigger" data-posting-timing-form="manual-post-form" class="manual-action-button">Post</button>
+          <button type="button" id="manual-save-template" class="manual-action-button manual-action-secondary" disabled>Save template</button>
+          <button type="button" id="manual-account-trigger" class="manual-action-button" disabled>Accounts Post</button>
         </div>
         <input type="hidden" id="multi-account-hidden" name="multi_account" value="0">
         <div id="manual-group-hidden" hidden></div>
       </fieldset>
     </form>
-    {% if group_ui_enabled %}
     <div
       id="manual-group-modal"
       class="manual-group-modal"
@@ -182,10 +93,12 @@
     >
       <div class="manual-group-backdrop" data-close="1"></div>
       <div class="manual-group-dialog" role="dialog" aria-modal="true" aria-labelledby="manual-group-title">
+        <div class="manual-group-accent"></div>
         <div class="manual-group-dialog-head">
           <div>
-            <h4 id="manual-group-title">Select groups (up to 20)</h4>
-            <p class="manual-note">Only groups for the active account are shown.</p>
+            <span class="manual-group-eyebrow">POST DESTINATION</span>
+            <h4 id="manual-group-title">Choose groups</h4>
+            <p class="manual-note">Select groups for this post, or skip group posting to publish only to Marketplace.</p>
           </div>
           <div class="manual-group-count">
             <span id="manual-groups-count">0</span>/20 selected
@@ -221,12 +134,11 @@
           </div>
         </div>
         <div class="manual-group-actions">
-          <button type="button" id="manual-group-submit" data-posting-timing-form="manual-post-form" class="manual-action-button">Post to Groups</button>
-          <button type="button" id="manual-group-cancel" class="manual-action-button manual-action-secondary">Cancel</button>
+          <button type="button" id="manual-group-skip" data-posting-timing-form="manual-post-form" class="manual-action-button manual-action-secondary">Skip and Post</button>
+          <button type="button" id="manual-group-submit" data-posting-timing-form="manual-post-form" class="manual-action-button">Post</button>
         </div>
       </div>
     </div>
-    {% endif %}
     <div id="manual-account-modal" class="manual-group-modal" hidden>
       <div class="manual-group-backdrop" data-account-close="1"></div>
       <div class="manual-group-dialog" role="dialog" aria-modal="true" aria-labelledby="manual-account-title">
@@ -348,14 +260,13 @@
       }
     }
 
-    unitInput.addEventListener("change", applyRange);
-    applyRange();
+    if (unitInput && valueInput) { unitInput.addEventListener("change", applyRange); applyRange(); }
 
     const imageInputs = Array.from(document.querySelectorAll(".manual-image-input"));
     imageInputs.forEach((input) => {
       input.addEventListener("change", function () {
         const slot = this.getAttribute("data-slot");
-        const nameBox = document.getElementById((this.dataset.media === "video" ? "video" : "image") + "_slot_name_" + slot);
+        const nameBox = document.getElementById("image_slot_name_" + slot);
         if (!nameBox) return;
         const file = this.files && this.files[0] ? this.files[0] : null;
         nameBox.textContent = file ? file.name : "No file chosen";
@@ -379,12 +290,11 @@
           oldPreview.remove();
         }
         if (file) {
-          const preview = document.createElement(this.dataset.media === 'video' ? 'video' : 'img');
+          const preview = document.createElement('img');
           preview.dataset.mediaPreview = 'true';
           preview.src = URL.createObjectURL(file);
           preview.style.cssText = 'width:100%;height:100px;object-fit:contain';
-          if (preview.tagName === 'VIDEO') { preview.controls = true; preview.preload = 'metadata'; }
-          else preview.alt = file.name;
+          preview.alt = file.name;
           slotBox.appendChild(preview);
         }
       });
@@ -415,8 +325,8 @@
     const groupList = document.getElementById("manual-groups-list");
     const groupCount = document.getElementById("manual-groups-count");
     const groupLimit = document.getElementById("manual-group-limit");
-    const groupCancel = document.getElementById("manual-group-cancel");
     const groupSubmit = document.getElementById("manual-group-submit");
+    const groupSkip = document.getElementById("manual-group-skip");
     const groupHidden = document.getElementById("manual-group-hidden");
     const groupMax = groupModal ? parseInt(groupModal.getAttribute("data-max") || "20", 10) : 20;
 
@@ -457,7 +367,7 @@
       const actionInput = document.createElement("input");
       actionInput.type = "hidden";
       actionInput.name = "post_action";
-      actionInput.value = "group";
+      actionInput.value = "simple";
       groupHidden.appendChild(actionInput);
 
       if (!groupList) return;
@@ -471,36 +381,27 @@
       });
     }
 
-    if (groupTrigger) {
-      groupTrigger.addEventListener("click", function () {
-        const form = groupTrigger.closest("form");
-        if (form && !form.checkValidity()) {
-          form.reportValidity();
-          return;
-        }
-        openGroupModal();
-      });
+    if (groupTrigger) groupTrigger.addEventListener("click", function () {
+      const form = groupTrigger.closest("form");
+      if (form && !form.checkValidity()) { form.reportValidity(); return; }
+      openGroupModal();
+    });
+
+    function submitManualPost(skipGroups) {
+      const form = groupTrigger ? groupTrigger.closest("form") : null;
+      if (!form) return;
+      if (!form.checkValidity()) { form.reportValidity(); return; }
+      syncHiddenGroupInputs();
+      if (skipGroups && groupHidden) {
+        groupHidden.querySelectorAll("input[name='group_ids']").forEach(input => input.remove());
+      }
+      const action = groupHidden && groupHidden.querySelector("input[name='post_action']");
+      if (action) action.value = skipGroups ? "simple" : "group";
+      form.submit();
     }
 
-    if (groupCancel) {
-      groupCancel.addEventListener("click", function () {
-        closeGroupModal();
-      });
-    }
-
-    if (groupSubmit) {
-      groupSubmit.addEventListener("click", function () {
-        const form = groupTrigger ? groupTrigger.closest("form") : null;
-        if (form && !form.checkValidity()) {
-          form.reportValidity();
-          return;
-        }
-        syncHiddenGroupInputs();
-        if (form) {
-          form.submit();
-        }
-      });
-    }
+    if (groupSubmit) groupSubmit.addEventListener("click", () => submitManualPost(false));
+    if (groupSkip) groupSkip.addEventListener("click", () => submitManualPost(true));
 
     if (groupModal) {
       groupModal.addEventListener("click", function (event) {
@@ -509,10 +410,6 @@
           closeGroupModal();
         }
       });
-    }
-
-    if (groupModal && groupModal.dataset.open === "1") {
-      openGroupModal();
     }
 
     if (groupList) {

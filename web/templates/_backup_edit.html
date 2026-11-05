@@ -1,0 +1,10 @@
+﻿<dialog class="backup-edit-dialog" id="backup-edit-dialog" aria-labelledby="backup-edit-title">
+  <form id="backup-content-form" action="{{ url_for('web.edit_backup_content', listing_id=listing.id) }}" method="post" enctype="multipart/form-data">
+    <div class="backup-edit-heading"><div><span class="ld-eyebrow">BACKUP POSTS</span><h2 id="backup-edit-title">Edit saved backup</h2><p>Update the description and add photos for future posts.</p></div><button type="button" class="backup-edit-close" data-backup-edit-close aria-label="Close">&times;</button></div>
+    <label class="ld-field backup-edit-field"><span>Description</span><textarea name="description" rows="7" maxlength="20000">{{ (listing.details or {}).get('description', '') }}</textarea></label>
+    <div class="backup-edit-upload"><label for="backup-edit-photos">Add photos</label><p>{{ (listing.downloaded_images or [])|length }} of 20 photos saved. Choose JPEG, PNG, WebP, GIF or BMP images up to 20 MB each.</p><input id="backup-edit-photos" type="file" name="photos" accept="image/jpeg,image/png,image/webp,image/gif,image/bmp" multiple></div>
+    <p id="backup-edit-feedback" class="backup-edit-feedback" role="alert"></p>
+    <div class="backup-edit-actions"><button type="button" class="ld-btn ld-secondary" data-backup-edit-close>Cancel</button><button type="submit" class="ld-btn ld-primary">Save changes</button></div>
+  </form>
+</dialog>
+<script src="{{ url_for('static', filename='js/backup_edit.js') }}" defer></script>

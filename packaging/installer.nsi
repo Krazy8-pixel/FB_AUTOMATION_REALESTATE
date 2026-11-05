@@ -1,6 +1,6 @@
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
-Name "Facebook Marketplace Automation"
+Name "FBMK Automation Realestate"
 !ifdef GENERATE_UNINSTALLER
 OutFile "..\build\uninstall\MakeUninstaller.exe"
 !else
@@ -23,7 +23,7 @@ UninstallIcon "..\assets\app.ico"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
-!define MUI_UNCONFIRMPAGE_TEXT_TOP "Uninstall will remove FB Automation Real Estate and all saved accounts, sessions, listings, groups, media, settings, and schedules from this computer."
+!define MUI_UNCONFIRMPAGE_TEXT_TOP "Uninstall will remove FBMK Automation Realestate and all saved accounts, sessions, listings, groups, media, settings, and schedules from this computer."
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
@@ -70,13 +70,17 @@ Section "Install"
   Call CheckAppWritable
   SetOutPath "$INSTDIR"
   File /r "..\dist\FBAutomationRealEstate\*"
-  CreateShortcut "$DESKTOP\FB Automation Real Estate.lnk" "$INSTDIR\FBAutomationRealEstate.exe"
-  CreateDirectory "$SMPROGRAMS\FB Automation Real Estate"
-  CreateShortcut "$SMPROGRAMS\FB Automation Real Estate\FB Automation Real Estate.lnk" "$INSTDIR\FBAutomationRealEstate.exe"
+  Delete "$DESKTOP\FB Automation Real Estate.lnk"
+  Delete "$SMPROGRAMS\FB Automation Real Estate\FB Automation Real Estate.lnk"
+  Delete "$SMPROGRAMS\FB Automation Real Estate\Uninstall FB Automation Real Estate.lnk"
+  RMDir "$SMPROGRAMS\FB Automation Real Estate"
+  CreateShortcut "$DESKTOP\FBMK Automation Realestate.lnk" "$INSTDIR\FBAutomationRealEstate.exe"
+  CreateDirectory "$SMPROGRAMS\FBMK Automation Realestate"
+  CreateShortcut "$SMPROGRAMS\FBMK Automation Realestate\FBMK Automation Realestate.lnk" "$INSTDIR\FBAutomationRealEstate.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "FBAutomationRealEstate" '$\"$INSTDIR\FBAutomationRealEstate.exe$\" --background'
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-  CreateShortcut "$SMPROGRAMS\FB Automation Real Estate\Uninstall FB Automation Real Estate.lnk" "$INSTDIR\Uninstall.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\FBAutomationRealEstate" "DisplayName" "Facebook Marketplace Automation"
+  CreateShortcut "$SMPROGRAMS\FBMK Automation Realestate\Uninstall FBMK Automation Realestate.lnk" "$INSTDIR\Uninstall.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\FBAutomationRealEstate" "DisplayName" "FBMK Automation Realestate"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\FBAutomationRealEstate" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\FBAutomationRealEstate" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\FBAutomationRealEstate" "DisplayIcon" "$INSTDIR\FBAutomationRealEstate.exe"
@@ -107,7 +111,7 @@ close_app_retry:
     ${LoopUntil} $2 >= 60
     Delete "$LOCALAPPDATA\FBAutomationRealEstate\data\exit-for-uninstall"
     ${If} $0 != 0
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "FB Automation Real Estate is still running. Close it in Task Manager (FBAutomationRealEstate.exe), then click Retry. No program files have been changed." /SD IDCANCEL IDRETRY close_app_retry
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "FBMK Automation Realestate is still running. Close it in Task Manager (FBAutomationRealEstate.exe), then click Retry. No program files have been changed." /SD IDCANCEL IDRETRY close_app_retry
       Abort
     ${EndIf}
   ${EndIf}
@@ -141,10 +145,10 @@ Section "Uninstall"
   Call un.CloseApp
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "FBAutomationRealEstate"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\FBAutomationRealEstate"
-  Delete "$DESKTOP\FB Automation Real Estate.lnk"
-  Delete "$SMPROGRAMS\FB Automation Real Estate\FB Automation Real Estate.lnk"
-  Delete "$SMPROGRAMS\FB Automation Real Estate\Uninstall FB Automation Real Estate.lnk"
-  RMDir "$SMPROGRAMS\FB Automation Real Estate"
+  Delete "$DESKTOP\FBMK Automation Realestate.lnk"
+  Delete "$SMPROGRAMS\FBMK Automation Realestate\FBMK Automation Realestate.lnk"
+  Delete "$SMPROGRAMS\FBMK Automation Realestate\Uninstall FBMK Automation Realestate.lnk"
+  RMDir "$SMPROGRAMS\FBMK Automation Realestate"
   ; Delete this app's saved accounts, sessions, media, databases, and caches.
   RMDir /r "$LOCALAPPDATA\FBAutomationRealEstate"
   RMDir /r "$INSTDIR"

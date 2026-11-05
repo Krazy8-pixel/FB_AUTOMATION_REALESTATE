@@ -102,6 +102,14 @@
   .listing-view-btn { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:124px; min-height:40px; border:0; border-radius:0; background:var(--app-blue); color:#fff; text-decoration:none; font-size:14px; font-weight:700; }
   .listing-backup-action { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:124px; min-height:38px; padding:7px 10px; border:1px solid #b5c7e4; color:#0b3d91; background:#f5f8fd; text-align:center; text-decoration:none; font-size:12px; font-weight:700; line-height:1.35; }
   .listing-backup-action:hover { background:#e7effb; border-color:#0b3d91; }
+  .listing-actions .listing-view-btn, .listing-actions .listing-backup-action, .listing-actions .listing-clear-one { width:132px; min-height:40px; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; padding:8px 12px; border:1px solid var(--app-blue); border-radius:0; font-size:12px; font-weight:600; text-align:center; text-decoration:none; line-height:1.3; transition:background .15s,border-color .15s,color .15s; }
+  .listing-actions .listing-view-btn { background:var(--app-blue); color:#fff !important; }
+  .listing-actions .listing-view-btn:hover { background:var(--app-blue-dark); }
+  .listing-actions .listing-backup-action { background:#fff; color:var(--app-blue) !important; }
+  .listing-actions .listing-backup-action:hover { background:#edf3fc; }
+  .listing-actions .listing-clear-one { background:#fff; border-color:#d6b4b0; color:#a53932; }
+  .listing-actions a:focus-visible, .listing-actions button:focus-visible { outline:2px solid var(--app-blue); outline-offset:2px; }
+  @media(max-width:620px) { .listing-actions .listing-view-btn, .listing-actions .listing-backup-action, .listing-actions .listing-clear-one { width:100%; } }
   .listing-state { font-size:12px; font-weight:600; color:var(--app-blue); background:var(--app-grey-50); border-radius:0; padding:5px 8px; }
   .repost-modal-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:18px 0; text-align:left; }
   .repost-modal-fields label { color:#475569; font-size:13px; font-weight:700; }
@@ -152,37 +160,37 @@
   {% if active_account %}
   <p id="listing-feedback" role="status" aria-live="polite"></p>
   <div id="listing-grid" class="delete-grid">
-    {% for backup_section in ([true] if backups_page else [false]) %}
-    <section class="listing-panel" id="{{ 'backup-panel' if backup_section else 'facebook-panel' }}"><div class="listing-section-heading"><h2 id="{{ 'backup-heading' if backup_section else 'facebook-heading' }}">{{ 'Saved as backup' if backup_section else 'Posted on Facebook' }}</h2><div class="listing-panel-actions">{% if backup_section %}<button type="button" class="delete-clear-storage" data-clear-backups>Clear all backups</button><button type="button" class="delete-btn delete-primary" data-backup-action="accounts">Post on accounts</button>{% else %}        <form id="listing-import-form" data-ajax="true" method="post" action="{{ url_for('web.delete_listings_import') }}">
+    {% for backup_section in [false] %}
+    <section class="listing-panel" id="facebook-panel"><div class="listing-section-heading"><h2 id="facebook-heading">Posted on Facebook</h2><div class="listing-panel-actions">{% if backup_section %}<button type="button" class="delete-btn delete-primary" data-backup-action="accounts">Post on accounts</button>{% else %}        <form id="listing-import-form" data-ajax="true" method="post" action="{{ url_for('web.delete_listings_import') }}">
           <button id="listing-import-btn" class="delete-btn delete-primary" type="submit" {% if not active_account or import_status.get('running') %}disabled{% endif %}>Import Listings</button>
         </form>
         <form id="listing-stop-form" data-ajax="true" method="post" action="{{ url_for('web.delete_listings_import_stop') }}">
           <button id="listing-stop-btn" class="delete-btn delete-warning" type="submit" {% if not import_status.get('running') %}disabled{% endif %}>Stop Import</button>
         </form>
-<button id="listing-refresh-clicks-btn" class="delete-btn delete-primary" type="button" data-url="{{ url_for('web.delete_listings_clicks_refresh') }}" {% if not active_account or not listings or import_status.get('running') or click_refresh_status.get('running') or facebook_delete_status.get('running') %}disabled{% endif %}>{% if click_refresh_status.get('running') %}<span class="click-refresh-spinner" aria-hidden="true"></span>Refreshing... {{ click_refresh_status.get('confirmed_count', 0) }}/{{ click_refresh_status.get('total_count', listings|length) }}{% else %}Refresh Clicks{% endif %}</button><button type="button" class="delete-btn delete-primary" data-facebook-action="repost">Repost</button><button id="listing-cross-post-btn" class="delete-btn delete-primary" type="button" {% if not listings %}disabled{% endif %}>Post to other accounts</button><button id="listing-facebook-delete-btn" class="delete-btn delete-danger" type="button" data-running="{{ 'true' if facebook_delete_status.get('running') else 'false' }}" {% if not listings or click_refresh_status.get('running') %}disabled{% endif %}>Delete from Facebook</button>{% endif %}</div></div>{% if not backup_section %}<div class="facebook-clear-row"><button type="button" class="delete-clear-storage" data-clear-facebook title="Clear all local records for this account; Facebook posts are kept.">Clear local listings</button></div>{% endif %}<div class="delete-toolbar-controls listing-selection-controls delete-hidden" data-selection-controls><label class="delete-select-wrap listing-select-all-wrap"><input id="{{ 'backup-select-all' if backup_section else 'listing-select-all' }}" class="listing-select-all" type="checkbox"><span>Select all</span><span class="listing-selected-count" id="{{ 'backup-selected-count' if backup_section else 'listing-selected-count' }}">0 selected</span></label><button id="{{ 'backup-cancel-selection-btn' if backup_section else 'listing-cancel-selection-btn' }}" data-cancel-selection class="delete-btn delete-muted" type="button">Cancel</button></div>{% if backup_section %}<p class="listing-section-empty">Shared across all accounts.</p>{% endif %}<div data-posting-controls-slot></div><div class="listing-panel-cards" id="{{ 'backup-cards' if backup_section else 'facebook-cards' }}">
+<button id="listing-refresh-clicks-btn" class="delete-btn delete-primary" type="button" data-url="{{ url_for('web.delete_listings_clicks_refresh') }}" {% if not active_account or not listings or import_status.get('running') or click_refresh_status.get('running') or facebook_delete_status.get('running') %}disabled{% endif %}>{% if click_refresh_status.get('running') %}<span class="click-refresh-spinner" aria-hidden="true"></span>Refreshing... {{ click_refresh_status.get('confirmed_count', 0) }}/{{ click_refresh_status.get('total_count', listings|length) }}{% else %}Refresh Clicks{% endif %}</button><button type="button" class="delete-btn delete-primary" data-facebook-action="repost">Repost</button><button id="listing-cross-post-btn" class="delete-btn delete-primary" type="button" {% if not listings %}disabled{% endif %}>Post to other accounts</button><button id="listing-facebook-delete-btn" class="delete-btn delete-danger" type="button" data-running="{{ 'true' if facebook_delete_status.get('running') else 'false' }}" {% if not listings or click_refresh_status.get('running') %}disabled{% endif %}>Delete from Facebook</button>{% endif %}</div></div>{% if not backup_section %}<div class="facebook-clear-row"><button type="button" class="delete-clear-storage" data-clear-facebook title="Clear local listings; Facebook posts are kept.">Clear local listings</button></div>{% endif %}<div class="delete-toolbar-controls listing-selection-controls delete-hidden" data-selection-controls><label class="delete-select-wrap listing-select-all-wrap"><input id="listing-select-all" class="listing-select-all" type="checkbox"><span>Select all</span><span class="listing-selected-count" id="listing-selected-count">0 selected</span></label><button id="listing-cancel-selection-btn" data-cancel-selection class="delete-btn delete-muted" type="button">Cancel</button></div>{% if backup_section and backup_category == 'marketplace' %}<div data-posting-controls-slot></div>{% endif %}<div class="listing-panel-cards" id="facebook-cards">
     {% for listing in listings %}
     {% set is_backup = listing.facebook_present is sameas false or (listing.source_deleted|default(false) and not listing.facebook_reposted|default(false)) %}
     {% if is_backup == backup_section %}
     <div class="delete-card" data-id="{{ listing.id }}">
-      <input class="listing-check" type="checkbox" aria-label="Select {{ listing.year }} {{ listing.make }} {{ listing.model }}" value="{{ listing.id }}" {% if listing.id in scheduled_repost_ids %}disabled{% endif %}>
+      <input class="listing-check" type="checkbox" aria-label="Select {{ (listing.details or {}).get('title') or listing.title or ((listing.year ~ ' ' ~ listing.make ~ ' ' ~ listing.model)|trim) }}" value="{{ listing.id }}" {% if listing.id in scheduled_repost_ids %}disabled{% endif %}>
       {% set listing_image = listing.image or (listing.images[0] if listing.images else '') %}
       {% if listing.downloaded_images %}{% set listing_image = url_for('web.listing_photo', listing_id=listing.id, name=listing.downloaded_images[0].name) %}{% endif %}
       {% if listing_image %}<img class="listing-photo" src="{{ listing_image }}" alt="" loading="lazy" referrerpolicy="no-referrer">
       {% else %}<span class="listing-photo listing-photo-placeholder">No image</span>{% endif %}
       <span class="listing-details">
-        <a class="listing-title" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">{{ listing.year }} {{ listing.make }} {{ listing.model }}</a>
+        <a class="listing-title" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">{{ (listing.details or {}).get('title') or listing.title or ((listing.year ~ ' ' ~ listing.make ~ ' ' ~ listing.model)|trim) or 'Saved post' }}</a>
         <span class="listing-price">{{ (listing.details or {}).get('price') or listing.price or "Price unavailable" }}</span>
         <span class="listing-meta">
-          <span>{{ listing.clicks|default(0, true) }} clicks</span>
-          <span>{{ ('Listed on ' ~ listing.listed_date) if listing.listed_date else 'Date unavailable' }}</span>
+          {% if listing.listing_type == 'group_post' %}<span>{{ (listing.details or {}).get('description', '')|truncate(110) }}</span>{% else %}<span>{{ listing.clicks|default(0, true) }} clicks</span><span>{{ (listing.details or {}).get('location') or ((('Listed on ' ~ listing.listed_date) if listing.listed_date else 'Date unavailable')) }}</span>{% endif %}
         </span>
         {{ storage_badges(listing) }}
       </span>
-      <span class="listing-actions"><a class="listing-view-btn" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">View</a>{% if is_backup %}<button type="button" class="listing-clear-one" data-clear-backup="{{ listing.id }}" {% if listing.id in scheduled_repost_ids %}disabled{% endif %}>Clear backup</button>{% endif %}</span>
+      <span class="listing-actions"><a class="listing-view-btn" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">View</a>{% if listing.listing_type == 'group_post' %}<a class="listing-backup-action" href="{{ url_for('web.posting_in_groups_page', backup_id=listing.id) }}">Post to groups again</a>{% endif %}</span>
     </div>
     {% endif %}
     {% endfor %}
     </div></section>
+    {% endfor %}
     {% endfor %}
   </div>
   {% else %}
@@ -228,9 +236,9 @@
   const crossForm = document.getElementById('manage-cross-form');
   const feedback = document.getElementById('listing-feedback');
   const activeAccount = {{ active_account|tojson }};
-  const backupsPage = {{ backups_page|default(false)|tojson }};
+  const backupsPage = false;
   const postedGrid = document.getElementById('facebook-cards');
-  const backupGrid = document.getElementById('backup-cards');
+  const backupGrid = null;
   let lastCardsMarkup = {};
   let postingAction = null;
   let submittingPosts = false;
@@ -252,8 +260,9 @@
     document.getElementById('manage-post-title').textContent = repost ? 'Repost on this account' : action === 'backup_accounts' ? 'Post on accounts' : 'Post to other accounts';
     document.getElementById('manage-post-help').textContent = `${selectedListingIds.size} listing(s) selected. ` + (repost ? 'Each listing will be deleted and posted again on this account.' : 'Choose accounts and enter a delay.');
     document.getElementById('manage-cross-error').textContent = '';
-    const panel = document.getElementById(action === 'backup_accounts' ? 'backup-panel' : 'facebook-panel');
-    panel.querySelector('[data-posting-controls-slot]').appendChild(crossDialog);
+    const panel = document.getElementById(action === 'backup_accounts' ? 'backup-marketplace-panel' : 'facebook-panel');
+    const slot = panel && panel.querySelector('[data-posting-controls-slot]');
+    if (slot) slot.appendChild(crossDialog);
     crossDialog.hidden = false;
     syncSelectionSummary();
   }
@@ -274,26 +283,30 @@
     grid.querySelectorAll('.listing-check').forEach(box => {
       const item = (data.listings || []).find(item => String(item.id) === box.value);
       const backup = item && (item.facebook_present === false || (item.source_deleted && !item.facebook_reposted));
-      box.disabled = scheduled.has(box.value) || (scope === 'facebook' && backup) || (scope === 'backups' && !backup);
+      box.disabled = scheduled.has(box.value) || (scope === 'facebook' && backup) || (scope === 'backups' && (!backup || item?.listing_type === 'group_post'));
       if (box.disabled) { box.checked = false; selectedListingIds.delete(box.value); }
     });
     syncSelectionSummary();
   }
 
   function syncSelectionSummary() {
-    for (const [scope, panelId] of [['facebook','facebook-panel'], ['backups','backup-panel']]) {
+    for (const [scope, panelId] of [['facebook','facebook-panel']]) {
       const panel = document.getElementById(panelId);
       if (!panel) continue;
       const active = selectionMode && selectionScope === scope;
       panel.classList.toggle('selection-mode', active);
-      panel.querySelector('[data-selection-controls]').classList.toggle('delete-hidden', !active);
+      const controls = panel.querySelector('[data-selection-controls]');
+      if (controls) controls.classList.toggle('delete-hidden', !active);
       const boxes = [...panel.querySelectorAll('.listing-check:not(:disabled)')];
       const checked = boxes.filter(box => box.checked).length;
       const all = panel.querySelector('.listing-select-all');
-      all.checked = !!boxes.length && checked === boxes.length;
-      all.indeterminate = checked > 0 && checked < boxes.length;
-      all.disabled = !active || !boxes.length;
-      panel.querySelector('.listing-selected-count').textContent = `${checked} selected`;
+      if (all) {
+        all.checked = !!boxes.length && checked === boxes.length;
+        all.indeterminate = checked > 0 && checked < boxes.length;
+        all.disabled = !active || !boxes.length;
+      }
+      const selectedCount = panel.querySelector('.listing-selected-count');
+      if (selectedCount) selectedCount.textContent = `${checked} selected`;
       if (active && !crossDialog.hidden) {
         const repost = postingAction === 'facebook_repost';
         document.getElementById('manage-post-help').textContent = `${checked} listing(s) selected. ` + (repost ? 'Delete and repost on this account after the selected delay.' : 'Choose accounts above and enter the delay below.');
@@ -324,7 +337,7 @@
     const clickStatus = data.click_refresh_status || {};
     const facebookStatus = data.facebook_delete_status || {};
     const scheduledRepostIds = new Set((data.scheduled_repost_ids || []).map(String));
-    items.forEach(item => selectionTitles.set(String(item.id), [item.year, item.make, item.model].filter(Boolean).join(' ') || 'Untitled listing'));
+    items.forEach(item => selectionTitles.set(String(item.id), (item.details || {}).title || item.title || [item.year, item.make, item.model].filter(Boolean).join(' ') || 'Untitled listing'));
     if (listingCount) listingCount.textContent = `(${items.length})`;
     if (importBtn) {
       importBtn.disabled = !!status.running || !!clickStatus.running;
@@ -348,7 +361,7 @@
     }
     const isBackup = item => item.facebook_present === false || (item.source_deleted && !item.facebook_reposted);
     const cardHtml = item => {
-      const title = escapeHtml([item.year,item.make,item.model].filter(Boolean).join(' '));
+      const title = escapeHtml((item.details || {}).title || item.title || [item.year,item.make,item.model].filter(Boolean).join(' ') || 'Saved post');
       const price = escapeHtml((item.details || {}).price || item.price || 'Price unavailable');
       const date = escapeHtml(item.listed_date ? `Listed on ${item.listed_date}` : 'Date unavailable');
       const clicks = Number.isFinite(Number(item.clicks)) ? Number(item.clicks) : 0;
@@ -364,24 +377,28 @@
         : '<span class="listing-photo listing-photo-placeholder">No image</span>';
       const scheduled = scheduledRepostIds.has(String(item.id || ''));
       const removed = item.facebook_present === false || (item.source_deleted && !item.facebook_reposted);
-      const unavailable = scheduled || (selectionScope === 'facebook' && removed) || (selectionScope === 'backups' && !removed);
+      const groupPost = item.listing_type === 'group_post';
+      const unavailable = scheduled || groupPost || (selectionScope === 'facebook' && removed) || (selectionScope === 'backups' && !removed);
       const storageStatus = `<span class="listing-storage-status" aria-label="Listing storage status">${removed ? '' : '<span class="listing-source-badge is-posted">Posted on Facebook</span>'}<span class="listing-backup-badge">Saved as backup</span></span>`;
-      const clearOne = removed ? `<button type="button" class="listing-clear-one" data-clear-backup="${id}" ${scheduled ? 'disabled' : ''}>Clear backup</button>` : '';
-      return `<div class="delete-card" data-id="${id}"><input class="listing-check" type="checkbox" aria-label="Select ${title}" value="${id}" ${unavailable ? 'disabled' : ''}>${photo}<span class="listing-details"><a class="listing-title" href="/delete_listings/detail/${encodeURIComponent(item.id)}">${title}</a><span class="listing-price">${price}</span><span class="listing-meta"><span>${clickLabel}</span><span>${date}</span></span>${storageStatus}</span><span class="listing-actions"><a class="listing-view-btn" href="/delete_listings/detail/${encodeURIComponent(item.id)}">View</a>${clearOne}</span></div>`;
+      const clearOne = removed && !backupsPage ? `<button type="button" class="listing-clear-one" data-clear-backup="${id}" ${scheduled ? 'disabled' : ''}>Clear backup</button>` : '';
+      const meta = groupPost ? `<span>${escapeHtml((item.details || {}).description || '')}</span>` : `<span>${clickLabel}</span><span>${escapeHtml((item.details || {}).location || date)}</span>`;
+      const groupAction = groupPost ? `<a class="listing-backup-action" href="/posting_in_groups?backup_id=${encodeURIComponent(item.id)}">Post to groups again</a>` : '';
+      return `<div class="delete-card" data-id="${id}"><input class="listing-check" type="checkbox" aria-label="Select ${title}" value="${id}" ${unavailable ? 'disabled' : ''}>${photo}<span class="listing-details"><a class="listing-title" href="/delete_listings/detail/${encodeURIComponent(item.id)}">${title}</a><span class="listing-price">${groupPost ? 'Group post' : price}</span><span class="listing-meta">${meta}</span>${storageStatus}</span><span class="listing-actions"><a class="listing-view-btn" href="/delete_listings/detail/${encodeURIComponent(item.id)}">View</a>${groupAction}${clearOne}</span></div>`;
     };
     const busy = !!status.running || !!clickStatus.running || !!facebookStatus.running || !!scheduledRepostIds.size;
     const postedItems = items.filter(item => !isBackup(item));
     const backupItems = items.filter(isBackup);
+    const groupBackupItems = [];
     const postedMarkup = postedItems.map(cardHtml).join('') || '<p class="listing-section-empty">No Facebook listings saved yet.</p>';
-    const backupMarkup = backupItems.map(cardHtml).join('') || '<p class="listing-section-empty">No saved backups yet.</p>';
+    const backupMarkup = backupItems.map(cardHtml).join('') || '<p class="listing-section-empty">No marketplace ad backups yet.</p>';
+    const groupBackupMarkup = groupBackupItems.map(cardHtml).join('') || '<p class="listing-section-empty">No group post backups yet.</p>';
     if (postedGrid && postedMarkup !== lastCardsMarkup.posted) { postedGrid.innerHTML = postedMarkup; lastCardsMarkup.posted = postedMarkup; }
     if (backupGrid && backupMarkup !== lastCardsMarkup.backups) { backupGrid.innerHTML = backupMarkup; lastCardsMarkup.backups = backupMarkup; }
-    if (postedGrid) document.getElementById('facebook-heading').textContent = `Posted on Facebook (${postedItems.length})`;
-    if (backupGrid) document.getElementById('backup-heading').textContent = `Saved as backup (${backupItems.length})`;
-    grid.querySelectorAll('[data-clear-backups],[data-backup-action]').forEach(button => { button.disabled = busy || !backupItems.length; });
+    if (postedGrid && !backupsPage) document.getElementById('facebook-heading').textContent = `Posted on Facebook (${postedItems.length})`;
+    grid.querySelectorAll('[data-backup-action]').forEach(button => { button.disabled = busy || !backupItems.length; });
     if (refreshClicksBtn) refreshClicksBtn.disabled = !postedItems.length || !!status.running || !!clickStatus.running || !!facebookStatus.running;
     grid.querySelectorAll('.listing-check').forEach(box => { box.checked = selectedListingIds.has(box.value); });
-    const selectableItems = items.filter(item => !scheduledRepostIds.has(String(item.id || '')));
+    const selectableItems = items.filter(item => !scheduledRepostIds.has(String(item.id || '')) && item.listing_type !== 'group_post');
 
     if (empty) empty.classList.toggle('delete-hidden', !!items.length);
     syncSelectionSummary();
@@ -523,7 +540,7 @@
         .catch(() => { localStatusMessage = 'Could not clear local listings. Try again.'; }).finally(poll);
       return;
     }
-    const clearBackups = event.target.closest('[data-clear-backups]');
+    const clearBackups = backupsPage ? null : event.target.closest('[data-clear-backups]');
     if (clearBackups) {
       clearBackups.disabled = true;
       appFetch('{{ url_for("web.delete_listings_storage_clear") }}', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({scope:'backups',account:activeAccount})})
@@ -628,9 +645,9 @@
     let queued = 0;
     const scheduleBatch = 'manage_' + Date.now() + '_' + Math.random().toString(36).slice(2);
     try {
-      const listingIds = ((window.__lastDeleteData || {}).listings || []).filter(item => selectedListingIds.has(String(item.id)) && Boolean(item.facebook_present === false || (item.source_deleted && !item.facebook_reposted)) === (postingAction === 'backup_accounts')).map(item => String(item.id));
+      const listingIds = ((window.__lastDeleteData || {}).listings || []).filter(item => selectedListingIds.has(String(item.id)) && item.listing_type !== 'group_post' && Boolean(item.facebook_present === false || (item.source_deleted && !item.facebook_reposted)) === (postingAction === 'backup_accounts')).map(item => String(item.id));
       if (!listingIds.length) throw new Error('Select at least one listing.');
-      const missingColors = ((window.__lastDeleteData || {}).listings || []).find(item => listingIds.includes(String(item.id)) && (!String((item.details || {}).exterior_color || '').trim() || !String((item.details || {}).interior_color || '').trim()));
+      const missingColors = ((window.__lastDeleteData || {}).listings || []).find(item => listingIds.includes(String(item.id)) && item.listing_type !== 'marketplace_ad' && (!String((item.details || {}).exterior_color || '').trim() || !String((item.details || {}).interior_color || '').trim()));
       if (missingColors) throw new Error(`Open View for ${[missingColors.year, missingColors.make, missingColors.model].filter(Boolean).join(' ') || 'the listing'}, edit and save both colors before posting.`);
       for (const id of listingIds) {
         const listing = ((window.__lastDeleteData || {}).listings || []).find(item => String(item.id) === id);
@@ -641,7 +658,7 @@
         names.forEach(name => { if (!order.includes(name)) order.push(name); });
         const endpoint = postingAction === 'facebook_repost' ? '{{ url_for("web.delete_listings_repost") }}' : '{{ url_for("web.cross_post_listing") }}';
         const response = await appFetch(endpoint, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-          account:activeAccount, listing_id:id, target_accounts:targets, fields:prefs.fields || {}, image_order:order,
+          account:activeAccount, listing_id:id, target_accounts:targets, fields:prefs.fields || ((listing.details || {}).title ? Object.fromEntries(['title','price','location','description'].map(key => [key, String((listing.details || {})[key] || '')])) : {}), image_order:order,
           post_mode:'schedule', delay_value:Number(delayValue.value), delay_unit:delayUnit.value, backup_post:postingAction === 'backup_accounts', mass_post:true,
           schedule_batch:scheduleBatch, schedule_position:queued, posting_requested_at_ms:postingRequestedAt
         })});

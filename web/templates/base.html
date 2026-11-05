@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Tayyara Motors{% endblock %}</title>
+  <title>{% block title %}FBMK Automation Realestate{% endblock %}</title>
   <script src="{{ url_for('static', filename='js/app_requests.js') }}"></script>
   <script src="{{ url_for('static', filename='js/posting_timing.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app_theme.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/branding.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/header.css') }}">
-<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='app.ico', v='tayyara-motors-only') }}">
+<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='app.ico', v='fbmk-1') }}">
 </head>
 <body>
 
@@ -62,23 +62,12 @@
       </li>
       {% endif %}
 
-      <li class="{% if active_page == 'delete' %}active{% endif %}">
-        <div class="menu-link-wrap" onclick="window.location.href='{{ url_for('web.delete_listings_page') }}'">
-          <span class="menu-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v14H4z"></path><path d="M8 9h8M8 13h5"></path></svg>
-          </span>
-          <a href="{{ url_for('web.delete_listings_page') }}">Manage Listings</a>
-        </div>
-      </li>
-
-      <li class="{% if active_page == 'backups' %}active{% endif %}">
+      {% if active_account %}<li class="{% if active_page == 'backups' %}active{% endif %}">
         <div class="menu-link-wrap" onclick="window.location.href='{{ url_for('web.backup_listings_page') }}'">
-          <span class="menu-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v14H4z"></path><path d="M8 9h8M8 13h5"></path></svg>
-          </span>
+          <span class="menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 7h16v13H4zM8 7V4h8v3M8 12h8M8 16h5"></path></svg></span>
           <a href="{{ url_for('web.backup_listings_page') }}">Backup Posts</a>
         </div>
-      </li>
+      </li>{% endif %}
 
       {% if desktop_mode %}
       <li class="{% if active_page == 'account_browser' %}active{% endif %}">
@@ -95,16 +84,7 @@
 
 
 
-      <li class="{% if active_page == 'reposting' %}active{% endif %}">
-        <div class="menu-link-wrap" onclick="window.location.href='{{ url_for('web.reposting_page') }}'">
-          <span class="menu-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" focusable="false"><path d="M20 8a8 8 0 1 0 1 6"></path><path d="M20 3v5h-5M12 7v5l3 2"></path></svg>
-          </span>
-          <a href="{{ url_for('web.reposting_page') }}">Reposting Results</a>
-        </div>
-      </li>
       <li class="{% if active_page == 'schedule' %}active{% endif %}"><div class="menu-link-wrap" onclick="window.location.href='{{ url_for('web.post_schedular') }}'"><span class="menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M7 3v4M17 3v4M3 10h18M8 14h3M8 17h6"></path></svg></span><a href="{{ url_for('web.post_schedular') }}">Posting Results</a></div></li>
-      <li class="{% if active_page == 'delete_results' %}active{% endif %}"><div class="menu-link-wrap" onclick="window.location.href='{{ url_for('web.delete_results_page') }}'"><span class="menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 5h14l-1 16H6L5 5zM9 5V3h6v2M9 9v8M15 9v8"></path></svg></span><a href="{{ url_for('web.delete_results_page') }}">Delete Results</a></div></li>
       <li class="{% if active_page in ['settings', 'account', 'groups', 'activity_log', 'info'] %}active{% endif %}"><div class="menu-link-wrap" onclick="window.location.href='{{ url_for('web.settings_page') }}'"><span class="menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 7h16M4 17h16"></path><circle cx="9" cy="7" r="3"></circle><circle cx="15" cy="17" r="3"></circle></svg></span><a href="{{ url_for('web.settings_page') }}">Settings</a></div></li>
     </ul>
     <div class="sidebar-tip">
@@ -125,7 +105,7 @@
         </button>
         {% endif %}
         <div class="topbar-brand">
-          <a class="header-brand-link" href="{{ url_for('web.dashboard') }}" aria-label="Tayyara Motors dashboard"><img class="header-app-logo" src="{{ url_for('static', filename='tayyara-logo.png', v='transparent-2') }}" width="240" height="80" alt="Tayyara Motors Auto Sales"></a>
+          <a class="header-brand-link" href="{{ url_for('web.dashboard') }}" aria-label="FBMK Automation Realestate dashboard"><img class="fbmk-logo" src="{{ url_for('static', filename='app-logo.png', v='fbmk-1') }}" width="48" height="48" alt=""><span class="fbmk-brand-name">FBMK <span>Automation Realestate</span></span></a>
           <button
             type="button"
             class="mobile-header-toggle"
@@ -149,6 +129,9 @@
             {% for account in accounts %}<option value="{{ account }}" {% if account == browser_state.account or (not browser_state.account and account == active_account) %}selected{% endif %}>{{ account }}</option>{% endfor %}
           </select>
           <button type="button" class="browser-primary" id="browser-open" {% if not accounts %}disabled{% endif %}>Open account</button>
+          <button type="button" class="browser-primary" id="browser-posting" {% if not accounts %}disabled{% endif %}>Open posting page</button>
+          <button type="button" class="browser-secondary" id="browser-group-posts" {% if not accounts %}disabled{% endif %}>Group posts</button>
+          <button type="button" class="browser-secondary" id="browser-marketplace-ads" {% if not accounts %}disabled{% endif %}>Marketplace ads</button>
           <button type="button" class="browser-secondary" id="browser-stop" {% if not browser_state.open %}disabled{% endif %}>Stop</button>
           <span class="account-browser-status" id="browser-status" role="status" aria-live="polite">{% if browser_state.open %}{{ browser_state.account }} is open{% else %}No account open{% endif %}</span>
         </div>

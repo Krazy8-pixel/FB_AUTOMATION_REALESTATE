@@ -1,0 +1,87 @@
+{% extends 'base.html' %}
+{% block title %}Group Post Backup{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/listing_detail.css') }}"><style>
+.group-backup-detail{max-width:1120px;margin:0 auto;padding:28px}.group-backup-detail .ld-description{white-space:pre-wrap;line-height:1.65}.group-backup-photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.group-backup-photos img{width:100%;height:160px;object-fit:cover;border-radius:8px;background:#eef2f7}@media(max-width:650px){.group-backup-detail{padding:16px}}
+.gb-edit-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}.gb-edit-card{border:1px solid #d8e1ed;border-radius:9px;padding:8px;background:#fff}.gb-edit-card img{width:100%;height:140px;object-fit:cover;border-radius:6px}.gb-edit-controls{display:flex;justify-content:space-between;gap:4px;margin-top:7px}.gb-edit-controls button{border:1px solid #d1dbe8;background:#f5f8fc;border-radius:5px;padding:5px 8px;cursor:pointer}.gb-edit-remove{color:#a33b3b!important}.gb-edit-tools{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:12px 0}.gb-edit-tools input{max-width:100%}.gb-account-dialog{width:min(440px,calc(100% - 32px));border:1px solid #cbd5e1;padding:22px;border-radius:12px}
+.gb-account-dialog[open]{position:fixed;inset:50% auto auto 50%;transform:translate(-50%,-50%);margin:0;max-height:calc(100dvh - 36px);overflow:auto;box-sizing:border-box;box-shadow:0 24px 70px rgba(15,23,42,.24);background:#fff}.gb-account-dialog::backdrop{background:rgba(13,25,43,.48);backdrop-filter:blur(3px)}.gb-account-dialog h2{margin:0 0 8px;color:#142c4d;font-size:21px}.gb-account-dialog p{color:#64748b;line-height:1.5}.gb-account-dialog button{min-height:40px;padding:0 16px;border:1px solid #d2dce9;border-radius:8px;background:#f7f9fc;color:#294567;font-weight:700;cursor:pointer}.gb-account-dialog #group-account-continue{border-color:#1769d2;background:#1769d2;color:#fff}.gb-edit-controls button:disabled{opacity:.4;cursor:default}
+</style>{% endblock %}
+{% block content %}
+{% set details = listing.details or {} %}
+<main class="group-backup-detail">
+  <nav class="ld-navigation"><a class="ld-back" href="{{ url_for('web.backup_listings_page') }}">&larr; <span>Backup Posts</span></a><span class="ld-navigation-label">Group Posts / Details</span></nav>
+  <header class="ld-header"><div class="ld-title-block"><span class="ld-eyebrow">GROUP POST BACKUP</span><h1>Saved group post</h1></div>
+    <div class="ld-header-actions"><button class="ld-btn ld-secondary" type="button" data-backup-edit-open>Edit backup</button><button class="ld-btn ld-primary" type="submit" form="group-backup-edit">Post to groups</button></div>
+  </header>
+  {% include "_backup_edit.html" %}
+  <form id="group-backup-edit" method="post" enctype="multipart/form-data" action="{{ url_for('web.prepare_group_post_reuse', listing_id=listing.id) }}">
+    <input type="hidden" name="source_account" value="{{ active_account }}"><input type="hidden" name="account" id="group-target-account"><input type="hidden" name="image_order" id="group-image-order">
+    <section class="ld-panel"><label for="group-backup-description"><h2>Edit description</h2></label><textarea id="group-backup-description" name="description" rows="7" style="width:100%;resize:vertical;padding:12px;line-height:1.5">{{ details.get('description') or '' }}</textarea></section>
+    <section class="ld-panel"><div class="ld-section-heading"><h2>Photos</h2><span id="group-photo-count">{{ listing.downloaded_images|length }} of 20</span></div>
+      <p class="ld-note">Move photos up or down to change their order. Remove saved photos or add new ones. The first photo appears first in the group post.</p>
+      <div class="gb-edit-tools"><label for="group-new-images">Add photos</label><input id="group-new-images" name="new_images" type="file" accept="image/*" multiple></div><p id="group-photo-notice" class="ld-note" role="status"></p>
+      <div class="gb-edit-grid" id="group-photo-editor">{% for photo in group_post_photos %}<article class="gb-edit-card" data-kind="saved" data-name="{{ photo.name }}"><img src="{{ url_for('web.listing_photo', listing_id=listing.id, name=photo.name) }}" alt="Saved group photo {{ loop.index }}"><div class="gb-edit-controls"><button type="button" data-move="up" aria-label="Move photo earlier">↑</button><button type="button" data-move="down" aria-label="Move photo later">↓</button><button type="button" class="gb-edit-remove" data-remove>Remove</button></div></article>{% endfor %}</div>
+    </section>
+    <button class="ld-btn ld-primary" type="submit">Post to groups</button>
+  </form>
+</main>
+<dialog id="group-account-dialog" class="gb-account-dialog"><form method="dialog"><h2>Choose posting account</h2><p>The edited description and photos will be loaded into Group Posting. You can enter group links and post there.</p><label for="group-target-select">Facebook account</label><select id="group-target-select" style="display:block;width:100%;margin:8px 0 18px;padding:10px">{% for account in accounts %}<option value="{{ account }}" {% if account == active_account %}selected{% endif %}>{{ account }}</option>{% endfor %}</select><p id="group-account-error" role="alert"></p><div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" id="group-account-cancel">Cancel</button><button type="button" id="group-account-continue">Continue</button></div></form></dialog>
+<script>
+(() => {
+  const form = document.getElementById('group-backup-edit');
+  const editor = document.getElementById('group-photo-editor');
+  const upload = document.getElementById('group-new-images');
+  const orderField = document.getElementById('group-image-order');
+  const count = document.getElementById('group-photo-count');
+  const dialog = document.getElementById('group-account-dialog');
+  const select = document.getElementById('group-target-select');
+  const error = document.getElementById('group-account-error');
+  const target = document.getElementById('group-target-account');
+  const notice = document.getElementById('group-photo-notice');
+  let files = [];
+  function cards() { return [...editor.children]; }
+  function sync() {
+    const list = cards();
+    list.forEach((card, i) => card.querySelector('[data-move="up"]').disabled = i === 0);
+    list.forEach((card, i) => card.querySelector('[data-move="down"]').disabled = i === list.length - 1);
+    count.textContent = `${list.length} of 20`;
+    orderField.value = JSON.stringify(list.map(card => card.dataset.kind === 'saved' ? card.dataset.name : `new:${card.dataset.index}`));
+  }
+  function addCard(kind, name, src, index) {
+    const card = document.createElement('article'); card.className = 'gb-edit-card'; card.dataset.kind = kind;
+    if (kind === 'saved') card.dataset.name = name; else card.dataset.index = String(index);
+    const image = document.createElement('img'); image.src = src; image.alt = 'Group post photo'; card.append(image);
+    const controls = document.createElement('div'); controls.className = 'gb-edit-controls';
+    for (const [label, action] of [['↑','up'],['↓','down'],['Remove','remove']]) { const button = document.createElement('button'); button.type='button'; button.textContent=label; if(action==='remove')button.className='gb-edit-remove'; if(action==='remove')button.dataset.remove=''; else button.dataset.move=action; controls.append(button); }
+    card.append(controls); editor.append(card);
+  }
+  upload.addEventListener('change', () => {
+    const capacity = Math.max(0, 20 - cards().filter(card => card.dataset.kind === 'saved').length);
+    files = [...upload.files].slice(0, capacity);
+    if (upload.files.length > capacity) notice.textContent = `Only ${capacity} additional photo(s) fit; the group post limit is 20.`;
+    else notice.textContent = '';
+    const transfer = new DataTransfer(); files.forEach(file => transfer.items.add(file)); upload.files = transfer.files;
+    editor.querySelectorAll('[data-kind="new"]').forEach(card => card.remove());
+    files.forEach((file, index) => { if (cards().length < 20) addCard('new','',URL.createObjectURL(file),index); });
+    sync();
+  });
+  editor.addEventListener('click', event => {
+    const button = event.target.closest('button'); if (!button) return;
+    const card = button.closest('.gb-edit-card');
+    if (button.hasAttribute('data-remove')) {
+      if (card.dataset.kind === 'new') { const removed = Number(card.dataset.index); files.splice(removed,1); const transfer = new DataTransfer(); files.forEach(file => transfer.items.add(file)); upload.files = transfer.files; editor.querySelectorAll('[data-kind="new"]').forEach(item => item.remove()); files.forEach((file,index) => addCard('new','',URL.createObjectURL(file),index)); }
+      card.remove();
+    } else if (button.dataset.move === 'up' && card.previousElementSibling) editor.insertBefore(card,card.previousElementSibling);
+    else if (button.dataset.move === 'down' && card.nextElementSibling) editor.insertBefore(card.nextElementSibling,card);
+    sync();
+  });
+  form.addEventListener('submit', event => { event.preventDefault(); sync(); error.textContent=''; dialog.showModal(); });
+  document.getElementById('group-account-cancel').addEventListener('click', () => dialog.close());
+  document.getElementById('group-account-continue').addEventListener('click', () => {
+    if (!select.value) { error.textContent='Choose a Facebook account.'; return; }
+    if (!cards().length) { error.textContent='Keep or add at least one photo.'; return; }
+    target.value=select.value; dialog.close(); form.submit();
+  });
+  sync();
+})();
+</script>
+{% endblock %}

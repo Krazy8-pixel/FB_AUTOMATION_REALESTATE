@@ -1,11 +1,29 @@
 """Durable account-local backups of manual templates and confirmed posts."""
 import hashlib
 import shutil
+from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
 from PIL import Image
 from automation import listing_store
 from automation.runtime_paths import data_dir
+
+
+def save_marketplace_backup_copy(account, source):
+    """Add a published Marketplace post to the shared Backup Posts store."""
+    backup = dict(source or {})
+    source_id = str(backup.get('id') or '')
+    backup.update({
+        'id': 'marketplace_' + uuid4().hex[:20],
+        'source_post_id': source_id,
+        'source_deleted': True,
+        'facebook_present': False,
+        'facebook_reposted': False,
+        'manual_template': False,
+        'backup_source_account': account,
+    })
+    listing_store.add_at_top(account, backup)
+    return backup['id']
 
 
 def save_manual_listing(account, payload, *, confirmed=False):
@@ -48,9 +66,63 @@ def save_manual_listing(account, payload, *, confirmed=False):
               'image_errors': [], 'video_errors': [], 'detail_error': '', 'created_at': now,
               'details_imported_at': now, 'url': payload.get('_confirmed_listing_url', '') if confirmed else '', 'edit_url': '', 'clicks': 0, 'clicks_confirmed': confirmed,
               'source_deleted': not confirmed, 'facebook_present': confirmed, 'facebook_reposted': False,
+              'listing_type': 'marketplace_ad' if payload.get('_listing_kind') == 'property' else 'vehicle_ad',
               'manual_template': not confirmed, 'listed_date': datetime.now().date().isoformat() if confirmed else '',
               'facebook_posted_at': now if confirmed else '',
               **{key: details.get(key, '') for key in ('title', 'year', 'make', 'model', 'price')}}
     if not listing_store.update_fields(account, listing_id, record, move_to_top=True):
         listing_store.add_at_top(account, record)
+    if confirmed:
+        save_marketplace_backup_copy(account, record)
+    return listing_id
+
+
+def save_group_post(account, description, image_paths):
+    """Save a successfully published group post in the shared Backup Posts store."""
+    listing_id = 'group_' + datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S') + '_' + uuid4().hex[:10]
+    root = data_dir('manual_backups') / hashlib.sha256(account.encode()).hexdigest()[:24] / listing_id
+    root.mkdir(parents=True, exist_ok=True)
+    photos = []
+    for source_value in (image_paths or [])[:20]:
+        source = Path(source_value)
+        with Image.open(source) as image:
+            width, height = image.size
+            image.verify()
+        name = hashlib.sha256(source.read_bytes()).hexdigest()[:24] + source.suffix.lower()
+        destination = root / name
+        if source.resolve() != destination.resolve():
+            shutil.copy2(source, destination)
+        if not any(photo['name'] == name for photo in photos):
+            photos.append({'name': name, 'path': str(destination.resolve()), 'width': width, 'height': height})
+    if not photos:
+        raise ValueError('At least one valid photo is required for a group post backup.')
+    now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+    local_date = datetime.now().date().isoformat()
+    details = {
+        'title': 'Group post',
+        'description': str(description or ''),
+    }
+    record = {
+        'id': listing_id,
+        'listing_type': 'group_post',
+        'details': details,
+        'downloaded_images': photos,
+        'downloaded_videos': [],
+        'image_errors': [],
+        'video_errors': [],
+        'detail_error': '',
+        'created_at': now,
+        'details_imported_at': now,
+        'url': '',
+        'edit_url': '',
+        'clicks': 0,
+        'clicks_confirmed': False,
+        'source_deleted': True,
+        'facebook_present': False,
+        'facebook_reposted': False,
+        'manual_template': True,
+        'listed_date': local_date,
+        'facebook_posted_at': now,
+    }
+    listing_store.add_at_top(account, record)
     return listing_id

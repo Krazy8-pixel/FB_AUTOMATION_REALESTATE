@@ -15,3 +15,8 @@
 .app-brand-logo { display:block; width:300px; max-width:100%; height:auto; object-fit:contain; border-radius:6px; }
 .app-brand-name { font-size:24px; color:#123d83; }
 @media(max-width:400px) { .app-brand-logo { width:100%; height:auto; }.app-brand-name { font-size:21px; }.topbar .tayyara-wordmark { font-size:15px; }.brand .tayyara-wordmark { font-size:17px; } }
+
+.fbmk-logo { display:block; width:48px; height:48px; border-radius:10px; flex:none; }
+.fbmk-brand-name { display:flex; flex-direction:column; color:#123d83; font-size:21px; font-weight:800; line-height:1.05; letter-spacing:.03em; }
+.fbmk-brand-name span { margin-top:4px; font-size:12px; font-weight:600; letter-spacing:0; }
+.brand .fbmk-logo { width:56px; height:56px; }

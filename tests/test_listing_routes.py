@@ -316,6 +316,43 @@ class ListingRouteTests(unittest.TestCase):
             item.stop()
         self.folder.cleanup()
 
+    def test_backup_edit_persists_description_and_uploaded_photo(self):
+        import io
+        from PIL import Image
+        listing_store.update_fields('test-account', 'one', {'facebook_present': False})
+        listing_store.save_preferences('test-account', 'one', {'fields': {'description': 'stale', 'price': '200'}, 'image_order': ['second.jpg', 'first.jpg']})
+        image = io.BytesIO()
+        Image.new('RGB', (4, 3), 'blue').save(image, 'PNG')
+        image.seek(0)
+        def folder(*parts):
+            path = self.root.joinpath(*parts)
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        with patch.object(self.routes, 'data_dir', side_effect=folder):
+            response = self.client.post('/backup_listings/one/edit', data={'description': 'Updated', 'photos': (image, 'new.png')})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        record = listing_store.load('test-account')['listings'][0]
+        self.assertEqual(record['details']['description'], 'Updated')
+        self.assertEqual(len(record['downloaded_images']), 3)
+        self.assertTrue(Path(record['downloaded_images'][-1]['path']).exists())
+        self.assertNotIn('description', record['repost_preferences']['fields'])
+        self.assertEqual(record['repost_preferences']['fields']['price'], '200')
+        self.assertEqual(record['repost_preferences']['image_order'][-1], record['downloaded_images'][-1]['name'])
+        self.assertIn('Edit backup', self.client.get('/delete_listings/detail/one').get_data(as_text=True))
+
+    def test_backup_edit_rejects_invalid_photos_without_changing_backup(self):
+        import io
+        listing_store.update_fields('test-account', 'one', {'facebook_present': False})
+        before = listing_store.load('test-account')['listings'][0]
+        def folder(*parts):
+            path = self.root.joinpath(*parts)
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        with patch.object(self.routes, 'data_dir', side_effect=folder):
+            response = self.client.post('/backup_listings/one/edit', data={'description': 'Changed', 'photos': (io.BytesIO(b'bad'), 'bad.png')})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(listing_store.load('test-account')['listings'][0], before)
+
     def test_cleanup_includes_video_uploads_and_keeps_session_data(self):
         def folder(*parts):
             path = self.root.joinpath(*parts)

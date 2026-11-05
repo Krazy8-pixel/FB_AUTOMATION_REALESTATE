@@ -1,24 +1,23 @@
 {% extends 'base.html' %}
 {% from '_listing_storage_badges.html' import storage_badges %}
-{% from '_marketplace_colors.html' import color_options %}
 {% block title %}Listing details{% endblock %}
 {% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/listing_detail.css') }}">{% endblock %}
 {% block content %}
 {% set source = listing.details|default({}, true) %}
 {% set photos = listing.downloaded_images|default([], true) %}
-{% set labels = {'queued':'Queued','pending':'Scheduled','reading':'Preparing repost','posting':'Reposting','deleting':'Deleting original listing','done':'Reposted','failed':'Repost failed','facebook_deleting':'Deleting from Facebook'} %}
+{% set labels = {'queued':'Queued','pending':'Scheduled','reading':'Preparing post','posting':'Posting','deleting':'Deleting listing','done':'Posted','failed':'Post failed','facebook_deleting':'Deleting from Facebook'} %}
 {% set backup_record = listing.facebook_present is sameas false or (listing.source_deleted and not listing.facebook_reposted) %}
-<div class="listing-detail" data-account="{{ active_account }}" data-listing-id="{{ listing.id }}" data-save-url="{{ url_for('web.listing_detail', listing_id=listing.id) }}" data-repost-url="{{ url_for('web.delete_listings_repost') }}" data-delete-url="{{ url_for('web.delete_listings_delete') }}" data-listings-url="{{ url_for('web.backup_listings_page' if backup_record else 'web.delete_listings_page') }}" data-status-url="{{ url_for('web.delete_listings_data') }}" data-missing-colors="{{ 'true' if not (source.get('exterior_color') or '')|trim or not (source.get('interior_color') or '')|trim else 'false' }}">
+{% set property_backup = backup_record %}
+<div class="listing-detail" data-account="{{ active_account }}" data-listing-id="{{ listing.id }}" data-save-url="{{ url_for('web.listing_detail', listing_id=listing.id) }}" data-cross-url="{{ url_for('web.cross_post_listing') }}" data-delete-url="{{ url_for('web.delete_listings_delete') }}" data-listings-url="{{ url_for('web.backup_listings_page' if backup_record else 'web.delete_listings_page') }}" data-status-url="{{ url_for('web.delete_listings_data') }}" data-image-order='{{ photos|map(attribute="name")|list|tojson }}' data-property-fields='{{ {"title":source.title or "", "price":source.price or listing.price or "", "location":source.location or "", "description":source.description or ""}|tojson }}'>
   <nav class="ld-navigation" aria-label="Listing navigation"><a class="ld-back" href="{{ url_for('web.backup_listings_page' if backup_record else 'web.delete_listings_page') }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 5-7 7 7 7M5 12h14"/></svg><span>{{ 'Backup Posts' if backup_record else 'Facebook listings' }}</span></a><span class="ld-navigation-label">{{ 'Backup Posts' if backup_record else 'Manage listings' }} / Details</span></nav>
   <header class="ld-header">
-    <div class="ld-title-block"><span class="ld-eyebrow">LISTING DETAILS</span><h1>{{ source.title or (listing.year ~ ' ' ~ listing.make ~ ' ' ~ listing.model) }}</h1>
-      <div class="ld-meta"><strong>{{ source.price or listing.price or 'Price unavailable' }}</strong><span>{{ listing.clicks|default(0) }} clicks</span><span>{{ ('Listed on ' ~ listing.listed_date) if listing.listed_date else 'Date unavailable' }}</span></div>
+    <div class="ld-title-block"><span class="ld-eyebrow">MARKETPLACE AD</span><h1>{{ source.title or 'Untitled property listing' }}</h1>
+      <div class="ld-meta"><strong>{{ source.price or listing.price or 'Price unavailable' }}</strong>{% if not backup_record %}<span>{{ listing.clicks|default(0) }} clicks</span>{% endif %}<span>{{ ('Listed on ' ~ listing.listed_date) if listing.listed_date else 'Date unavailable' }}</span></div>
       {{ storage_badges(listing, detail=true) }}
     </div>
-    <div class="ld-header-actions"><span id="listing-status" class="ld-badge" {% if not labels.get(repost_status) %}hidden{% endif %}>{{ labels.get(repost_status, '') }}</span><button class="ld-btn ld-primary" id="start-repost" type="button" {% if busy or not source or not photos %}disabled{% endif %}>Repost listing</button><button class="ld-btn ld-delete" id="start-delete" type="button" aria-expanded="false" aria-controls="delete-options" {% if busy %}disabled{% endif %}>{{ 'Deleting…' if repost_status == 'facebook_deleting' else 'Delete listing' }}</button></div>
-    <button class="ld-btn ld-primary" id="start-cross-post" type="button" {% if busy or not source or not photos or accounts|length < 2 %}disabled{% endif %}>Post on Other accounts</button>
+    <div class="ld-header-actions">{% if backup_record %}<button class="ld-btn ld-secondary" type="button" data-backup-edit-open {% if busy %}disabled{% endif %}>Edit backup</button>{% endif %}<span id="listing-status" class="ld-badge" {% if not labels.get(repost_status) %}hidden{% endif %}>{{ labels.get(repost_status, '') }}</span><button class="ld-btn ld-delete" id="start-delete" type="button" aria-expanded="false" aria-controls="delete-options" {% if busy or property_backup %}disabled{% endif %} {% if property_backup %}hidden{% endif %}>Delete listing</button><button class="ld-btn ld-primary" id="start-cross-post" type="button" data-property-backup="{{ 'true' if property_backup else 'false' }}" {% if busy or not source or not photos or accounts|length < 2 %}disabled{% endif %}>Post on Other accounts</button></div>
   </header>
-  <section id="delete-options" class="ld-panel ld-delete-options" hidden aria-labelledby="delete-options-title">
+  <section id="delete-options" class="ld-panel ld-delete-options" hidden aria-labelledby="delete-options-title" {% if property_backup %}hidden{% endif %}>
     <div class="ld-section-heading"><h2 id="delete-options-title">Where should this listing be deleted?</h2><button id="cancel-delete" class="ld-btn ld-secondary" type="button">Cancel</button></div>
     <div class="ld-delete-choices">
       <button type="button" data-delete-target="facebook"><strong>Delete from Facebook</strong><span>Keep the saved details and photos as a backup.</span></button>
@@ -44,6 +43,7 @@
   </section>
   {% endif %}
   {% if listing.video_errors %}<p class="ld-note">Some optional videos could not be backed up. Photos and listing details remain available.</p>{% endif %}
+  {% if backup_record %}{% include "_backup_edit.html" %}{% endif %}
   <div id="listing-read-view" class="ld-layout">
     <section class="ld-panel ld-gallery"><div class="ld-section-heading"><h2>Photos</h2><span>{{ photos|length }} saved</span></div>
       {% if photos %}
@@ -52,7 +52,7 @@
       <p class="ld-note">Original downloaded photos &middot; {{ photos[0].width }} &times; {{ photos[0].height }} pixels</p>
       {% else %}<div class="ld-photo-empty">No saved photos yet.<br>Import listings to download them.</div>{% endif %}
     </section>
-    <section class="ld-panel ld-information"><div class="ld-section-heading"><h2>Vehicle information</h2><button id="edit-listing" class="ld-btn ld-secondary" type="button" {% if busy %}disabled{% endif %}>Edit details</button></div>
+    <section class="ld-panel ld-information"><div class="ld-section-heading"><h2>Marketplace ad information</h2><button id="edit-listing" class="ld-btn ld-secondary" type="button" {% if busy %}disabled{% endif %}>Edit details</button></div>
       <dl class="ld-info-grid">{% for field in fields if field not in ['title','description'] %}
       {% set state = source.get('field_states', {}).get(field) %}
       <div><dt>{{ field|replace('_',' ')|title }}</dt><dd>{% if source.get(field) %}{{ source.get(field) }}{% elif state == 'unavailable' %}<span class="ld-unset">Could not read from Facebook</span>{% elif state == 'empty' %}<span class="ld-unset">Empty on Facebook</span>{% elif state == 'disabled' %}<span class="ld-unset">Disabled on Facebook</span>{% else %}<span class="ld-unset">Not imported</span>{% endif %}</dd></div>
@@ -72,38 +72,12 @@
     {% endfor %}
     </div><div class="ld-submit-row"><button class="ld-btn ld-primary" type="submit">Save details</button></div>
   </form>
-  <form data-posting-timing id="repost-form" data-ajax="true" hidden>
-    <div class="ld-workflow-heading"><div><span class="ld-eyebrow">PREPARE YOUR REPOST</span><h2>Review details, photos and timing</h2><p>These changes apply to the new listing. Your imported details stay saved.</p></div><button id="cancel-repost" type="button" class="ld-btn ld-secondary">Cancel</button></div>
-    <fieldset id="repost-fields" class="ld-fieldset">
-      <section id="cross-post-accounts" class="ld-panel" hidden data-url="{{ url_for('web.cross_post_listing') }}">
-        <div class="ld-section-heading"><h2>Choose other accounts</h2><button id="cross-select-all" type="button" class="ld-btn ld-secondary">{{ 'Select first 19' if accounts|length > 20 else 'Select all' }}</button></div>
-        <p class="ld-note">Choose up to 19 accounts. Posts run one at a time; the next account starts after the previous attempt finishes.</p>
-        <div class="ld-cross-accounts">{% for account in accounts if account != active_account %}<label><input type="checkbox" data-cross-account value="{{ account }}"> {{ account }}</label>{% endfor %}</div>
-      </section>
-      <section class="ld-panel"><div class="ld-section-heading"><h2><span class="ld-step">1</span> Listing details</h2></div><p class="ld-note">Review the listing before posting. Both colors are required.</p><div class="ld-edit-grid">
-      {% set select_options = {'vehicle_type':['Car','Other'], 'body_style':['Convertible','Coupe','Hatchback','Minivan','Pickup truck','Sedan','Station wagon','SUV','Van','Other'], 'vehicle_condition':['Excellent','Very good','Good','Fair','Poor'], 'fuel_type':['Gasoline','Petrol','Diesel','Electric','Hybrid','Flex','Plug-in hybrid','Other'], 'transmission':['Automatic transmission','Manual transmission']} %}
-      {% for field in fields %}{% set value = listing.repost_preferences.get('fields', {}).get(field, source.get(field, '')) %}
-        <label class="ld-field{% if field == 'description' %} ld-wide{% endif %}"><span>{{ 'Body shape' if field == 'body_style' else ('VIN' if field == 'vin' else field|replace('_',' ')|title) }}{{ ' *' if field in required_fields or field in ['exterior_color','interior_color'] else ' (optional)' }}</span>
-        {% if field == 'description' %}<textarea name="{{ field }}" rows="5" required>{{ value }}</textarea>
-        {% elif field in ['exterior_color', 'interior_color'] %}<select name="{{ field }}" required>{{ color_options(value) }}</select>
-        {% elif field in select_options %}<select name="{{ field }}" {% if field in required_fields %}required{% endif %}><option value="">Select {{ field|replace('_',' ') }}</option>{% if value and value not in select_options[field] %}<option value="{{ value }}" selected>{{ value }}</option>{% endif %}{% for option in select_options[field] %}<option value="{{ option }}" {% if value == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select>
-        {% elif field == 'clean_title' %}<select name="{{ field }}"><option value="" {% if not value %}selected{% endif %}>Not specified</option><option value="Yes" {% if value == 'Yes' %}selected{% endif %}>Yes</option><option value="No" {% if value == 'No' %}selected{% endif %}>No</option></select>
-        {% else %}<input name="{{ field }}" value="{{ value }}" {% if field in required_fields %}required{% endif %}>{% endif %}</label>
-      {% endfor %}</div></section>
-      <section class="ld-panel"><div class="ld-section-heading"><h2><span class="ld-step">2</span> Photo order</h2><span>First photo becomes the cover</span></div>
-        <p id="photo-order-help" class="ld-photo-help">Drag photos to reorder them. On touch screens, use the grip in the corner. You can also use the buttons below.</p>
-        <div id="photo-order" class="ld-photo-order">
-        {% set order = listing.repost_preferences.get('image_order') or photos|map(attribute='name')|list %}
-        {% for name in order %}{% for photo in photos if photo.name == name %}<div data-photo="{{ name }}" class="ld-order-card"><div class="ld-order-image" draggable="true"><img src="{{ url_for('web.listing_photo', listing_id=listing.id, name=name) }}" alt="Repost photo" loading="lazy" draggable="false"><span class="ld-order-label"></span><button class="ld-drag-handle" type="button" aria-label="Drag photo to reorder" aria-describedby="photo-order-help"><svg viewBox="0 0 16 20" aria-hidden="true"><circle cx="5" cy="4" r="1.5"/><circle cx="11" cy="4" r="1.5"/><circle cx="5" cy="10" r="1.5"/><circle cx="11" cy="10" r="1.5"/><circle cx="5" cy="16" r="1.5"/><circle cx="11" cy="16" r="1.5"/></svg></button></div><div class="ld-order-actions"><button type="button" data-move="first">Make cover</button><button type="button" data-move="up" aria-label="Move photo earlier">&larr;</button><button type="button" data-move="down" aria-label="Move photo later">&rarr;</button></div></div>{% endfor %}{% endfor %}
-        </div>
-      </section>
-      <section class="ld-panel"><div class="ld-section-heading"><h2><span class="ld-step">3</span> <span id="posting-timing-label">Repost timing</span></h2></div>
-        <div class="ld-timing-options"><label><input type="radio" name="post_mode" value="now" checked> Repost now</label><label><input type="radio" name="post_mode" value="schedule"> Schedule for later</label></div>
-        <div id="schedule-fields" class="ld-delay-fields" hidden><label class="ld-field"><span>Delay</span><input id="repost-delay-value" type="number" min="1" max="59" step="1" value="1"></label><label class="ld-field"><span>Unit</span><select id="repost-delay-unit"><option value="minutes">Minutes</option><option value="hours">Hours</option><option value="days">Days</option></select></label></div>
-        <div class="ld-submit-row"><p id="posting-workflow-help">The original Facebook listing is deleted first, then the new listing is posted. Your saved backup is kept, including if posting fails.</p><button id="confirm-repost" type="submit" class="ld-btn ld-primary">Repost now</button></div>
-      </section>
-    </fieldset>
-  </form>
+  <dialog id="property-cross-dialog" class="ld-cross-dialog">
+    <form method="dialog" class="ld-cross-dialog-head"><div><span class="ld-eyebrow">REAL ESTATE POSTING</span><h2>Choose accounts</h2><p>Select where this property ad should be posted.</p></div><button class="ld-btn ld-secondary" aria-label="Close">×</button></form>
+    <div class="ld-cross-account-list">{% for account in accounts if account != active_account %}<label><input type="checkbox" value="{{ account }}"> <span>{{ account }}</span></label>{% endfor %}</div>
+    <p id="property-cross-message" class="ld-feedback" role="status" aria-live="polite"></p>
+    <div class="ld-cross-dialog-actions"><button type="button" class="ld-btn ld-secondary" data-cross-cancel>Cancel</button><button type="button" class="ld-btn ld-primary" id="property-cross-submit">Post ad</button></div>
+  </dialog>
 </div>
 {% endblock %}
 {% block extra_js %}<script src="{{ url_for('static', filename='js/listing_detail.js') }}" defer></script>{% endblock %}

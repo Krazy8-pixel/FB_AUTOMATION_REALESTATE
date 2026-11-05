@@ -1,6 +1,7 @@
 """Thread-safe, bounded mirror of application stdout and stderr."""
 from collections import deque
 import logging
+import re
 import sys
 import threading
 from logging.handlers import RotatingFileHandler
@@ -40,7 +41,7 @@ def export_text():
     from datetime import datetime, timezone
     from automation.diagnostics import _readable_summary
     with _lock:
-        parts = ['Tayyara Motors diagnostic report\n',
+        parts = ['Real Estate Automation diagnostic report\n',
                  f'Exported (UTC): {datetime.now(timezone.utc).isoformat()}\n\n']
         history = []
         if _disk_handler is not None:
@@ -65,6 +66,12 @@ def export_text():
         except OSError:
             pass
         detailed = ''.join(history)
+        # Keep group import out of the real-estate report while preserving
+        # other group-related activity such as publishing posts to groups.
+        detailed = re.sub(
+            r'^.*(?:\[CHECK\]\s+\S+\s+GROUP_IMPORT(?:_[A-Z_]+)?\s+\S+\s+\{.*\}|\[Groups\]\[(?:Info|BuySell)\].*)(?:\r?\n|$)',
+            '', detailed, flags=re.MULTILINE,
+        )
         parts.append(_readable_summary(detailed))
         parts.extend(['DETAILED ACTIVITY LOG\n',
                       'The lines below show recorded steps and messages in time order. Search for FAILED, STOPPED, REVIEW, or an account/listing name to investigate.\n\n',

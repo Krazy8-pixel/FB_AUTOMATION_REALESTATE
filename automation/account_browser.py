@@ -17,6 +17,8 @@ _lock = threading.RLock()
 _account = _account_lock = _chrome_hwnd = None
 _generation = 0
 _needs_focus = False
+_mobile_driver = None
+_mobile_metrics = None
 user32 = ctypes.windll.user32 if os.name == 'nt' else None
 kernel32 = ctypes.windll.kernel32 if os.name == 'nt' else None
 gdi32 = ctypes.windll.gdi32 if os.name == 'nt' else None
@@ -40,6 +42,8 @@ if user32:
                                    ctypes.c_int, ctypes.c_int, wintypes.UINT]
     user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
     user32.GetClientRect.restype = wintypes.BOOL
+    user32.EnumChildWindows.argtypes = [wintypes.HWND, ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM), wintypes.LPARAM]
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     user32.SetFocus.argtypes = [wintypes.HWND]
     user32.SetFocus.restype = wintypes.HWND
     user32.SetForegroundWindow.argtypes = [wintypes.HWND]
@@ -55,6 +59,23 @@ if user32:
     kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 
 
+def _chrome_content_window(hwnd):
+    """Find Chrome's keyboard-receiving content widget inside the embedded window."""
+    found = []
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    @callback_type
+    def visit(child, _):
+        name = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(child, name, len(name))
+        if name.value == 'Chrome_RenderWidgetHostHWND' and user32.IsWindowVisible(child):
+            found.append(child)
+        return True
+
+    user32.EnumChildWindows(hwnd, visit, 0)
+    return found[-1] if found else hwnd
+
+
 def _focus_browser(hwnd, host):
     """Connect the request thread to Chrome's input queue before focusing it."""
     current = kernel32.GetCurrentThreadId()
@@ -66,7 +87,7 @@ def _focus_browser(hwnd, host):
             if target and target != current and user32.AttachThreadInput(current, target, True):
                 attached.append(target)
         user32.SetForegroundWindow(host)
-        user32.SetFocus(hwnd)
+        user32.SetFocus(_chrome_content_window(hwnd))
     finally:
         for target in reversed(attached):
             user32.AttachThreadInput(current, target, False)
@@ -135,7 +156,7 @@ def _watch(account, generation):
 
 def status():
     with _lock:
-        return {'account': _account, 'open': _account is not None}
+        return {'account': _account, 'open': _account is not None, 'mobile': _mobile_driver is not None}
 
 
 def hide():
@@ -146,13 +167,16 @@ def hide():
 
 
 def stop(*, force=False):
-    global _account, _account_lock, _chrome_hwnd, _generation, _needs_focus
+    global _account, _account_lock, _chrome_hwnd, _generation, _needs_focus, _mobile_driver, _mobile_metrics
     with _lock:
         if _account is None:
             return status()
         if not force and active_tasks(_account):
             raise RuntimeError('This account has active automation. Wait for it to finish.')
         account, lock = _account, _account_lock
+        if _mobile_driver:
+            cdp_login._detach(_mobile_driver)
+            _mobile_driver = None
         _account = _account_lock = _chrome_hwnd = None
         _needs_focus = False
         _generation += 1
@@ -208,7 +232,7 @@ def open_account(account):
                 time.sleep(0.2)
             if not hwnd:
                 raise RuntimeError('Chrome did not create an account window.')
-            host = user32.FindWindowW(None, 'Tayyara Motors')
+            host = user32.FindWindowW(None, 'FBMK Automation Realestate')
             if not host:
                 raise RuntimeError('The desktop app window is not available.')
             user32.ShowWindow(hwnd, SW_HIDE)
@@ -230,12 +254,138 @@ def open_account(account):
             raise
 
 
+
+MOBILE_POSTING_URL = 'https://m.facebook.com/marketplace/create/'
+MOBILE_USER_AGENT = ('Mozilla/5.0 (Linux; Android 14; Pixel 9) '
+                     'AppleWebKit/537.36 (KHTML, like Gecko) '
+                     'Chrome/131.0.0.0 Mobile Safari/537.36')
+
+GROUP_POSTS_URL = ('https://www.facebook.com/61582828106692/allactivity?'
+                   'activity_history=false&category_key=GROUPPOSTS&manage_mode=false&'
+                   'should_load_landing_page=false')
+MARKETPLACE_ADS_URL = 'https://www.facebook.com/marketplace/you/selling'
+FACEBOOK_HOME_URL = 'https://www.facebook.com/'
+
+
+def _navigate_desktop_page(account, url):
+    """Navigate the selected account's embedded Chrome to a Facebook page."""
+    global _mobile_driver, _needs_focus, _mobile_metrics
+    with _lock:
+        open_account(account)
+        meta = cdp_login.get_cdp_account(account)
+        driver = _mobile_driver
+        if driver:
+            try:
+                driver.execute_cdp_cmd('Emulation.clearDeviceMetricsOverride', {})
+                driver.execute_cdp_cmd('Emulation.setUserAgentOverride', {'userAgent': ''})
+                driver.execute_cdp_cmd('Emulation.setTouchEmulationEnabled', {'enabled': False})
+            finally:
+                cdp_login._detach(driver)
+                _mobile_driver = None
+                _mobile_metrics = None
+            driver = None
+        if not driver:
+            driver = cdp_login._attach(meta['port'])
+        try:
+            driver.execute_cdp_cmd('Page.navigate', {'url': url})
+            _needs_focus = True
+        finally:
+            cdp_login._detach(driver)
+        return status()
+
+
+def open_group_posts_page(account):
+    return _navigate_desktop_page(account, GROUP_POSTS_URL)
+
+
+def open_marketplace_ads_page(account):
+    return _navigate_desktop_page(account, MARKETPLACE_ADS_URL)
+
+
+def return_home():
+    """Stop the current Facebook destination by returning the open browser home."""
+    global _mobile_driver, _needs_focus, _mobile_metrics
+    with _lock:
+        if not _account:
+            return status()
+        meta = cdp_login.get_cdp_account(_account)
+        driver = _mobile_driver
+        if driver:
+            try:
+                driver.execute_cdp_cmd('Emulation.clearDeviceMetricsOverride', {})
+                driver.execute_cdp_cmd('Emulation.setUserAgentOverride', {'userAgent': ''})
+                driver.execute_cdp_cmd('Emulation.setTouchEmulationEnabled', {'enabled': False})
+            finally:
+                cdp_login._detach(driver)
+                _mobile_driver = None
+                _mobile_metrics = None
+            driver = None
+        if meta and cdp_login._port_open(meta.get('port')):
+            driver = cdp_login._attach(meta['port'])
+            try:
+                driver.execute_cdp_cmd('Page.navigate', {'url': FACEBOOK_HOME_URL})
+                _needs_focus = True
+            finally:
+                cdp_login._detach(driver)
+        return status()
+
+
+def open_posting_page(account):
+    """Open the selected account's Marketplace creation page in mobile emulation."""
+    global _mobile_driver, _needs_focus, _mobile_metrics
+    with _lock:
+        open_account(account)
+        meta = cdp_login.get_cdp_account(account)
+        driver = _mobile_driver or cdp_login._attach(meta['port'])
+        try:
+            driver.execute_cdp_cmd('Emulation.setDeviceMetricsOverride', {
+                'width': 412, 'height': 915, 'deviceScaleFactor': 2.625, 'mobile': True,
+            })
+            driver.execute_cdp_cmd('Emulation.setUserAgentOverride', {
+                'userAgent': MOBILE_USER_AGENT, 'platform': 'Android',
+            })
+            driver.execute_cdp_cmd('Emulation.setTouchEmulationEnabled', {'enabled': True})
+            driver.execute_cdp_cmd('Page.navigate', {'url': MOBILE_POSTING_URL})
+            _mobile_driver = driver
+            _mobile_metrics = (412, 915)
+            _needs_focus = True
+        except Exception:
+            try:
+                driver.execute_cdp_cmd('Emulation.clearDeviceMetricsOverride', {})
+                driver.execute_cdp_cmd('Emulation.setUserAgentOverride', {'userAgent': ''})
+                driver.execute_cdp_cmd('Emulation.setTouchEmulationEnabled', {'enabled': False})
+            except Exception:
+                pass
+            cdp_login._detach(driver)
+            _mobile_driver = None
+            _mobile_metrics = None
+            raise
+        return status()
+
+
+def desktop_view():
+    global _mobile_driver, _needs_focus, _mobile_metrics
+    with _lock:
+        if _mobile_driver:
+            driver = _mobile_driver
+            try:
+                driver.execute_cdp_cmd('Emulation.clearDeviceMetricsOverride', {})
+                driver.execute_cdp_cmd('Emulation.setUserAgentOverride', {'userAgent': ''})
+                driver.execute_cdp_cmd('Emulation.setTouchEmulationEnabled', {'enabled': False})
+                driver.execute_cdp_cmd('Page.navigate', {'url': 'https://www.facebook.com/'})
+                _needs_focus = True
+            finally:
+                cdp_login._detach(driver)
+                _mobile_driver = None
+                _mobile_metrics = None
+        return status()
+
 def layout(x, y, width, height, viewport_width=None, viewport_height=None):
-    global _needs_focus
+    global _needs_focus, _mobile_metrics
     with _lock:
         if not _chrome_hwnd or not user32.IsWindow(_chrome_hwnd):
             return status()
-        host = user32.FindWindowW(None, 'Tayyara Motors')
+        host = user32.FindWindowW(None, 'FBMK Automation Realestate')
         client = wintypes.RECT()
         if not host or not user32.GetClientRect(host, ctypes.byref(client)):
             raise RuntimeError('The app window is not available for browser sizing.')
@@ -251,6 +401,18 @@ def layout(x, y, width, height, viewport_width=None, viewport_height=None):
         top = max(0, min(client_height - 1, int(float(y) * scale_y)))
         wide = max(1, min(client_width - left, int(float(width) * scale_x)))
         high = max(1, min(client_height - top, int(float(height) * scale_y)))
+        # Match the emulated screen to the visible browser area. A fixed phone
+        # height places Facebook's fixed bottom controls below the clipped window.
+        if _mobile_driver:
+            mobile_width = max(1, min(412, round(float(width))))
+            mobile_height = max(1, round(float(height)))
+            metrics = (mobile_width, mobile_height)
+            if metrics != _mobile_metrics:
+                _mobile_driver.execute_cdp_cmd('Emulation.setDeviceMetricsOverride', {
+                    'width': mobile_width, 'height': mobile_height,
+                    'deviceScaleFactor': 2.625, 'mobile': True,
+                })
+                _mobile_metrics = metrics
         # Chrome app windows paint their own title strip and dark outer frame
         # inside the child window. Crop those pixels with a window region.
         edge_x = max(1, round(10 * scale_x))

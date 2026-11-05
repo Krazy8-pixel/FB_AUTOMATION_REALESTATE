@@ -66,7 +66,7 @@ def main():
     thread.start()
     port = server.effective_port
     shutting_down = threading.Event()
-    window = webview.create_window('FB Automation Real Estate', f'http://127.0.0.1:{port}/', width=1380, height=900, min_size=(390, 600), hidden=args.background)
+    window = webview.create_window('FBMK Automation Realestate', f'http://127.0.0.1:{port}/', width=1380, height=900, min_size=(390, 600), hidden=args.background)
 
     def show(icon=None, item=None):
         set_window_open(True)
@@ -101,7 +101,7 @@ def main():
         return True
 
     window.events.closing += closing
-    tray = pystray.Icon('FBAutomationRealEstate', Image.open(resource_root() / 'assets/app-logo.png'), 'FB Automation Real Estate — background sync', menu=pystray.Menu(pystray.MenuItem('Open FB Automation Real Estate', show, default=True), pystray.MenuItem('Exit App', lambda icon, item: quit_app(icon, item))))
+    tray = pystray.Icon('FBAutomationRealEstate', Image.open(resource_root() / 'assets/app-logo.png'), 'FBMK Automation Realestate — background sync', menu=pystray.Menu(pystray.MenuItem('Open FBMK Automation Realestate', show, default=True), pystray.MenuItem('Exit App', lambda icon, item: quit_app(icon, item))))
     tray.run_detached()
     app_updates.exit_callback = lambda: quit_app(updating=True)
 
@@ -149,5 +149,5 @@ if __name__ == '__main__':
         import traceback
         traceback.print_exc()
         if '--smoke-test' not in sys.argv and '--driver-smoke-test' not in sys.argv:
-            ctypes.windll.user32.MessageBoxW(None, str(exc), 'FB Automation Real Estate startup error', 0x10)
+            ctypes.windll.user32.MessageBoxW(None, str(exc), 'FBMK Automation Realestate startup error', 0x10)
         raise

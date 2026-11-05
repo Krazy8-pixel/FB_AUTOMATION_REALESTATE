@@ -17,6 +17,8 @@ def _readable_summary(text):
         if not match:
             continue
         timestamp, action, status, raw = match.groups()
+        if action.startswith('GROUP_IMPORT'):
+            continue
         try:
             details = json.loads(raw)
         except (TypeError, ValueError):
@@ -25,13 +27,15 @@ def _readable_summary(text):
 
     if not events:
         return ('PLAIN-LANGUAGE SUMMARY\n'
-                'No structured activity markers were found. The detailed log may still contain useful information.\n\n')
+                'No real-estate workflow activity markers were found in the retained report history. '
+                'The detailed log may still contain useful output.\n\n')
 
     counts = {}
     passed_statuses = {'FINISHED', 'POSTED', 'DELETED', 'SAVED', 'COMPLETED', 'HEALTHY',
                        'CONFIRMED_BY_UI', 'PUBLISH_CONFIRMED'}
     issue_statuses = {'STOPPED', 'FAILED', 'RETURNED_FALSE', 'REVIEW', 'CLICK_FAILED', 'SKIPPED',
-                      'EXPIRED', 'FAILED_TO_START', 'TIMED_OUT', 'CANCELLED', 'NOT_FOUND'}
+                      'EXPIRED', 'FAILED_TO_START', 'TIMED_OUT', 'CANCELLED', 'NOT_FOUND',
+                      'BROWSER_CLOSE_UNVERIFIED'}
     passed_count = sum(1 for _, _, status, _ in events if status in passed_statuses)
     issue_count = sum(1 for _, _, status, _ in events if status in issue_statuses)
     field_counts = {'SUCCESS': 0, 'FAILED': 0, 'SKIPPED': 0}
@@ -66,17 +70,20 @@ def _readable_summary(text):
     important = []
     for (action, status), count in sorted(counts.items()):
         if status in {'STOPPED', 'FAILED', 'RETURNED_FALSE', 'REVIEW', 'CLICK_FAILED', 'SKIPPED', 'EXPIRED',
-                      'FAILED_TO_START', 'TIMED_OUT', 'CANCELLED'}:
+                      'FAILED_TO_START', 'TIMED_OUT', 'CANCELLED', 'BROWSER_CLOSE_UNVERIFIED'}:
             important.append((action, status, count))
     if important:
         lines.append('Items to review:')
         action_names = {
             'POST': 'Listing post', 'IMPORT': 'Listing import',
             'IMPORT_LISTING': 'Imported listing', 'CROSS_POST': 'Cross-post',
+            'PROPERTY_POST': 'Property post', 'PROPERTY_LOCATION': 'Property location',
+            'PROPERTY_MEDIA': 'Property photos', 'PROPERTY_BACKUP_EDIT': 'Property backup edit',
+            'PROPERTY_BACKUP': 'Property backup',
             'REPOST': 'Repost', 'DELETE_LISTINGS': 'Facebook deletion',
             'DELETE_LISTING': 'Facebook listing deletion',
             'REFRESH_CLICKS': 'Click-count refresh', 'PUBLISH': 'Publish button',
-            'GROUP_IMPORT': 'Group import', 'GROUP_ADD_BY_LINK': 'Add group by link',
+            'GROUP_ADD_BY_LINK': 'Add group by link',
             'GROUP_POST': 'Post to groups', 'GROUP_POST_ITEM': 'Individual group post',
             'SESSION_CHECK': 'Account session check', 'SESSION_CHECK_ACCOUNT': 'Account session',
             'FACEBOOK_LOGIN': 'Facebook login', 'CDP_LOGIN': 'Facebook account login',
@@ -94,6 +101,7 @@ def _readable_summary(text):
                 'TIMED_OUT': 'timed out',
                 'CANCELLED': 'was cancelled',
                 'SKIPPED': 'was skipped; see details below',
+                'BROWSER_CLOSE_UNVERIFIED': 'browser closure could not be verified',
             }.get(status, status.lower())
             lines.append(f"  - {action_names.get(action, action.replace('_', ' ').capitalize())}: {count} {label}.")
     else:
@@ -104,18 +112,21 @@ def _readable_summary(text):
 
     problem_events = [event for event in events
                       if event[2] in {'STOPPED', 'FAILED', 'RETURNED_FALSE', 'REVIEW', 'CLICK_FAILED',
-                                      'NOT_FOUND', 'EXPIRED', 'FAILED_TO_START', 'TIMED_OUT', 'CANCELLED', 'SKIPPED'}]
+                                      'NOT_FOUND', 'EXPIRED', 'FAILED_TO_START', 'TIMED_OUT', 'CANCELLED',
+                                      'SKIPPED', 'BROWSER_CLOSE_UNVERIFIED'}]
     if problem_events:
         lines.append('Details for those items:')
         names = {
             'POST': 'Facebook post', 'IMPORT': 'Listing import',
             'IMPORT_LISTING': 'Imported listing', 'CROSS_POST': 'Cross-post',
+            'PROPERTY_POST': 'Property post', 'PROPERTY_LOCATION': 'Property location',
+            'PROPERTY_MEDIA': 'Property photos', 'PROPERTY_BACKUP_EDIT': 'Property backup edit',
+            'PROPERTY_BACKUP': 'Property backup',
             'REPOST': 'Repost', 'DELETE_LISTINGS': 'Facebook deletion',
             'DELETE_LISTING': 'Facebook listing deletion',
             'REFRESH_CLICKS': 'Click-count refresh',
             'REFRESH_CLICKS_LISTING': 'Listing click-count refresh',
             'PUBLISH': 'Publish button',
-            'GROUP_IMPORT': 'Group import', 'GROUP_IMPORT_ITEM': 'Imported group',
             'GROUP_ADD_BY_LINK': 'Add group by link', 'GROUP_POST': 'Post to groups',
             'GROUP_POST_ITEM': 'Group post', 'SESSION_CHECK': 'Account session check',
             'SESSION_CHECK_ACCOUNT': 'Account session', 'FACEBOOK_LOGIN': 'Facebook login',
@@ -150,6 +161,8 @@ def _readable_summary(text):
 
     lines.append('Most recent activity:')
     for timestamp, action, status, details in events[-12:]:
+        if action.startswith('GROUP_IMPORT'):
+            continue
         account = details.get('account') or details.get('target_account') or ''
         title = details.get('title') or ''
         error = details.get('error') or ''

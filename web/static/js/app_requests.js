@@ -9,9 +9,10 @@
     const external = options.signal;
     if (external?.aborted) cancel();
     else external?.addEventListener('abort', cancel, {once:true});
-    const timer = setTimeout(cancel, 15000);
+    const {timeoutMs = 15000, ...fetchOptions} = options;
+    const timer = setTimeout(cancel, timeoutMs);
     try {
-      const response = await nativeFetch(url, {...options, signal:controller.signal});
+      const response = await nativeFetch(url, {...fetchOptions, signal:controller.signal});
       // Include a stalled response body in the deadline, not just its headers.
       await response.clone().arrayBuffer();
       if (response.status === 503) {

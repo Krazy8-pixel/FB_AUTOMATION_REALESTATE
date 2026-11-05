@@ -143,6 +143,33 @@ def save_listing_details(account, listing_id, fields):
         return True
 
 
+def save_backup_content(account, listing_id, description, new_photos):
+    """Update a shared backup and its posting preferences in one transaction."""
+    with connection() as db:
+        owner = _owner(db, account, listing_id)
+        row = db.execute('SELECT data,preferences FROM listings WHERE account=? AND id=?', (owner, str(listing_id))).fetchone()
+        if not row:
+            return False
+        item = json.loads(row[0])
+        if not is_backup(item):
+            return False
+        photos = item.get('downloaded_images') or []
+        if len(photos) + len(new_photos) > 20:
+            raise ValueError('A backup can contain at most 20 photos.')
+        details = item.setdefault('details', {})
+        details['description'] = description
+        details.setdefault('field_states', {})['description'] = 'edited' if description else 'empty'
+        item['downloaded_images'] = photos + new_photos
+        preferences = json.loads(row[1] or '{}')
+        (preferences.get('fields') or {}).pop('description', None)
+        names = [photo['name'] for photo in item['downloaded_images']]
+        order = [name for name in preferences.get('image_order', []) if name in names]
+        preferences['image_order'] = order + [name for name in names if name not in order]
+        db.execute('UPDATE listings SET data=?,preferences=? WHERE account=? AND id=?',
+                   (json.dumps(item, ensure_ascii=False), json.dumps(preferences, ensure_ascii=False), owner, str(listing_id)))
+        return True
+
+
 def update_fields(account, listing_id, changes, *, move_to_top=False):
     """Update one record without replacing another worker's account snapshot."""
     with connection() as db:
@@ -198,6 +225,25 @@ def clear_backups(account):
             if item.get('facebook_present') is False or (item.get('source_deleted') and not item.get('facebook_reposted')):
                 removed += db.execute('DELETE FROM listings WHERE account=? AND id=?', (SHARED_BACKUPS, listing_id)).rowcount
         return removed
+
+
+def clear_backup_category(category):
+    """Clear one category from the shared Backup Posts collection."""
+    category = str(category or '').strip().lower()
+    if category not in {'marketplace_ad', 'group_post'}:
+        raise ValueError('Unsupported backup category.')
+    with connection() as db:
+        if not db.in_transaction:
+            db.execute('BEGIN IMMEDIATE')
+        rows = db.execute('SELECT id,data FROM listings WHERE account=?', (SHARED_BACKUPS,)).fetchall()
+        listing_ids = [str(listing_id) for listing_id, raw in rows
+                       if is_backup(json.loads(raw))
+                       and str(json.loads(raw).get('listing_type') or '').strip().lower() == category]
+        if not listing_ids:
+            return 0
+        db.executemany('DELETE FROM listings WHERE account=? AND id=?',
+                       [(SHARED_BACKUPS, listing_id) for listing_id in listing_ids])
+        return len(listing_ids)
 
 
 def remove_backup(account, listing_id):

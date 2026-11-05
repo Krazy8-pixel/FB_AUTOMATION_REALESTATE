@@ -1,0 +1,153 @@
+{% extends 'base.html' %}
+{% from '_listing_storage_badges.html' import storage_badges %}
+{% block title %}Backup Posts{% endblock %}
+{% block extra_css %}
+<style>
+.backup-page{max-width:1280px;margin:0 auto;padding:30px}.backup-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:24px}.backup-head h1{margin:0;color:#13223a;font-size:30px}.backup-head p{margin:8px 0;color:#64748b}.backup-account{padding:10px 14px;border:1px solid #d9e1ec;background:white;color:#173d77;font-weight:700}.backup-categories{display:grid;gap:24px}.backup-category{padding:20px;border:1px solid #d6dfeb;border-radius:12px;background:#fff;box-shadow:0 3px 12px rgba(15,23,42,.04)}.backup-category-head{display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid #e2e8f0;padding-bottom:14px;margin-bottom:16px}.backup-category-head h2{margin:0;color:#172b4d;font-size:21px}.backup-post-grid{display:grid;gap:12px}.backup-card{display:grid;grid-template-columns:120px minmax(0,1fr) auto;gap:18px;align-items:center;padding:12px;border:1px solid #e2e8f0;background:#fff}.backup-card img{width:120px;height:120px;object-fit:cover;background:#eef2f7}.backup-card-title{font-weight:700;color:#173d77;text-decoration:none}.backup-card-title:hover{text-decoration:underline}.backup-card-price{display:block;margin-top:5px;font-weight:700;color:#111827}.backup-card-meta{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;color:#64748b;font-size:13px}.backup-card-description{margin:8px 0 0;color:#334155;line-height:1.5;white-space:pre-line}.backup-card-actions{display:flex;flex-direction:column;gap:8px}.backup-card-actions a,.backup-post-accounts{display:inline-flex;justify-content:center;align-items:center;min-height:38px;padding:8px 12px;background:#2563eb;color:#fff;text-decoration:none;font-weight:700;border:0;cursor:pointer}.backup-post-accounts:disabled{opacity:.55;cursor:not-allowed}.backup-card-actions .secondary{background:#eef4ff;color:#17418a;border:1px solid #c8d7ef}.backup-empty{padding:18px 0;color:#64748b}.backup-notice{margin-bottom:16px;color:#334155}@media(max-width:700px){.backup-page{padding:18px}.backup-head{flex-direction:column}.backup-card{grid-template-columns:78px minmax(0,1fr);gap:12px}.backup-card img{width:78px;height:78px}.backup-card-actions{grid-column:1/-1;flex-direction:row}.backup-card-actions a{flex:1}}
+
+.backup-select-all-wrap{display:inline-flex;align-items:center;gap:8px;margin-top:9px;color:var(--app-grey-700);font-size:13px;font-weight:600}.backup-select-all-wrap[hidden],.backup-marketplace-check[hidden]{display:none!important}.backup-marketplace-check{margin:0 7px 0 0;cursor:pointer}.backup-card.selection-mode{grid-template-columns:120px minmax(0,1fr) auto}.backup-card.selection-mode>div:nth-child(2)>label{display:flex;align-items:flex-start;gap:8px}.backup-card.selection-mode .backup-card-title{line-height:1.5}.backup-card.selection-mode:has(.backup-marketplace-check:checked){border-color:var(--app-blue);background:#f2f7ff;box-shadow:0 0 0 1px var(--app-blue)}.backup-category-actions .backup-post-accounts{min-width:160px}.backup-post-dialog{width:min(560px,calc(100% - 32px));max-height:calc(100dvh - 36px);box-sizing:border-box;margin:0;padding:26px;border:1px solid var(--app-grey-200);border-top:3px solid var(--app-blue);border-radius:0;background:#fff;color:var(--app-text);box-shadow:0 24px 70px rgba(15,23,42,.28)}.backup-post-dialog[open]{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);overflow:auto}.backup-post-dialog::backdrop{background:rgba(15,23,42,.56);backdrop-filter:blur(2px)}.backup-post-dialog form{margin:0}.backup-dialog-heading{display:flex;justify-content:space-between;gap:18px;margin-bottom:22px}.backup-dialog-heading h2{margin:6px 0 8px;color:var(--app-blue);font-size:22px}.backup-dialog-heading p{max-width:410px;margin:0;color:var(--app-grey-700);font-size:13px;line-height:1.6}.backup-dialog-eyebrow{color:var(--app-grey-400);font-size:11px;font-weight:700;letter-spacing:1.4px}.backup-dialog-close{align-self:flex-start;width:36px;height:36px;border:1px solid var(--app-grey-200);background:#fff;color:var(--app-grey-700);font-size:23px;cursor:pointer}.backup-account-picker{margin:0;padding:0;border:0}.backup-account-picker legend,.backup-delay-picker>label{margin-bottom:10px;color:var(--app-text);font-size:13px;font-weight:700}.backup-account-options{display:grid;gap:8px;max-height:220px;overflow:auto;margin-top:10px;padding:2px}.backup-account-options label{display:flex;align-items:center;gap:10px;min-width:0;padding:11px 12px;border:1px solid var(--app-grey-200);background:#fff;color:var(--app-grey-700);font-size:13px;overflow-wrap:anywhere;cursor:pointer}.backup-account-options label:has(input:checked){border-color:var(--app-blue);background:#f2f7ff;color:var(--app-blue)}.backup-account-options input{width:17px;height:17px;flex:0 0 17px;accent-color:var(--app-blue)}.backup-account-options p{margin:0;color:var(--app-grey-700);font-size:13px}.backup-delay-picker{display:grid;gap:8px;margin-top:20px}.backup-delay-picker>div{display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:10px}.backup-delay-picker input,.backup-delay-picker select{box-sizing:border-box;width:100%;min-height:42px;padding:9px 11px;border:1px solid var(--app-grey-200);background:#fff;color:var(--app-text);font:inherit}.backup-dialog-error{min-height:20px;margin:12px 0 0;color:#a53932;font-size:13px}.backup-dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px}.backup-dialog-actions button{min-height:42px;padding:9px 16px;border:1px solid var(--app-blue);font-size:13px;font-weight:600;cursor:pointer}.backup-dialog-cancel{background:#fff;color:var(--app-grey-700);border-color:var(--app-grey-200)!important}.backup-dialog-submit{background:var(--app-blue);color:#fff}.backup-dialog-submit:hover{background:var(--app-blue-dark)}.backup-dialog-submit:disabled{opacity:.55;cursor:not-allowed}#backup-post-dialog .backup-dialog-close{background:#fff;color:var(--app-grey-700);border-color:var(--app-grey-200)}#backup-post-dialog .backup-dialog-actions .backup-dialog-cancel{background:#fff;color:var(--app-grey-700);border-color:var(--app-grey-200)}#backup-post-dialog .backup-dialog-actions .backup-dialog-submit{background:var(--app-blue);color:#fff;border-color:var(--app-blue)}#backup-post-dialog .backup-dialog-actions .backup-dialog-submit:hover{background:var(--app-blue-dark);border-color:var(--app-blue-dark)}.backup-select-cancel{min-height:40px;padding:8px 12px;border:1px solid var(--app-grey-200);background:#fff;color:var(--app-grey-700);font-size:13px;font-weight:600;cursor:pointer}.backup-select-cancel[hidden]{display:none!important}.content .backup-category-actions .backup-select-cancel{background:#fff;color:var(--app-grey-700);border-color:var(--app-grey-200);box-shadow:none}.content .backup-category-actions .backup-select-cancel:hover{background:var(--app-grey-50);color:var(--app-blue);border-color:var(--app-blue)}
+@media(max-width:700px){.backup-page{padding:18px}.backup-post-dialog{padding:20px}.backup-dialog-actions{flex-direction:column-reverse}.backup-dialog-actions button{width:100%}.backup-delay-picker>div{grid-template-columns:minmax(0,1fr) 120px}.backup-card.selection-mode{grid-template-columns:78px minmax(0,1fr)}}
+</style><style>
+#backup-group-account-dialog[open]{position:fixed;inset:50% auto auto 50%;transform:translate(-50%,-50%);margin:0;max-height:calc(100dvh - 36px);overflow:auto;box-sizing:border-box;box-shadow:0 24px 70px rgba(15,23,42,.24);border-radius:16px;background:#fff}
+#backup-group-account-dialog::backdrop{background:rgba(13,25,43,.48);backdrop-filter:blur(3px)}
+#backup-group-account-dialog h2{margin:0 0 8px;color:#142c4d;font-size:21px}#backup-group-account-dialog p{color:#64748b;line-height:1.5}
+#backup-group-account-dialog button{min-height:40px;padding:0 16px;border:1px solid #d2dce9;border-radius:8px;background:#f7f9fc;color:#294567;font-weight:700;cursor:pointer}
+#backup-group-account-dialog #backup-group-account-continue{border-color:#1769d2;background:#1769d2;color:#fff}
+.backup-card-actions .backup-group-post{display:inline-flex;justify-content:center;align-items:center;min-height:38px;padding:8px 12px;border:1px solid #1a65c7;border-radius:7px;background:#1d6fd1;color:#fff;font:inherit;font-size:13px;font-weight:700;box-shadow:0 2px 5px rgba(18,80,155,.16);cursor:pointer;transition:background .15s,transform .15s}
+.backup-card-actions .backup-group-post:hover{background:#155bb4;transform:translateY(-1px)}
+.backup-page{max-width:1240px;padding:28px 34px}.backup-head{padding:24px;background:var(--app-white);border:1px solid var(--app-grey-200);border-top:3px solid var(--app-blue)}.backup-head h1{color:var(--app-text);font-size:28px}.backup-head p{color:var(--app-grey-700)}.backup-account{border-color:var(--app-grey-200);color:var(--app-blue)}.backup-category{border:1px solid var(--app-grey-200);border-radius:0;box-shadow:0 3px 12px rgba(15,23,42,.04)}.backup-category-head{border-color:var(--app-grey-100)}.backup-category-head h2{color:var(--app-blue)}.backup-card{border-color:var(--app-grey-200);transition:border-color .15s,box-shadow .15s,transform .15s}.backup-card:hover{border-color:var(--app-blue);box-shadow:0 5px 16px rgba(11,61,145,.08);transform:translateY(-1px)}.backup-card img{border-radius:0;background:var(--app-grey-50)}.backup-card-title{color:var(--app-blue)}.backup-card-actions a,.backup-post-accounts,.backup-card-actions .backup-group-post{min-height:40px;padding:8px 14px;border:1px solid var(--app-blue);border-radius:0;background:var(--app-blue);color:#fff;text-decoration:none;font-size:13px;font-weight:600;box-shadow:none;transition:background .15s,border-color .15s}.backup-card-actions a:hover,.backup-post-accounts:hover:not(:disabled),.backup-card-actions .backup-group-post:hover{background:var(--app-blue-dark);border-color:var(--app-blue-dark);transform:none}.backup-card-actions .secondary{background:#fff;color:var(--app-blue);border-color:var(--app-grey-200)}.backup-card-actions .secondary:hover{background:#edf3fc;color:var(--app-blue)}.backup-marketplace-check,#backup-select-all{accent-color:var(--app-blue);width:17px;height:17px;vertical-align:middle}.backup-card-image{display:flex;width:120px;height:120px;align-items:center;justify-content:center;background:var(--app-grey-50);color:var(--app-grey-400);font-size:12px}.backup-clear-button{border-radius:0}.backup-card:focus-within{outline:2px solid var(--app-blue);outline-offset:2px}.backup-category-actions{display:flex;align-items:center;justify-content:flex-end;gap:9px;flex-wrap:wrap}.backup-clear-button{min-height:38px;padding:8px 12px;border:1px solid #d7a2a2;border-radius:7px;background:#fff7f7;color:#9a3c3c;font-size:13px;font-weight:700;cursor:pointer;transition:background .15s,border-color .15s}.backup-clear-button:hover:not(:disabled){background:#ffebeb;border-color:#c77d7d}.backup-clear-button:disabled{opacity:.5;cursor:not-allowed}
+</style>{% endblock %}
+{% block content %}
+{% set marketplace_count = listings|selectattr('listing_type', 'equalto', 'marketplace_ad')|list|length %}
+<main class="backup-page">
+  <header class="backup-head"><div><h1>Backup Posts</h1><p>Saved posts available to reuse on Facebook.</p></div>{% if active_account %}<div class="backup-account">Active account: {{ active_account }}</div>{% endif %}</header>
+  {% if message %}<p class="backup-notice" role="status">{{ message }}</p>{% endif %}
+  {% if not active_account %}<div class="backup-category backup-empty">Select an active account to view shared backups.</div>{% else %}
+  <div class="backup-categories">
+    <section class="backup-category"><div class="backup-category-head"><div><h2>Marketplace Ads</h2><label class="backup-select-all-wrap" hidden><input type="checkbox" id="backup-select-all"> Select all ads</label></div><div class="backup-category-actions"><button type="button" class="backup-post-accounts" id="backup-post-accounts" {% if not marketplace_count or accounts|length < 2 %}disabled{% endif %}>Post to Accounts</button><button type="button" class="backup-select-cancel" id="backup-select-cancel" hidden>Cancel selection</button><button type="button" class="backup-clear-button" data-clear-category="marketplace_ad" {% if not marketplace_count %}disabled{% endif %}>Clear all Marketplace Ads</button></div></div><div class="backup-post-grid" id="backup-marketplace-list">
+      {% for listing in listings if listing.listing_type == 'marketplace_ad' %}
+      {% set details = listing.details or {} %}{% set photos = listing.downloaded_images or [] %}
+      <article class="backup-card" data-marketplace-backup data-id="{{ listing.id }}" data-title="{{ details.get('title') or listing.title or 'Marketplace ad' }}" data-details='{{ details|tojson|forceescape }}' data-image-order='{{ (listing.repost_preferences or {}).get("image_order", photos|map(attribute="name")|list)|tojson|forceescape }}'>
+        {% if photos %}<img src="{{ url_for('web.listing_photo', listing_id=listing.id, name=photos[0].name) }}" alt="" loading="lazy">{% else %}<div class="backup-card-image">No image</div>{% endif %}
+        <div><label><input type="checkbox" class="backup-marketplace-check" value="{{ listing.id }}" aria-label="Select {{ details.get('title') or listing.title or 'Marketplace ad' }}" hidden> <a class="backup-card-title" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">{{ details.get('title') or listing.title or 'Marketplace ad' }}</a></label><span class="backup-card-price">{{ details.get('price') or listing.price or 'Price unavailable' }}</span><div class="backup-card-meta"><span>{{ details.get('location') or 'Location unavailable' }}</span><span>{{ photos|length }} photo(s)</span><span>{{ ('Saved ' ~ listing.listed_date) if listing.listed_date else 'Saved backup' }}</span></div>{% if details.get('description') %}<p class="backup-card-description">{{ details.get('description')|truncate(180) }}</p>{% endif %}{{ storage_badges(listing) }}</div>
+        <div class="backup-card-actions"><a class="backup-view-button" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">View</a></div>
+      </article>
+      {% else %}<p class="backup-empty">No Marketplace Ads saved yet.</p>{% endfor %}
+    </div></section>
+    <section class="backup-category"><div class="backup-category-head"><h2>Group Posts</h2><button type="button" class="backup-clear-button" data-clear-category="group_post" {% if not listings|selectattr('listing_type', 'equalto', 'group_post')|list %}disabled{% endif %}>Clear all Group Posts</button></div><div class="backup-post-grid">
+      {% for listing in listings if listing.listing_type == 'group_post' %}
+      {% set details = listing.details or {} %}{% set photos = listing.downloaded_images or [] %}
+      <article class="backup-card"><div>{% if photos %}<img src="{{ url_for('web.listing_photo', listing_id=listing.id, name=photos[0].name) }}" alt="" loading="lazy">{% else %}<div class="backup-card-image">No image</div>{% endif %}</div>
+        <div><a class="backup-card-title" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">Group post</a><div class="backup-card-meta"><span>{{ photos|length }} photo(s)</span></div><p>{{ details.get('description','')|truncate(180) }}</p>{{ storage_badges(listing) }}</div>
+        <div class="backup-card-actions"><a class="backup-view-button" href="{{ url_for('web.listing_detail', listing_id=listing.id) }}">View</a><button type="button" class="secondary backup-group-post" data-id="{{ listing.id }}">Post to groups</button></div>
+      </article>
+      {% else %}<p class="backup-empty">No Group Posts saved yet.</p>{% endfor %}
+    </div></section>
+  </div>
+  {% endif %}
+</main>
+<dialog id="backup-group-account-dialog" style="width:min(440px,calc(100% - 32px));border:1px solid #cbd5e1;padding:22px;border-radius:12px">
+  <form method="dialog"><h2>Choose posting account</h2><p>The saved description and photos will be loaded into Group Posting. Add your group links there.</p>
+    <label for="backup-group-account">Facebook account</label>
+    <select id="backup-group-account" style="display:block;width:100%;margin:8px 0 18px;padding:10px">{% for account in accounts %}<option value="{{ account }}" {% if account == active_account %}selected{% endif %}>{{ account }}</option>{% endfor %}</select>
+    <p id="backup-group-account-error" role="alert"></p><div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" id="backup-group-account-cancel">Cancel</button><button type="button" id="backup-group-account-continue">Continue</button></div>
+  </form>
+</dialog>
+<dialog id="backup-post-dialog" class="backup-post-dialog" aria-labelledby="backup-post-title">
+  <form method="dialog" id="backup-cross-form">
+    <div class="backup-dialog-heading"><div><span class="backup-dialog-eyebrow">MARKETPLACE ADS</span><h2 id="backup-post-title">Post to Accounts</h2><p>Choose where to publish the selected ads and set the spacing between posts.</p></div><button type="button" class="backup-dialog-close" id="backup-post-close" aria-label="Close">&times;</button></div>
+    <fieldset class="backup-account-picker"><legend>Facebook accounts</legend><div class="backup-account-options">{% for account in accounts if account != active_account %}<label><input type="checkbox" name="backup-target-account" value="{{ account }}"> <span>{{ account }}</span></label>{% else %}<p>No other saved accounts are available.</p>{% endfor %}</div></fieldset>
+    <div class="backup-delay-picker"><label for="backup-delay">Delay between ads</label><div><input id="backup-delay" type="number" min="1" value="1" required><select id="backup-delay-unit" aria-label="Delay unit"><option value="minutes">Minutes</option><option value="hours">Hours</option><option value="days">Days</option></select></div></div>
+    <p id="backup-post-error" class="backup-dialog-error" role="alert" aria-live="polite"></p>
+    <div class="backup-dialog-actions"><button type="button" class="backup-dialog-cancel" id="backup-post-cancel">Cancel</button><button type="submit" class="backup-dialog-submit" id="backup-post-confirm">Post ads</button></div>
+  </form>
+</dialog>
+<script>
+(() => {
+  const groupDialog = document.getElementById('backup-group-account-dialog');
+  const groupAccount = document.getElementById('backup-group-account');
+  const groupError = document.getElementById('backup-group-account-error');
+  const groupContinue = document.getElementById('backup-group-account-continue');
+  const groupButtons = [...document.querySelectorAll('.backup-group-post')];
+  const sourceAccount = {{ active_account|tojson }};
+  document.querySelectorAll('[data-clear-category]').forEach(button => button.addEventListener('click', async () => {
+    const category = button.dataset.clearCategory;
+    const label = category === 'group_post' ? 'all saved Group Posts' : 'all saved Marketplace Ads';
+    if (!window.confirm(`Clear ${label} from the shared backup database? This cannot be undone.`)) return;
+    button.disabled = true;
+    try {
+      const response = await appFetch('{{ url_for("web.backup_listings_clear_category") }}', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({account:sourceAccount,category})});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.message || 'Could not clear this backup category.');
+      window.appNotify ? window.appNotify(data.message, 'success') : window.alert(data.message);
+      window.location.reload();
+    } catch (error) { window.alert(error.message); button.disabled = false; }
+  }));
+  let groupBackupId = null;
+  groupButtons.forEach(button => button.addEventListener('click', () => {
+    groupBackupId = button.dataset.id;
+    groupError.textContent = '';
+    if (!groupAccount.options.length) { groupError.textContent = 'Add an account before posting.'; }
+    groupDialog.showModal();
+  }));
+  document.getElementById('backup-group-account-cancel').addEventListener('click', () => groupDialog.close());
+  groupContinue.addEventListener('click', () => {
+    if (!sourceAccount || !groupAccount.value || !groupBackupId) { groupError.textContent = 'Choose a Facebook account.'; return; }
+    const url = new URL('{{ url_for("web.posting_in_groups_page") }}', window.location.href);
+    url.search = new URLSearchParams({backup_id:groupBackupId,source_account:sourceAccount,account:groupAccount.value}).toString();
+    window.location.assign(url.toString());
+  });
+  const dialog = document.getElementById('backup-post-dialog');
+  const postButton = document.getElementById('backup-post-accounts');
+  const all = document.getElementById('backup-select-all');
+  const cards = [...document.querySelectorAll('[data-marketplace-backup]')];
+  const selectAllWrap = document.querySelector('.backup-select-all-wrap');
+  let selectingAds = false;
+  const setSelectionMode = enabled => { selectingAds = enabled; cards.forEach(card => { card.classList.toggle('selection-mode', enabled); const check = card.querySelector('.backup-marketplace-check'); check.hidden = !enabled; if (!enabled) check.checked = false; }); if (selectAllWrap) selectAllWrap.hidden = !enabled; postButton.textContent = enabled ? 'Continue to Accounts' : 'Post to Accounts'; const cancelSelection = document.getElementById('backup-select-cancel'); if (cancelSelection) cancelSelection.hidden = !enabled; if (!enabled && all) all.checked = false; };
+  const error = document.getElementById('backup-post-error');
+  const confirm = document.getElementById('backup-post-confirm');
+  const delay = document.getElementById('backup-delay');
+  const unit = document.getElementById('backup-delay-unit');
+  const activeAccount = {{ active_account|tojson }};
+  const selected = () => cards.filter(card => card.querySelector('.backup-marketplace-check').checked);
+  cards.forEach(card => { try { card._details = JSON.parse(card.dataset.details || '{}'); card._imageOrder = JSON.parse(card.dataset.imageOrder || '[]'); } catch (_) { card._details = {}; card._imageOrder = []; } });
+  if (all) all.addEventListener('change', () => cards.forEach(card => { card.querySelector('.backup-marketplace-check').checked = all.checked; }));
+  cards.forEach(card => card.querySelector('.backup-marketplace-check').addEventListener('change', () => { if (all) all.checked = cards.length > 0 && selected().length === cards.length; }));
+  document.getElementById('backup-select-cancel').addEventListener('click', () => setSelectionMode(false));
+  if (postButton) postButton.addEventListener('click', () => {
+    if (!selectingAds) { setSelectionMode(true); return; }
+    if (!selected().length) { window.appNotify ? window.appNotify('Select at least one Marketplace Ad.', 'info') : window.alert('Select at least one Marketplace Ad.'); return; }
+    error.textContent = ''; dialog.showModal();
+  });
+  document.getElementById('backup-post-cancel').addEventListener('click', () => dialog.close());
+  document.getElementById('backup-post-close').addEventListener('click', () => dialog.close());
+  document.getElementById('backup-cross-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const targets = [...dialog.querySelectorAll('[name="backup-target-account"]:checked')].map(box => box.value);
+    const items = selected();
+    if (!items.length) { error.textContent = 'Select at least one Marketplace Ad.'; return; }
+    if (!targets.length || targets.length >= 20) { error.textContent = 'Choose 1 to 19 target accounts.'; return; }
+    if (!Number.isInteger(Number(delay.value)) || Number(delay.value) < 1) { error.textContent = 'Enter a delay of at least 1.'; return; }
+    confirm.disabled = true;
+    const batch = 'backup_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    let queued = 0;
+    try {
+      for (const card of items) {
+        const id = card.dataset.id;
+        const response = await appFetch('{{ url_for("web.cross_post_listing") }}', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+          account:activeAccount, listing_id:id, target_accounts:targets, backup_post:true, mass_post:true,
+          fields:Object.fromEntries(['title','price','location','description'].map(key => [key, String((card._details || {})[key] || '')])), image_order:card._imageOrder || [], post_mode:'schedule', delay_value:Number(delay.value), delay_unit:unit.value,
+          schedule_batch:batch, schedule_position:queued
+        })});
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.message || 'Could not queue a Marketplace Ad.');
+        queued++;
+      }
+      dialog.close();
+      window.appNotify(`Queued ${queued} Marketplace Ad(s) for ${targets.length} account(s). See Posting Results.`, 'success');
+    } catch (err) { error.textContent = `${queued ? queued + ' ad(s) already queued. ' : ''}${err.message}`; }
+    finally { confirm.disabled = false; }
+  });
+})();
+</script>
+{% endblock %}

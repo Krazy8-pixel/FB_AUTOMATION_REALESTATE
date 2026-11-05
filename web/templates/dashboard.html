@@ -1,80 +1,84 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard_simple.css') }}">{% endblock %}
 
 {% block content %}
-<main class="simple-dashboard">
-  <header class="simple-dashboard-head">
-    <div><span class="dashboard-eyebrow">Your workspace</span><h1>Ready for your next listing?</h1><p>Create, manage, and schedule your work from one place.</p></div>
-    <a class="simple-dashboard-account" href="{{ url_for('web.account_page') }}">Active account: <strong>{{ active_account or "Choose an account" }}</strong><span>Manage accounts →</span></a>
-  </header>
-
-  <section class="dashboard-start" aria-labelledby="dashboard-start-title">
-    <div><span class="dashboard-eyebrow">{% if active_account %}Start here{% else %}Get started{% endif %}</span><h2 id="dashboard-start-title">{% if active_account %}Turn your next vehicle into a listing.{% else %}Connect your Facebook account.{% endif %}</h2><p>{% if active_account %}Add the details yourself or upload an Excel file. Review your saved listings before scheduling the next post.{% else %}Add an account and complete Facebook login, then create your first listing.{% endif %}</p></div>
-    <div class="dashboard-actions"><a class="dashboard-primary" href="{{ url_for('web.auto_listing_page') if active_account else url_for('web.account_page') }}">{% if active_account %}＋ Create a listing{% else %}＋ Add an account{% endif %}</a><a class="dashboard-secondary" href="{{ url_for('web.delete_listings_page') }}">Browse saved listings →</a></div>
+<main class="portal-dashboard">
+  <section class="portal-hero" aria-labelledby="portal-title">
+    <div class="portal-hero-copy">
+      <span class="portal-kicker">REAL ESTATE WORKSPACE</span>
+      <h1 id="portal-title">Your property work,<br>all in one place.</h1>
+      <p>Create Marketplace ads, prepare group posts, and manage every saved listing from one clear workspace.</p>
+      <div class="portal-hero-actions">
+        <a class="portal-button portal-button-light" href="{{ url_for('web.auto_listing_page') if active_account else url_for('web.account_page') }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>{{ 'Create a listing' if active_account else 'Connect an account' }}
+        </a>
+        <a class="portal-button portal-button-outline" href="{{ url_for('web.backup_listings_page') }}">Open Backup Posts</a>
+      </div>
+      <div class="portal-account-status"><span class="portal-status-dot"></span><span>{{ 'Active account' if active_account else 'No account connected' }}</span><strong>{{ active_account or 'Add a Facebook account to get started' }}</strong><a href="{{ url_for('web.account_page') }}">{{ 'Manage accounts' if active_account else 'Set up account' }} <span aria-hidden="true">→</span></a></div>
+    </div>
+    <div class="portal-hero-art" aria-hidden="true">
+      <div class="portal-art-sun"></div><div class="portal-art-building portal-building-back"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="portal-art-building portal-building-front"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <svg class="portal-art-house" viewBox="0 0 300 220"><path class="house-shadow" d="M34 108 150 25l116 83v94H34z"/><path class="house-roof" d="M18 111 150 15l132 96-13 18-119-86-119 86z"/><path class="house-body" d="M48 111 150 37l102 74v82H48z"/><path class="house-door" d="M132 126h39v67h-39z"/><path class="house-window" d="M70 122h39v33H70zM192 122h39v33h-39z"/><path class="house-line" d="M89 122v33m-19-17h39m83-16v33m-19-17h39"/></svg>
+      <div class="portal-art-ground"></div>
+      <div class="portal-art-tag"><span>PROPERTY LISTINGS</span><strong>Ready to publish</strong></div>
+    </div>
   </section>
 
-  <nav class="dashboard-shortcuts" aria-label="Quick access">
-    <a href="{{ url_for('web.post_schedular') }}"><span class="shortcut-number">01</span><span><strong>Check your schedule</strong><small>See upcoming posts and timings</small></span><b aria-hidden="true">↗</b></a>
-    <a href="{{ url_for('web.account_page') }}"><span class="shortcut-number">02</span><span><strong>{{ accounts|length }} saved account{{ 's' if accounts|length != 1 else '' }}</strong><small>Manage logins and session health</small></span><b aria-hidden="true">↗</b></a>
-    <a href="{{ url_for('web.activity_log_page') }}"><span class="shortcut-number">03</span><span><strong>Review recent activity</strong><small>Check results and resolve errors</small></span><b aria-hidden="true">↗</b></a>
-  </nav>
+  <section class="portal-overview" aria-label="Workspace overview">
+    <article class="portal-overview-card"><span class="portal-overview-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 12 4l9 7v9H3zM9 20v-6h6v6"/></svg></span><div><small>Connected accounts</small><strong>{{ accounts|length }}</strong></div><a href="{{ url_for('web.account_page') }}" aria-label="Manage connected accounts">→</a></article>
+    <article class="portal-overview-card"><span class="portal-overview-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v14H4zM8 7V4h8v3m-8 5h8m-8 4h8"/></svg></span><div><small>Saved property ads</small><strong>Backup Posts</strong></div><a href="{{ url_for('web.backup_listings_page') }}" aria-label="Open saved property ads">→</a></article>
+    <article class="portal-overview-card"><span class="portal-overview-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><div><small>Publishing activity</small><strong>Posting Results</strong></div><a href="{{ url_for('web.post_schedular') }}" aria-label="View posting results">→</a></article>
+  </section>
 
-  <div class="dashboard-tools-head"><div><h2>Explore your tools</h2><p>Find the next step for your workflow.</p></div><label class="dashboard-search"><span>Find a tool</span><input id="dashboard-tool-search" type="search" placeholder="Search listings, accounts, help…" autocomplete="off" aria-controls="dashboard-tools"></label></div>
+  <div class="portal-section-heading"><div><span class="portal-section-kicker">WORKSPACE</span><h2>Choose your next step</h2><p>Open a tool to create, publish, or manage property listings.</p></div><label class="portal-search"><span class="portal-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg></span><input id="dashboard-tool-search" type="search" placeholder="Search workspace tools" autocomplete="off" aria-label="Search workspace tools" aria-controls="dashboard-tools"></label></div>
 
-  <div class="simple-dashboard-groups" id="dashboard-tools">
-    <section class="simple-dashboard-section">
-      <div class="simple-section-head"><h2>Listings</h2><span>{{ 3 if group_ui_enabled else 1 }} features</span></div>
-      <nav class="simple-feature-list" aria-label="Listing features">
-        <a href="{{ url_for('web.auto_listing_page') }}"><span><strong>Create Listings</strong><small>Create listings manually or through Excel.</small></span><b>Open</b></a>
-        <a href="{{ url_for('web.delete_listings_page') }}"><span><strong>Manage Listings</strong><small>Import, review, delete, or schedule existing listings for reposting.</small></span><b>Open</b></a>
-        <a href="{{ url_for('web.post_schedular') }}"><span><strong>Posting Results</strong><small>Review upcoming listing jobs and posting times.</small></span><b>Open</b></a>
-      </nav>
-    </section>
+  <div class="portal-tool-groups" id="dashboard-tools">
+    <section class="portal-tool-group"><div class="portal-group-heading"><span class="portal-group-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-7 9 7v9H3zM9 20v-6h6v6"/></svg></span><div><h3>Create and publish</h3><p>Prepare ads and reach your audience.</p></div></div><div class="portal-tool-grid">
+      <a class="portal-tool-card portal-tool-featured" href="{{ url_for('web.auto_listing_page') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V9l8-6 8 6v11M8 20v-7h8v7M12 3v5"/></svg></span><span class="portal-tool-copy"><strong>Create Listings</strong><small>Build property or vehicle ads manually or from Excel.</small></span><span class="portal-tool-arrow" aria-hidden="true">→</span></a>
+      {% if group_ui_enabled %}<a class="portal-tool-card" href="{{ url_for('web.posting_in_groups_page') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2m2-12a3 3 0 0 1 0 6m1 2a5 5 0 0 1 3 4v2"/></svg></span><span class="portal-tool-copy"><strong>Group Posting</strong><small>Share posts with selected Facebook groups.</small></span><span class="portal-tool-arrow" aria-hidden="true">→</span></a>
+      <a class="portal-tool-card" href="{{ url_for('web.groups_page') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8m-8 4h5"/></svg></span><span class="portal-tool-copy"><strong>Groups</strong><small>Import and organize groups for your account.</small></span><span class="portal-tool-arrow" aria-hidden="true">→</span></a>{% endif %}
+    </div></section>
 
+    <section class="portal-tool-group"><div class="portal-group-heading"><span class="portal-group-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM8 8h8m-8 4h8m-8 4h5"/></svg></span><div><h3>Manage your listings</h3><p>Review saved ads, live listings, and post status.</p></div></div><div class="portal-tool-grid">
+      <a class="portal-tool-card" href="{{ url_for('web.backup_listings_page') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v14H4zM8 7V4h8v3m-8 5h8m-8 4h5"/></svg></span><span class="portal-tool-copy"><strong>Backup Posts</strong><small>Reuse saved Marketplace ads and group posts.</small></span><span class="portal-tool-arrow" aria-hidden="true">→</span></a>
+      <a class="portal-tool-card" href="{{ url_for('web.delete_listings_page') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10 12 4l9 6v10H3zM7 20v-6h10v6"/></svg></span><span class="portal-tool-copy"><strong>Manage Listings</strong><small>Review active Facebook listings and saved details.</small></span><span class="portal-tool-arrow" aria-hidden="true">→</span></a>
+      <a class="portal-tool-card" href="{{ url_for('web.post_schedular') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="1"/><path d="M7 3v4m10-4v4M3 10h18m-13 4h3m-3 3h7"/></svg></span><span class="portal-tool-copy"><strong>Posting Results</strong><small>See scheduled work and publishing outcomes.</small></span><span class="portal-tool-arrow" aria-hidden="true">→</span></a>
+    </div></section>
 
-
-    <section class="simple-dashboard-section">
-      <div class="simple-section-head"><h2>Accounts</h2><span>{{ 3 if group_ui_enabled else 1 }} features</span></div>
-      <nav class="simple-feature-list" aria-label="Account features">
-        <a href="{{ url_for('web.account_page') }}"><span><strong>Accounts</strong><small>Add Facebook accounts and check saved sessions.</small></span><b>Open</b></a>
-        {% if group_ui_enabled %}
-        <a href="{{ url_for('web.groups_page') }}"><span><strong>Groups</strong><small>Import and organize Facebook groups for the active account.</small></span><b>Open</b></a>
-        <a href="/posting_in_groups"><span><strong>Group Posting</strong><small>Publish a listing to selected Facebook groups.</small></span><b>Open</b></a>
-        {% endif %}
-      </nav>
-    </section>
-
-    <section class="simple-dashboard-section">
-      <div class="simple-section-head"><h2>Settings and History</h2><span>2 features</span></div>
-      <nav class="simple-feature-list" aria-label="Settings and history features">
-        <a href="{{ url_for('web.activity_log_page') }}"><span><strong>Activity Log</strong><small>Review completed work, failures, and error details.</small></span><b>Open</b></a>
-        <a href="{{ url_for('web.info_page') }}"><span><strong>Help and Instructions</strong><small>Read the setup guide and feature instructions.</small></span><b>Open</b></a>
-      </nav>
-    </section>
+    <section class="portal-tool-group"><div class="portal-group-heading"><span class="portal-group-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><div><h3>Accounts and support</h3><p>Keep your workspace connected and informed.</p></div></div><div class="portal-tool-grid">
+      <a class="portal-tool-card" href="{{ url_for('web.account_page') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><span class="portal-tool-copy"><strong>Accounts</strong><small>Add accounts and check session status.</small></span><span class="portal-tool-arrow" aria-hidden="true">→</span></a>
+      <a class="portal-tool-card" href="{{ url_for('web.activity_log_page') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5m0 14h17M7 15l4-4 3 2 6-7"/></svg></span><span class="portal-tool-copy"><strong>Activity Log</strong><small>Review completed tasks and errors.</small></span><span class="portal-tool-arrow" aria-hidden="true">→</span></a>
+      {% if desktop_mode %}<a class="portal-tool-card" href="{{ url_for('web.account_browser_page') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16"/><path d="M3 9h18m-14-2h.1m3 0h.1"/></svg></span><span class="portal-tool-copy"><strong>Account Browser</strong><small>Open a saved account in its browser.</small></span><span class="portal-tool-arrow" aria-hidden="true">?</span></a>{% endif %}
+      <a class="portal-tool-card" href="{{ url_for('web.settings_page') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg></span><span class="portal-tool-copy"><strong>Settings</strong><small>Configure app preferences and updates.</small></span><span class="portal-tool-arrow" aria-hidden="true">→</span></a>
+      <a class="portal-tool-card" href="{{ url_for('web.info_page') }}"><span class="portal-tool-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4.2 1.8c-1.2 1-1.7 1.5-1.7 3.2m0 3v.1"/></svg></span><span class="portal-tool-copy"><strong>Help and Instructions</strong><small>Find setup guidance and feature notes.</small></span><span class="portal-tool-arrow" aria-hidden="true">→</span></a>
+    </div></section>
   </div>
-  <p id="dashboard-no-results" class="dashboard-no-results" role="status" hidden>No tools match your search. Try “listings”, “accounts”, or “groups”.</p>
+  <p id="dashboard-no-results" class="portal-no-results" role="status" hidden>No workspace tools match your search. Try another keyword.</p>
 </main>
 {% endblock %}
 {% block extra_js %}
 <script>
 (() => {
   const search = document.getElementById('dashboard-tool-search');
-  const sections = [...document.querySelectorAll('.simple-dashboard-section')];
+  const groups = [...document.querySelectorAll('.portal-tool-group')];
+  const empty = document.getElementById('dashboard-no-results');
+  if (!search || !empty) return;
   search.addEventListener('input', () => {
     const query = search.value.trim().toLowerCase();
-    let matches = 0;
-    sections.forEach(section => {
+    let count = 0;
+    groups.forEach(group => {
       let visible = 0;
-      section.querySelectorAll('.simple-feature-list a').forEach(link => {
-        const match = link.textContent.toLowerCase().includes(query);
-        link.hidden = !match;
-        if (match) visible++;
+      group.querySelectorAll('.portal-tool-card').forEach(card => {
+        const matches = card.textContent.toLowerCase().includes(query);
+        card.hidden = !matches;
+        if (matches) visible++;
       });
-      section.hidden = !visible;
-      matches += visible;
+      group.hidden = visible === 0;
+      count += visible;
     });
-    document.getElementById('dashboard-no-results').hidden = matches > 0;
+    empty.hidden = count > 0;
   });
 })();
 </script>

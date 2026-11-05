@@ -34,7 +34,7 @@
             class="groups-btn groups-btn-primary"
             id="groups-import-btn"
             {% if import_running %}disabled{% endif %}
-          >Import Buy and Sell Groups</button>
+          >Import Groups</button>
         </form>
 
         <form
@@ -111,7 +111,7 @@
     <div class="groups-layout">
       <section class="groups-panel groups-panel-wide">
         <div class="groups-panel-head">
-          <h2>Groups</h2>
+          <h2>Group Categories</h2>
           <span class="groups-muted" id="groups-count">{{ groups|length }} imported</span>
         </div>
 
@@ -329,10 +329,25 @@
 
       if (emptyState) emptyState.classList.add("groups-hidden");
       grid.classList.remove("groups-hidden");
-      grid.innerHTML = filtered.map(function(g) {
+      function categoryOf(g) {
+        if (g && (g.is_buy_sell === true || g.has_buy_sell_tab === true)) return "buy_sell";
+        if (g && (g.is_buy_sell === false || g.has_buy_sell_tab === false)) return "other";
+        const explicit = String((g && (g.portal_category || g.group_category || g.category || g.group_type)) || "").toLowerCase();
+        if (/other|general|community/.test(explicit)) return "other";
+        if (/buy|sell|sale|market/.test(explicit)) return "buy_sell";
+        const text = `${(g && g.name) || ""} ${(g && g.link) || ""}`.toLowerCase();
+        return /\b(buy|sell|sale|sales|marketplace|classified|cars?|carz|auto|automobile|vehicle|vehicles)\b/.test(text)
+          ? "buy_sell" : "other";
+      }
+
+      const buySellGroups = filtered.filter(g => categoryOf(g) === "buy_sell");
+      const otherGroups = filtered.filter(g => categoryOf(g) === "other");
+      function cardFor(g) {
         const name = (g && g.name) ? String(g.name) : "Unnamed group";
         const members = (g && (g.member_count_label || g.member_count)) ? String(g.member_count_label || g.member_count) : "Unknown";
         const privacy = (g && g.privacy) ? String(g.privacy) : "";
+        const rawLink = (g && g.link) ? String(g.link) : "";
+        const link = /^https?:\/\/(www\.|m\.)?facebook\.com\/groups\//i.test(rawLink) ? rawLink : "";
         const id = (g && g.id) ? String(g.id) : "";
         const checked = selectedIds.has(id) ? "checked" : "";
         return `
@@ -347,11 +362,17 @@
                   <span class="groups-pill">${escapeHtml(members)} members</span>
                   ${privacy ? `<span class="groups-pill">${escapeHtml(capitalize(privacy))}</span>` : ""}
                 </div>
+                ${link ? `<a class="groups-card-link" href="${escapeAttr(link)}" target="_blank" rel="noopener noreferrer">Open group <span aria-hidden="true">↗</span></a>` : ""}
               </div>
             </div>
           </article>
         `;
-      }).join("");
+      }
+      function categoryBlock(title, members) {
+        return `<div class="groups-category-heading"><h3>${title}</h3><span>${members.length}</span></div>` +
+          (members.length ? members.map(cardFor).join("") : '<p class="groups-category-empty">No groups in this category.</p>');
+      }
+      grid.innerHTML = categoryBlock("Buy and Sell Groups", buySellGroups) + categoryBlock("Other Groups", otherGroups);
 
       document.querySelectorAll("#groups-grid .groups-check").forEach(function(box) {
         box.addEventListener("change", function() {

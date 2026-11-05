@@ -1,171 +1,236 @@
 {% extends "base.html" %}
 
-{% block title %}Posting in Groups{% endblock %}
-
+{% block title %}Group Posting{% endblock %}
 {% block extra_css %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/posting_in_groups.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/posting_in_groups.css') }}">
 {% endblock %}
 
 {% block content %}
-<section class="group-posting-page">
-  <div class="gp-shell">
-    <header class="gp-header">
-      <div class="gp-header-text">
-        <span class="gp-eyebrow">Group Posting</span>
-        <h1>Post once, share everywhere</h1>
-        <p>Upload your images, add the message, and schedule the delay between group posts.</p>
-      </div>
-      <div class="gp-account-card">
-        <span class="gp-account-label">Active account</span>
-        <div class="gp-account-value">{{ active_account or "No active account selected" }}</div>
-      </div>
-    </header>
+<main class="create-page gp-page">
+  <header class="create-page-head gp-page-head">
+    <div>
+      <h1>Group Posting</h1>
+      <p>Write one post, add up to 20 photos, and send it to your Facebook groups in order.</p>
+    </div>
+    <div class="gp-head-actions">
+      <a href="{{ url_for('web.dashboard') }}" class="gp-back">Back to Dashboard</a>
+      <div class="gp-account"><span>Active account</span><strong>{{ active_account or "No active account selected" }}</strong></div>
+    </div>
+  </header>
 
-    <form data-posting-timing class="gp-card" method="POST" action="/posting_in_groups" enctype="multipart/form-data">
-      <div class="gp-card-head">
-        <div>
-          <h2>Create a group post</h2>
-          <p>Each link will be processed in order with your selected delay.</p>
-        </div>
-        <div class="gp-card-chip">Up to 10 photos</div>
+  <form id="group-post-form" data-posting-timing class="gp-form" method="POST"
+        action="{{ url_for('web.posting_in_groups_page') }}" enctype="multipart/form-data">
+    {% if active_account %}<input type="hidden" name="account" value="{{ active_account }}">{% endif %}
+    {% if request.values.get('source_account') %}<input type="hidden" name="source_account" value="{{ request.values.get('source_account') }}">{% elif active_account %}<input type="hidden" name="source_account" value="{{ active_account }}">{% endif %}
+    {% if request.values.get('backup_id') or request.form.get('backup_group_id') %}<input type="hidden" name="backup_group_id" value="{{ request.values.get('backup_id') or request.form.get('backup_group_id') }}">{% endif %}
+    {% if request.values.get('draft_id') or request.form.get('group_draft_id') %}<input type="hidden" name="group_draft_id" value="{{ request.values.get('draft_id') or request.form.get('group_draft_id') }}">{% endif %}
+    <section class="gp-section">
+      <div class="gp-section-heading">
+        <div><span class="gp-step">01</span><h2>Post details</h2></div>
+        <p>These details will be used for each group.</p>
       </div>
-
-      <div class="gp-form-grid">
-        <div class="gp-block">
+      <div class="gp-fields">
+        <div class="gp-field gp-description-field">
           <label for="description" class="gp-label">Description</label>
-          <textarea
-            id="description"
-            name="description"
-            rows="7"
-            class="gp-control gp-textarea"
-            placeholder="Write your post description..."
-            required
-          >{{ request.form.get('description', '') }}</textarea>
-          <div class="gp-help">Keep it clear and direct. This will be used for every group.</div>
+          <textarea id="description" name="description" rows="5" class="gp-control"
+                    placeholder="Write your post description..." required>{{ request.form.get('description', (group_draft|default({})).get('description', (group_backup.details or {}).get('description', '') if group_backup else '')) }}</textarea>
+          <small>Keep the message clear and direct.</small>
         </div>
+      </div>
+      <div class="gp-destination-picker">
+        <label for="group_selection_mode" class="gp-label">Group selection method</label>
+        <select id="group_selection_mode" name="group_selection_mode" class="gp-control gp-selection-method">
+          <option value="saved" {% if group_selection_mode == 'saved' %}selected{% endif %}>Saved joined groups</option>
+          <option value="links" {% if group_selection_mode == 'links' %}selected{% endif %}>Enter group links</option>
+        </select>
+        <p class="gp-destination-hint">Choose one method. The matching group selector will appear below.</p>
 
-        <div class="gp-block">
-          <label for="group_links" class="gp-label">Group links</label>
-          <textarea
-            id="group_links"
-            name="group_links"
-            rows="7"
-            class="gp-control gp-textarea gp-links"
-            placeholder="https://facebook.com/groups/...\nhttps://facebook.com/groups/..."
-            required
-          >{{ request.form.get('group_links', '') }}</textarea>
-          <div class="gp-help">One link per line. Blank lines are ignored.</div>
-        </div>
-
-        <div class="gp-block gp-block-full">
-          <div class="gp-block-head">
-            <div>
-              <h3>Images</h3>
-              <p>Pick up to 10 images from your computer.</p>
-            </div>
-            <div class="gp-block-note">First image is required</div>
+        <div id="gp-saved-groups-panel" class="gp-destination-panel gp-saved-groups" {% if group_selection_mode != 'saved' %}hidden{% endif %}>
+          <div class="gp-saved-groups-head">
+            <strong>Saved Other Groups</strong>
+            <span id="gp-saved-group-count" aria-live="polite">0 selected</span>
           </div>
-          <div class="gp-image-grid">
-            {% for i in range(1, 11) %}
-            <div class="gp-image-slot">
-              <input
-                id="image_slot_{{ i }}"
-                type="file"
-                name="images"
-                accept="image/*"
-                class="gp-upload"
-                data-slot="{{ i }}"
-                {% if i == 1 %}required{% endif %}
-              >
-              <label for="image_slot_{{ i }}" class="gp-upload-label" data-slot="{{ i }}">
-                <span class="gp-upload-plus">+</span>
-                <span class="gp-upload-text">Photo {{ i }}</span>
-              </label>
-              <div class="gp-file-name" id="image_slot_name_{{ i }}">No file chosen</div>
-            </div>
+          {% if other_groups %}
+          <div class="gp-saved-groups-tools">
+            <label class="gp-select-all-groups"><input type="checkbox" id="gp-select-all-groups"> <span>Select all groups</span></label>
+            <input type="search" id="gp-group-search" class="gp-group-search" placeholder="Search saved groups..." aria-label="Search saved Other Groups">
+          </div>
+          <div class="gp-saved-group-list" id="gp-saved-group-list">
+            {% for group in other_groups %}
+            <label class="gp-saved-group" data-group-name="{{ group.name|lower }}">
+              <input type="checkbox" name="other_group_ids" value="{{ group.id }}"
+                     {% if not group.link %}disabled title="This saved group has no link."{% endif %}
+                     {% if group.id|string in selected_other_group_ids %}checked{% endif %}>
+              <span class="gp-saved-group-copy">
+                <strong>{{ group.name or 'Unnamed group' }}</strong>
+                <small>{{ group.member_count_label or group.member_count or 'Member count unknown' }}{% if group.privacy %} - {{ group.privacy|title }}{% endif %}</small>
+                {% if group.link %}<a href="{{ group.link }}" target="_blank" rel="noopener noreferrer">Open group</a>{% endif %}
+              </span>
+            </label>
             {% endfor %}
           </div>
+          {% else %}
+          <p class="gp-no-saved-groups">No saved Other Groups for this account. Choose Enter group links or import joined groups first.</p>
+          {% endif %}
         </div>
 
-        <div class="gp-block gp-block-full">
-          <div class="gp-delay">
-            <div class="gp-field">
-              <label for="delay_unit" class="gp-label">Delay unit</label>
-              <select id="delay_unit" name="delay_unit" class="gp-control" required>
-                <option value="">Select unit</option>
-                <option value="seconds" {% if request.form.get('delay_unit') == 'seconds' %}selected{% endif %}>Seconds</option>
-                <option value="minutes" {% if request.form.get('delay_unit') == 'minutes' %}selected{% endif %}>Minutes</option>
-                <option value="hours" {% if request.form.get('delay_unit') == 'hours' %}selected{% endif %}>Hours</option>
-              </select>
-            </div>
-            <div class="gp-field">
-              <label for="delay_value" class="gp-label">Delay value</label>
-              <input
-                id="delay_value"
-                type="number"
-                name="delay_value"
-                class="gp-control"
-                min="1"
-                step="1"
-                required
-                value="{{ request.form.get('delay_value', '') }}"
-              >
-            </div>
-          </div>
-          <div class="gp-help">Example: 2 minutes between posts.</div>
+        <div id="gp-manual-links-panel" class="gp-destination-panel gp-manual-links" {% if group_selection_mode != 'links' %}hidden{% endif %}>
+          <label for="group_links" class="gp-label">Facebook group links</label>
+          <textarea id="group_links" name="group_links" rows="4" class="gp-control gp-links"
+                    placeholder="Paste one Facebook group link per line...">{{ request.form.get('group_links', '') }}</textarea>
+          <small>Enter one link per line. Blank lines are ignored.</small>
         </div>
       </div>
+    </section>
 
-      <div class="gp-actions">
-        <button type="submit" class="gp-btn">Schedule Group Posting</button>
-        <a href="{{ url_for('web.dashboard') }}" class="gp-link">Back to Dashboard</a>
+    <section class="gp-section">
+      <div class="gp-section-heading gp-image-heading">
+        <div><span class="gp-step">02</span><h2>Photos</h2></div>
+        <p>{% if group_backup %}Saved photos are loaded into the numbered slots.{% else %}Choose up to 20 images. Add them one at a time or use bulk upload.{% endif %} <span id="gp-image-count" class="gp-image-count" aria-live="polite">{{ group_backup_photos|length if group_backup else 0 }} of 20 photos</span></p>
       </div>
-    </form>
-  </div>
-</section>
+      <div class="gp-upload-tools" {% if group_backup %}hidden{% endif %}>
+        <div>
+          <input id="bulk-images" type="file" accept="image/*" multiple class="gp-bulk-input">
+          <label for="bulk-images" class="gp-bulk-button">Add multiple photos</label>
+        </div>
+      </div>
+      <p id="gp-bulk-message" class="gp-image-help" aria-live="polite" {% if group_backup %}hidden{% endif %}>The first photo is required. Bulk uploads fill the next empty slots.</p>
+      <div class="gp-image-grid">
+        {% for i in range(1, 21) %}
+        {% set saved_photo = group_backup_photos[i - 1] if group_backup and group_backup_photos|length >= i else none %}
+        <div class="gp-image-slot" data-image-slot="{{ i }}">
+          <input id="image_slot_{{ i }}" type="file" name="images" accept="image/*"
+                 class="gp-upload" data-slot="{{ i }}" {% if group_backup %}disabled{% endif %} {% if i == 1 and not group_backup %}required{% endif %}>
+          <label for="image_slot_{{ i }}" class="gp-upload-label{% if saved_photo %} is-filled{% endif %}" data-slot="{{ i }}">
+            {% if saved_photo %}<img data-preview src="{{ url_for('web.listing_photo', listing_id=group_backup.id, name=saved_photo.name) }}" alt="Saved photo {{ i }}" loading="lazy">{% else %}<span class="gp-upload-plus" aria-hidden="true">+</span>{% endif %}
+            <span class="gp-upload-text">Photo {{ i }}</span>
+          </label>
+          <div class="gp-file-name" id="image_slot_name_{{ i }}">{% if saved_photo %}{{ saved_photo.name }}{% elif group_backup %}Empty slot{% else %}No file chosen{% endif %}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="gp-section gp-delay-section">
+      <div class="gp-section-heading">
+        <div><span class="gp-step">03</span><h2>Posting delay</h2></div>
+        <p>Set the pause between posts to different groups.</p>
+      </div>
+      <div class="gp-delay-fields">
+        <div class="gp-field">
+          <label for="delay_unit" class="gp-label">Delay unit</label>
+          <select id="delay_unit" name="delay_unit" class="gp-control" required>
+            <option value="">Select a unit</option>
+            <option value="seconds" {% if request.form.get('delay_unit') == 'seconds' %}selected{% endif %}>Seconds</option>
+            <option value="minutes" {% if request.form.get('delay_unit') == 'minutes' %}selected{% endif %}>Minutes</option>
+            <option value="hours" {% if request.form.get('delay_unit') == 'hours' %}selected{% endif %}>Hours</option>
+          </select>
+        </div>
+        <div class="gp-field">
+          <label for="delay_value" class="gp-label">Delay value</label>
+          <input id="delay_value" type="number" name="delay_value" class="gp-control"
+                 min="1" step="1" required value="{{ request.form.get('delay_value', '') }}" placeholder="For example, 2">
+        </div>
+      </div>
+      <small class="gp-delay-help">For example, choose 2 minutes to pause for two minutes between groups.</small>
+    </section>
+
+    <div class="gp-form-actions">
+      <button type="submit" class="gp-submit">{{ 'Post saved group post' if group_backup else 'Start Group Posting' }}</button>
+      <a href="{{ url_for('web.dashboard') }}" class="gp-cancel">Cancel</a>
+    </div>
+  </form>
+</main>
 
 <script>
-  (function () {
-    const imageInputs = Array.from(document.querySelectorAll(".gp-upload"));
-    imageInputs.forEach(function (input) {
-      input.addEventListener("change", function () {
-        const slot = this.getAttribute("data-slot");
-        const nameBox = document.getElementById("image_slot_name_" + slot);
-        const label = document.querySelector(".gp-upload-label[data-slot='" + slot + "']");
-        if (!nameBox) return;
-        const file = this.files && this.files[0] ? this.files[0] : null;
-        nameBox.textContent = file ? file.name : "No file chosen";
-        if (label) {
-          label.classList.toggle("is-filled", !!file);
-        }
-      });
-    });
+  (() => {
+    const slots = Array.from(document.querySelectorAll('.gp-upload'));
+    const bulk = document.getElementById('bulk-images');
+    const count = document.getElementById('gp-image-count');
+    const message = document.getElementById('gp-bulk-message');
+    const savedGroupBoxes = Array.from(document.querySelectorAll('.gp-saved-group input[type="checkbox"]'));
+    const savedGroupCount = document.getElementById('gp-saved-group-count');
+    const groupSearch = document.getElementById('gp-group-search');
+    const selectAllGroups = document.getElementById('gp-select-all-groups');
+    const groupMode = document.getElementById('group_selection_mode');
+    const savedGroupsPanel = document.getElementById('gp-saved-groups-panel');
+    const manualLinksPanel = document.getElementById('gp-manual-links-panel');
 
-    const unitInput = document.getElementById("delay_unit");
-    const valueInput = document.getElementById("delay_value");
-
-    function applyRange() {
-      if (!unitInput || !valueInput) return;
-      const unit = unitInput.value;
-      if (unit === "hours") {
-        valueInput.min = "1";
-        valueInput.placeholder = ">= 1";
-      } else if (unit === "minutes") {
-        valueInput.min = "1";
-        valueInput.placeholder = ">= 1";
-      } else if (unit === "seconds") {
-        valueInput.min = "1";
-        valueInput.placeholder = ">= 1";
-      } else {
-        valueInput.min = "1";
-        valueInput.placeholder = "";
+    function updateSavedGroupCount() {
+      const selected = savedGroupBoxes.filter(box => box.checked).length;
+      if (savedGroupCount) savedGroupCount.textContent = selected + ' selected';
+      if (selectAllGroups) {
+        const enabled = savedGroupBoxes.filter(box => !box.disabled);
+        const checked = enabled.filter(box => box.checked).length;
+        selectAllGroups.checked = enabled.length > 0 && checked === enabled.length;
+        selectAllGroups.indeterminate = checked > 0 && checked < enabled.length;
       }
     }
-
-    if (unitInput) {
-      unitInput.addEventListener("change", applyRange);
-      applyRange();
+    savedGroupBoxes.forEach(box => box.addEventListener('change', updateSavedGroupCount));
+    if (selectAllGroups) selectAllGroups.addEventListener('change', () => {
+      savedGroupBoxes.forEach(box => { if (!box.disabled) box.checked = selectAllGroups.checked; });
+      updateSavedGroupCount();
+    });
+    function updateGroupMode() {
+      const useSaved = groupMode && groupMode.value === 'saved';
+      if (savedGroupsPanel) savedGroupsPanel.hidden = !useSaved;
+      if (manualLinksPanel) manualLinksPanel.hidden = useSaved;
     }
+    if (groupMode) groupMode.addEventListener('change', updateGroupMode);
+    updateGroupMode();
+    if (groupSearch) groupSearch.addEventListener('input', () => {
+      const query = groupSearch.value.trim().toLowerCase();
+      document.querySelectorAll('.gp-saved-group').forEach(label => {
+        label.hidden = query && !label.dataset.groupName.includes(query);
+      });
+    });
+    updateSavedGroupCount();
+
+    function updateSlot(input) {
+      const slot = input.dataset.slot;
+      const file = input.files && input.files[0];
+      const name = document.getElementById('image_slot_name_' + slot);
+      const label = document.querySelector('.gp-upload-label[data-slot="' + slot + '"]');
+      if (!name || !label) return;
+      name.textContent = file ? file.name : 'No file chosen';
+      label.classList.toggle('is-filled', !!file);
+      let preview = label.querySelector('img[data-preview]');
+      if (preview) {
+        URL.revokeObjectURL(preview.src);
+        preview.remove();
+      }
+      if (file) {
+        preview = document.createElement('img');
+        preview.dataset.preview = 'true';
+        preview.src = URL.createObjectURL(file);
+        preview.alt = file.name;
+        label.appendChild(preview);
+      }
+      const selected = slots.filter(item => item.files && item.files.length).length;
+      count.textContent = selected + ' of 20 photos selected';
+    }
+
+    slots.forEach(input => input.addEventListener('change', () => updateSlot(input)));
+    bulk.addEventListener('change', () => {
+      const empty = slots.filter(input => !input.files || !input.files.length);
+      const files = Array.from(bulk.files || []);
+      const added = Math.min(files.length, empty.length);
+      files.slice(0, empty.length).forEach((file, index) => {
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        empty[index].files = transfer.files;
+        empty[index].dispatchEvent(new Event('change', {bubbles: true}));
+      });
+      message.textContent = 'Added ' + added + ' photo(s).' +
+        (files.length > added ? ' ' + (files.length - added) + ' skipped because all 20 slots are full.' : '');
+      bulk.value = '';
+    });
+
+    const unit = document.getElementById('delay_unit');
+    const value = document.getElementById('delay_value');
+    unit.addEventListener('change', () => {
+      value.placeholder = unit.value ? 'At least 1 ' + unit.options[unit.selectedIndex].text.toLowerCase() : 'For example, 2';
+    });
   })();
 </script>
 {% endblock %}

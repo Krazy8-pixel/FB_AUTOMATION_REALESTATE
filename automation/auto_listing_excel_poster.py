@@ -700,26 +700,50 @@ def _find_image_columns(columns):
     matched = []
     for col in columns:
         n = _normalize_header(col)
+        # Numbered image columns are unambiguous. Avoid treating unrelated
+        # headers such as "Image notes" as a photo path column.
+        if re.fullmatch(r"(?:image|images|photo|photos|picture|pictures|pic|pics|img|imgs)\s*\d+", n):
+            matched.append(col)
+            continue
         if any(alias in n for alias in image_aliases):
             matched.append(col)
     return list(dict.fromkeys(matched))[:10]
 
 
-def read_excel_flexible(excel_path):
+def read_excel_flexible(excel_path, listing_kind="vehicle"):
+    is_property = str(listing_kind or "vehicle").strip().lower() in {"property", "real_estate", "real estate"}
     frames = []
     try:
         workbook = pd.read_excel(excel_path, sheet_name=None, dtype=object)
         if isinstance(workbook, dict):
-            frames = [df for df in workbook.values() if isinstance(df, pd.DataFrame)]
+            listings_sheet = next((name for name in workbook if str(name).strip().casefold() == 'listings'), None)
+            if listings_sheet is not None:
+                frame = workbook[listings_sheet]
+                frames = [frame] if isinstance(frame, pd.DataFrame) else []
+            elif is_property:
+                frames = [df for df in workbook.values()
+                          if isinstance(df, pd.DataFrame)
+                          and _find_first_column(list(df.columns), ["title", "listing title", "property title"])]
+                if not frames:
+                    frames = [df for df in workbook.values() if isinstance(df, pd.DataFrame)][:1]
+            else:
+                frames = [df for df in workbook.values() if isinstance(df, pd.DataFrame)]
         elif isinstance(workbook, pd.DataFrame):
             frames = [workbook]
-    except Exception:
+    except Exception as excel_error:
+        if is_property:
+            raise ValueError('Could not read this Excel workbook. Save it as a valid .xlsx file and try again.') from excel_error
         # Fallback for csv-like uploads renamed as excel.
         try:
             csv_df = pd.read_csv(excel_path, dtype=object)
             frames = [csv_df]
         except Exception:
             return []
+
+    if is_property:
+        if not frames:
+            raise ValueError('The workbook has no readable listing sheet.')
+        return _read_property_excel_frames(frames)
 
     posts = []
     for df in frames:
@@ -781,10 +805,10 @@ def read_excel_flexible(excel_path):
         ])
 
         explicit_image_cols = []
-        for i in range(0, 11):
-            c = _find_first_column(columns, [f"image {i}", f"image{i}", f"img {i}", f"img{i}", f"photo {i}", f"photo{i}"])
-            if c:
-                explicit_image_cols.append(c)
+        for col in columns:
+            normalized_col = _normalize_header(col)
+            if re.fullmatch(r"(?:image|images|photo|photos|picture|pictures|pic|pics|img|imgs)\s*\d+", normalized_col):
+                explicit_image_cols.append(col)
         image_cols = list(dict.fromkeys(explicit_image_cols + _find_image_columns(columns)))[:10]
 
         required_columns = {
@@ -833,7 +857,7 @@ def read_excel_flexible(excel_path):
                 seen_values.add(value)
                 image_count += 1
                 post_data[f"image_path{image_count}"] = value
-                if image_count >= 10:
+                if image_count >= (20 if str(listing_kind or "vehicle").strip().lower() in {"property", "real_estate", "real estate"} else 10):
                     break
 
             # Skip truly blank rows.
@@ -885,6 +909,70 @@ def read_excel_flexible(excel_path):
 
             posts.append(post_data)
 
+    return posts
+
+
+def _read_property_excel_frames(frames):
+    """Read one-property-per-row Excel sheets used by real-estate bulk posting."""
+    posts = []
+    for frame in frames:
+        if frame is None or frame.empty:
+            continue
+        frame = frame.dropna(how="all")
+        columns = list(frame.columns)
+        title_col = _find_first_column(columns, ["title", "listing title", "property title"])
+        price_col = _find_first_column(columns, ["price", "listing price", "asking price"])
+        location_col = _find_first_column(columns, ["location", "city", "area", "town", "district", "address"])
+        description_col = _find_first_column(columns, ["description", "details", "listing description", "property description"])
+        images_zip_col = _find_first_column(columns, [
+            "images zip", "image zip", "photos zip", "photo zip", "images zip path",
+            "image zip path", "photos zip path", "photo zip path", "zip path", "image archive",
+        ])
+
+        required_columns = {"Title": title_col, "Price": price_col, "Location": location_col}
+        missing = [label for label, col in required_columns.items() if col is None]
+        if description_col is None:
+            missing.append("Description")
+        if images_zip_col is None:
+            missing.append("Images ZIP (path to this listing's photo archive)")
+        if missing:
+            raise ValueError("Missing required real-estate Excel column(s): " + ", ".join(missing))
+
+        for row_index, row in frame.iterrows():
+            title = _clean_value(row[title_col])
+            price = _clean_value(row[price_col])
+            location = _clean_value(row[location_col])
+            description = _clean_value(row[description_col])
+            images_zip = _clean_value(row[images_zip_col]) if images_zip_col is not None else ""
+            if not any((title, price, location, description, images_zip)):
+                continue
+            row_no = int(row_index) + 2
+            absent = [label for label, value in (("Title", title), ("Price", price), ("Location", location), ("Description", description)) if not value]
+            if not images_zip:
+                absent.append("Images ZIP path")
+            if absent:
+                raise ValueError(f"Excel row {row_no}: missing required value(s): " + ", ".join(absent))
+            try:
+                from decimal import Decimal, InvalidOperation
+                price_number = Decimal(price.replace(",", "").replace("$", "").strip())
+                if not price_number.is_finite() or price_number < 0:
+                    raise InvalidOperation
+            except (InvalidOperation, ValueError):
+                raise ValueError(f"Excel row {row_no}: Price must be a valid nonnegative number.")
+            normalized_price = format(price_number, 'f')
+            if '.' in normalized_price:
+                normalized_price = normalized_price.rstrip('0').rstrip('.')
+            post_data = {
+                "title": title,
+                "price": normalized_price,
+                "location": location,
+                "description": description,
+                "author": "",
+                "genre": "",
+                "_excel_row_number": row_no,
+                "image_zip_path": images_zip,
+            }
+            posts.append(post_data)
     return posts
 def decode_base64_image(image_data, save_dir="uploads"):
     """Decode base64 image strings and save as temp file."""
