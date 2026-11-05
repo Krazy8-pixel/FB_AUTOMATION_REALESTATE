@@ -105,7 +105,7 @@
         </button>
         {% endif %}
         <div class="topbar-brand">
-          <a class="header-brand-link" href="{{ url_for('web.dashboard') }}" aria-label="FBMK Automation Realestate dashboard"><img class="fbmk-logo" src="{{ url_for('static', filename='app-logo.png', v='fbmk-1') }}" width="48" height="48" alt=""><span class="fbmk-brand-name">FBMK <span>Automation Realestate</span></span></a>
+          <a class="header-brand-link" href="{{ url_for('web.dashboard') }}" aria-label="FBMK Automation Realestate dashboard">{% if active_page != 'account_browser' %}<img class="fbmk-logo" src="{{ url_for('static', filename='app-logo.png', v='fbmk-1') }}" width="48" height="48" alt="">{% endif %}<span class="fbmk-brand-name">FBMK <span>Automation Realestate</span></span></a>
           <button
             type="button"
             class="mobile-header-toggle"
