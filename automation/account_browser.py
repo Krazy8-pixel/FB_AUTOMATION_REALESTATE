@@ -4,6 +4,7 @@ from ctypes import wintypes
 import os
 import pickle
 import subprocess
+import sys
 import threading
 import time
 from uuid import uuid4
