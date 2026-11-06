@@ -36,10 +36,15 @@ jobs:
       - name: Launch app smoke check
         run: >-
           python -c "import subprocess; subprocess.run(['dist/FBAutomationRealEstate.app/Contents/MacOS/FBAutomationRealEstate', '--smoke-test'], timeout=90, check=True)"
-      - name: Upload app bundle
+      - name: Package clickable app bundle
+        run: >-
+          ditto -c -k --sequesterRsrc --keepParent
+          dist/FBAutomationRealEstate.app
+          dist/FBAutomationRealEstate-macOS-${{ matrix.architecture }}.zip
+      - name: Upload app ZIP
         uses: actions/upload-artifact@v4
         with:
           name: FBAutomationRealEstate-macOS-${{ matrix.architecture }}
-          path: dist/FBAutomationRealEstate.app
+          path: dist/FBAutomationRealEstate-macOS-${{ matrix.architecture }}.zip
           if-no-files-found: error
           retention-days: 14
