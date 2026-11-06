@@ -52,7 +52,10 @@ def runtime_root():
         candidates.append(Path(env_home))
 
     if getattr(sys, "frozen", False):
-        candidates.append(Path(os.getenv("LOCALAPPDATA") or Path.home()) / "FBAutomationRealEstate")
+        if sys.platform == "darwin":
+            candidates.append(Path.home() / "Library" / "Application Support" / "FBAutomationRealEstate")
+        else:
+            candidates.append(Path(os.getenv("LOCALAPPDATA") or Path.home()) / "FBAutomationRealEstate")
     else:
         candidates.append(project_root())
 

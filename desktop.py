@@ -1,4 +1,4 @@
-"""Windows desktop entry point: local server, persistent UI, and system tray."""
+"""Desktop entry point: local server, persistent UI, and system tray."""
 import argparse
 import ctypes
 import json
@@ -29,13 +29,26 @@ def main():
         sys.stdout = log
     if sys.stderr is None:
         sys.stderr = log
-    kernel = ctypes.windll.kernel32
-    kernel.CreateMutexW.restype = ctypes.c_void_p
-    mutex_name = 'Local\\FBAutomationRealEstateDesktop'
-    if args.smoke_test or args.driver_smoke_test:
-        mutex_name += f'SmokeTest-{os.getpid()}'
-    mutex = kernel.CreateMutexW(None, False, mutex_name)
-    if kernel.GetLastError() == 183:
+    kernel = None
+    mutex = None
+    instance_socket = None
+    if sys.platform == 'win32':
+        kernel = ctypes.windll.kernel32
+        kernel.CreateMutexW.restype = ctypes.c_void_p
+        mutex_name = 'Local\\FBAutomationRealEstateDesktop'
+        if args.smoke_test or args.driver_smoke_test:
+            mutex_name += f'SmokeTest-{os.getpid()}'
+        mutex = kernel.CreateMutexW(None, False, mutex_name)
+        already_running = kernel.GetLastError() == 183
+    else:
+        instance_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        instance_port = 47639 if not (args.smoke_test or args.driver_smoke_test) else 47640 + os.getpid() % 10000
+        try:
+            instance_socket.bind(('127.0.0.1', instance_port))
+            already_running = False
+        except OSError:
+            already_running = True
+    if already_running:
         # A second launch asks the already-running tray instance to show itself.
         (folder / 'show-window').touch()
         return
@@ -47,7 +60,10 @@ def main():
             run(folder)
         finally:
             routes.scheduler.shutdown(wait=False)
-            kernel.CloseHandle(ctypes.c_void_p(mutex))
+            if kernel:
+                kernel.CloseHandle(ctypes.c_void_p(mutex))
+            if instance_socket:
+                instance_socket.close()
         return
     if args.background:
         stop_foreground_work(routes)
@@ -127,7 +143,9 @@ def main():
     window.events.loaded += loaded
     threading.Thread(target=monitor, daemon=True).start()
     try:
-        webview.start(gui='edgechromium', private_mode=False, storage_path=str(data_dir('webview')), icon=str(resource_root() / 'assets/app.ico'))
+        gui = 'edgechromium' if sys.platform == 'win32' else 'cocoa' if sys.platform == 'darwin' else None
+        icon_path = resource_root() / 'assets' / ('app.ico' if sys.platform == 'win32' else 'app-logo.png')
+        webview.start(gui=gui, private_mode=False, storage_path=str(data_dir('webview')), icon=str(icon_path))
     finally:
         from automation.account_browser import stop as stop_account_browser
         try:
@@ -139,7 +157,10 @@ def main():
         routes.scheduler.shutdown(wait=False)
         tray.stop()
         server.close()
-        kernel.CloseHandle(ctypes.c_void_p(mutex))
+        if kernel:
+            kernel.CloseHandle(ctypes.c_void_p(mutex))
+        if instance_socket:
+            instance_socket.close()
 
 
 if __name__ == '__main__':
@@ -148,6 +169,6 @@ if __name__ == '__main__':
     except Exception as exc:
         import traceback
         traceback.print_exc()
-        if '--smoke-test' not in sys.argv and '--driver-smoke-test' not in sys.argv:
+        if sys.platform == 'win32' and '--smoke-test' not in sys.argv and '--driver-smoke-test' not in sys.argv:
             ctypes.windll.user32.MessageBoxW(None, str(exc), 'FBMK Automation Realestate startup error', 0x10)
         raise
