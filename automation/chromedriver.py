@@ -50,7 +50,12 @@ class Service(SeleniumService):
 def installed_chrome_path():
     """Find regular installed Chrome without downloading a browser."""
     candidates = [os.getenv('CHROME_PATH', '').strip()]
-    if sys.platform.startswith('win'):
+    if sys.platform == 'darwin':
+        candidates.extend([
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            str(Path.home() / 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
+        ])
+    elif sys.platform.startswith('win'):
         import winreg
         for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
             for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):

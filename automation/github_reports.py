@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 import time
 from uuid import uuid4
@@ -125,11 +126,22 @@ def _token_path():
 
 
 def _save_token(token):
+    if sys.platform == 'darwin':
+        import keyring
+        keyring.set_password('FBAutomationRealEstate', 'github_reports', json.dumps(token))
+        return
     path = _token_path()
     path.write_bytes(_protect(json.dumps(token).encode('utf-8')))
 
 
 def _load_token():
+    if sys.platform == 'darwin':
+        try:
+            import keyring
+            saved = keyring.get_password('FBAutomationRealEstate', 'github_reports')
+            return json.loads(saved) if saved else None
+        except Exception:
+            return None
     try:
         return json.loads(_unprotect(_token_path().read_bytes()).decode('utf-8'))
     except FileNotFoundError:
@@ -139,6 +151,12 @@ def _load_token():
 
 
 def _clear_token():
+    if sys.platform == 'darwin':
+        try:
+            import keyring
+            keyring.delete_password('FBAutomationRealEstate', 'github_reports')
+        except Exception:
+            pass
     _token_path().unlink(missing_ok=True)
 
 

@@ -31,6 +31,10 @@ def config():
 
 def status():
     with _lock:
+        if sys.platform == 'darwin':
+            return dict(_status, state='manual', available=False,
+                        current_version=config()['version'],
+                        message='To update the Mac app, download and replace it with the latest Mac build.')
         return dict(_status, current_version=config()['version'])
 
 
@@ -78,6 +82,10 @@ def fetch(url, **kwargs):
 
 def check():
     global _ready
+    if sys.platform == 'darwin':
+        set_status(state='manual', available=False,
+                   message='To update the Mac app, download and replace it with the latest Mac build.')
+        return
     with _lock:
         if _status['state'] in {'checking', 'downloading', 'verifying', 'installing'}:
             return

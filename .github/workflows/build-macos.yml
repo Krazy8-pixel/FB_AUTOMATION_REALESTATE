@@ -30,9 +30,12 @@ jobs:
       - name: Install app dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt 'pywebview[cocoa]' pystray
+          python -m pip install -r requirements.txt 'pywebview[cocoa]' pystray keyring
       - name: Build macOS app bundle
         run: python -m PyInstaller --noconfirm desktop_macos.spec
+      - name: Launch app smoke check
+        run: >-
+          python -c "import subprocess; subprocess.run(['dist/FBAutomationRealEstate.app/Contents/MacOS/FBAutomationRealEstate', '--smoke-test'], timeout=90, check=True)"
       - name: Upload app bundle
         uses: actions/upload-artifact@v4
         with:

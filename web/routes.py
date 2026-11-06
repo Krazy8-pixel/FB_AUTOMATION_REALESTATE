@@ -2309,6 +2309,7 @@ def settings_page():
         active_account=active_account,
         active_page="settings",
         desktop_mode=DESKTOP_MODE,
+        is_macos=sys.platform == 'darwin',
         desktop_preferences=load(),
         app_version=config()["version"],
         auto_listing_running=any(_is_auto_listing_running_for_account(account) for account in get_all_accounts()),
