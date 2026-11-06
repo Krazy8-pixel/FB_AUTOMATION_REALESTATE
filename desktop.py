@@ -29,6 +29,7 @@ def main():
         sys.stdout = log
     if sys.stderr is None:
         sys.stderr = log
+    print('Desktop startup: runtime directory ready', flush=True)
     kernel = None
     mutex = None
     instance_socket = None
@@ -52,8 +53,10 @@ def main():
         # A second launch asks the already-running tray instance to show itself.
         (folder / 'show-window').touch()
         return
+    print('Desktop startup: loading web application', flush=True)
     from app import app
     from web import routes
+    print('Desktop startup: web application loaded', flush=True)
     if args.driver_smoke_test:
         from automation.driver_smoke import run
         try:
@@ -68,9 +71,10 @@ def main():
     if args.background:
         stop_foreground_work(routes)
     from waitress import create_server
-    import pystray
     import webview
-    from PIL import Image
+    if sys.platform != 'darwin':
+        import pystray
+        from PIL import Image
     # Allow the authenticated diagnostic-report link to open Save As in WebView2.
     webview.settings['ALLOW_DOWNLOADS'] = True
     from automation import app_updates
@@ -81,6 +85,7 @@ def main():
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     port = server.effective_port
+    print(f'Desktop startup: local server listening on port {port}', flush=True)
     shutting_down = threading.Event()
     window = webview.create_window('FBMK Automation Realestate', f'http://127.0.0.1:{port}/', width=1380, height=900, min_size=(390, 600), hidden=args.background)
 
@@ -124,8 +129,9 @@ def main():
         return True
 
     window.events.closing += closing
-    tray = pystray.Icon('FBAutomationRealEstate', Image.open(resource_root() / 'assets/app-logo.png'), 'FBMK Automation Realestate — background sync', menu=pystray.Menu(pystray.MenuItem('Open FBMK Automation Realestate', show, default=True), pystray.MenuItem('Exit App', lambda icon, item: quit_app(icon, item))))
+    tray = None
     if sys.platform != 'darwin':
+        tray = pystray.Icon('FBAutomationRealEstate', Image.open(resource_root() / 'assets/app-logo.png'), 'FBMK Automation Realestate — background sync', menu=pystray.Menu(pystray.MenuItem('Open FBMK Automation Realestate', show, default=True), pystray.MenuItem('Exit App', lambda icon, item: quit_app(icon, item))))
         tray.run_detached()
     app_updates.exit_callback = lambda: quit_app(updating=True)
 
@@ -153,6 +159,7 @@ def main():
     try:
         gui = 'edgechromium' if sys.platform == 'win32' else 'cocoa' if sys.platform == 'darwin' else None
         icon_path = resource_root() / 'assets' / ('app.ico' if sys.platform == 'win32' else 'app-logo.png')
+        print(f'Desktop startup: opening {gui or "default"} window', flush=True)
         webview.start(gui=gui, private_mode=False, storage_path=str(data_dir('webview')), icon=str(icon_path))
     finally:
         from automation.account_browser import stop as stop_account_browser
