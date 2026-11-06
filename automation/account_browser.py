@@ -3,6 +3,7 @@ import ctypes
 from ctypes import wintypes
 import os
 import pickle
+import subprocess
 import threading
 import time
 from uuid import uuid4
@@ -156,7 +157,91 @@ def _watch(account, generation):
 
 def status():
     with _lock:
-        return {'account': _account, 'open': _account is not None, 'mobile': _mobile_driver is not None}
+        return {'account': _account, 'open': _account is not None, 'mobile': _mobile_driver is not None,
+                'external': sys.platform == 'darwin'}
+
+
+def _activate_external_chrome():
+    try:
+        subprocess.run(['/usr/bin/open', '-a', 'Google Chrome'],
+                       check=False, capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _watch_external(account, generation):
+    global _account, _account_lock, _mobile_driver
+    last_refresh = 0
+    while True:
+        time.sleep(3)
+        with _lock:
+            if generation != _generation or account != _account:
+                return
+        meta = cdp_login.get_cdp_account(account)
+        if not meta or not cdp_login._port_open(meta.get('port')):
+            break
+        driver = None
+        try:
+            driver = cdp_login._attach(meta['port'])
+            if cdp_login._facebook_login_confirmed(driver) and (not last_refresh or time.time() - last_refresh >= 60):
+                if _save_cookies(account, driver):
+                    last_refresh = time.time()
+        except Exception:
+            pass
+        finally:
+            if driver:
+                cdp_login._detach(driver)
+    with _lock:
+        if generation == _generation and account == _account:
+            lock = _account_lock
+            _account = _account_lock = None
+            if _mobile_driver:
+                cdp_login._detach(_mobile_driver)
+            _mobile_driver = None
+            if lock:
+                lock.release()
+
+
+def _open_external_account(account):
+    global _account, _account_lock, _generation, _needs_focus
+    account = str(account or '').strip()
+    meta = cdp_login.get_cdp_account(account)
+    if not meta or meta.get('status') not in {'ready', 'relogin_expired'}:
+        raise ValueError('This account needs a saved Chrome login. Add or re-login to it first.')
+    with _lock:
+        if _account == account and cdp_login._port_open(meta.get('port')):
+            _activate_external_chrome()
+            return status()
+        if active_tasks(account):
+            raise RuntimeError('This account is running automation. Wait for it to finish.')
+        if _account:
+            stop()
+        account_lock = cdp_login._account_locks.setdefault(account, threading.Lock())
+        if not account_lock.acquire(blocking=False):
+            raise RuntimeError('This account is being used by another operation. Wait for it to finish.')
+        try:
+            if cdp_login._port_open(meta.get('port')):
+                cdp_login.close_cdp_browser(account)
+            process = cdp_login._launch_profile(meta, background=False, app_mode=False)
+            deadline = time.time() + 20
+            while time.time() < deadline and process.poll() is None:
+                if cdp_login._port_open(meta.get('port')):
+                    break
+                time.sleep(0.25)
+            if not cdp_login._port_open(meta.get('port')):
+                raise RuntimeError('Chrome did not open this account profile.')
+            _account, _account_lock = account, account_lock
+            _needs_focus = False
+            _generation += 1
+            generation = _generation
+            _activate_external_chrome()
+            threading.Thread(target=_watch_external, args=(account, generation), daemon=True).start()
+            return status()
+        except Exception:
+            if cdp_login._port_open(meta.get('port')):
+                cdp_login.close_cdp_browser(account)
+            account_lock.release()
+            raise
 
 
 def hide():
@@ -202,8 +287,12 @@ def stop(*, force=False):
 
 def open_account(account):
     global _account, _account_lock, _chrome_hwnd, _generation, _needs_focus
-    if os.name != 'nt' or os.getenv('FB_AUTOMATION_DESKTOP') != '1':
-        raise RuntimeError('Account Browser is available in the Windows desktop app only.')
+    if os.getenv('FB_AUTOMATION_DESKTOP') != '1':
+        raise RuntimeError('Account Browser is available in the desktop app only.')
+    if sys.platform == 'darwin':
+        return _open_external_account(account)
+    if os.name != 'nt':
+        raise RuntimeError('Account Browser is supported in the Windows and Mac desktop apps.')
     account = str(account or '').strip()
     meta = cdp_login.get_cdp_account(account)
     if not meta or meta.get('status') not in {'ready', 'relogin_expired'}:
@@ -289,6 +378,8 @@ def _navigate_desktop_page(account, url):
         try:
             driver.execute_cdp_cmd('Page.navigate', {'url': url})
             _needs_focus = True
+            if sys.platform == 'darwin':
+                _activate_external_chrome()
         finally:
             cdp_login._detach(driver)
         return status()
@@ -346,6 +437,8 @@ def open_posting_page(account):
             })
             driver.execute_cdp_cmd('Emulation.setTouchEmulationEnabled', {'enabled': True})
             driver.execute_cdp_cmd('Page.navigate', {'url': MOBILE_POSTING_URL})
+            if sys.platform == 'darwin':
+                _activate_external_chrome()
             _mobile_driver = driver
             _mobile_metrics = (412, 915)
             _needs_focus = True
@@ -374,6 +467,8 @@ def desktop_view():
                 driver.execute_cdp_cmd('Emulation.setTouchEmulationEnabled', {'enabled': False})
                 driver.execute_cdp_cmd('Page.navigate', {'url': 'https://www.facebook.com/'})
                 _needs_focus = True
+                if sys.platform == 'darwin':
+                    _activate_external_chrome()
             finally:
                 cdp_login._detach(driver)
                 _mobile_driver = None

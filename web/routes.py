@@ -2419,7 +2419,7 @@ def info_page():
 @web_bp.route('/account/browser')
 def account_browser_page():
     if os.environ.get('FB_AUTOMATION_DESKTOP') != '1':
-        return 'Account Browser is available in the Windows desktop app only.', 404
+        return 'Account Browser is available in the desktop app only.', 404
     return render_template('account_browser.html', accounts=get_all_accounts(),
                            active_account=get_active_account(), active_page='account_browser',
                            browser_state=account_browser.status())

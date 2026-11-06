@@ -13,6 +13,7 @@
   const marketplaceAds = document.getElementById('browser-marketplace-ads');
   let openedAccount = null;
   let mobileView = false;
+  let externalBrowser = false;
   let layoutPending = false;
   let layoutAgain = false;
 
@@ -25,17 +26,19 @@
   }
   function render(state) {
     openedAccount = state.account || null;
+    externalBrowser = !!state.external;
     stop.disabled = !state.open;
     mobileView = !!state.mobile;
     surface.classList.toggle('is-mobile', mobileView);
     posting.textContent = mobileView ? 'Close posting page' : 'Open posting page';
-    placeholder.hidden = !!state.open;
+    placeholder.hidden = !!state.open && !externalBrowser;
     status.classList.toggle('is-open', !!state.open);
     open.textContent = state.open && account.value !== state.account ? 'Switch account' : 'Open account';
     status.textContent = state.open ? state.account + ' is open' : 'Choose an account to open';
-    if (state.open) layout();
+    if (state.open && !externalBrowser) layout();
   }
   async function layout() {
+    if (externalBrowser) return;
     if (layoutPending) { layoutAgain = true; return; }
     if (content && topbar) content.style.paddingTop = Math.ceil(topbar.getBoundingClientRect().bottom + 6) + 'px';
     if (!openedAccount || document.hidden) return;
