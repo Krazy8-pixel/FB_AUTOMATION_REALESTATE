@@ -70,9 +70,9 @@ def main():
     from waitress import create_server
     import pystray
     import webview
+    from PIL import Image
     # Allow the authenticated diagnostic-report link to open Save As in WebView2.
     webview.settings['ALLOW_DOWNLOADS'] = True
-    from PIL import Image
     from automation import app_updates
     from automation.desktop_state import checkpoint
     from automation.maintenance import busy
@@ -86,7 +86,8 @@ def main():
 
     def show(icon=None, item=None):
         set_window_open(True)
-        tray.visible = True
+        if tray:
+            tray.visible = True
         window.show()
         window.restore()
 
@@ -101,7 +102,8 @@ def main():
         shutting_down.set()
         routes.scheduler.pause()
         checkpoint()
-        tray.stop()
+        if tray:
+            tray.stop()
         window.destroy()
 
     def closing():
@@ -112,13 +114,19 @@ def main():
             except Exception:
                 pass
             stop_foreground_work(routes)
+            if sys.platform == 'darwin':
+                shutting_down.set()
+                routes.scheduler.pause()
+                checkpoint()
+                return True
             window.hide()
             return False
         return True
 
     window.events.closing += closing
     tray = pystray.Icon('FBAutomationRealEstate', Image.open(resource_root() / 'assets/app-logo.png'), 'FBMK Automation Realestate — background sync', menu=pystray.Menu(pystray.MenuItem('Open FBMK Automation Realestate', show, default=True), pystray.MenuItem('Exit App', lambda icon, item: quit_app(icon, item))))
-    tray.run_detached()
+    if sys.platform != 'darwin':
+        tray.run_detached()
     app_updates.exit_callback = lambda: quit_app(updating=True)
 
     def monitor():
@@ -155,7 +163,8 @@ def main():
         shutting_down.set()
         checkpoint()
         routes.scheduler.shutdown(wait=False)
-        tray.stop()
+        if tray:
+            tray.stop()
         server.close()
         if kernel:
             kernel.CloseHandle(ctypes.c_void_p(mutex))
