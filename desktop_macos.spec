@@ -16,8 +16,9 @@ a = Analysis(
     pathex=[str(ROOT)],
     binaries=[],
     datas=datas,
-    hiddenimports=collect_submodules('webview') + collect_submodules('pystray')
-        + collect_submodules('selenium') + ['apscheduler.jobstores.sqlalchemy', 'keyring.backends.macOS'],
+    hiddenimports=collect_submodules('automation') + collect_submodules('webview')
+        + collect_submodules('pystray') + collect_submodules('selenium')
+        + ['apscheduler.jobstores.sqlalchemy', 'keyring.backends.macOS'],
     excludes=['pytest', 'tkinter', 'matplotlib', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'IPython', 'notebook'],
 )
 pyz = PYZ(a.pure)

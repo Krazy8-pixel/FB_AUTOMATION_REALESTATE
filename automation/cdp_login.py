@@ -184,6 +184,21 @@ def _attach(port):
     return driver
 
 
+def _attach_when_ready(port, timeout=30):
+    """Wait until a newly launched Chrome has exposed its first CDP page."""
+    deadline = time.time() + max(1, timeout)
+    last_error = None
+    while time.time() < deadline:
+        try:
+            return _attach(port)
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.5)
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"Chrome debugging port {port} did not become ready.")
+
+
 def _detach(driver):
     try:
         driver.service.stop()
@@ -423,7 +438,7 @@ def refresh_cdp_cookies(account):
             deadline = time.time() + 15
             while time.time() < deadline and not _port_open(meta["port"]):
                 time.sleep(0.25)
-        driver = _attach(meta["port"])
+        driver = _attach_when_ready(meta["port"])
         try:
             if not _facebook_login_confirmed(driver):
                 raise RuntimeError("Facebook is not logged in in the dedicated Chrome profile.")
